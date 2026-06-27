@@ -1,4 +1,4 @@
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, field, asdict
 import json
 
 
@@ -24,97 +24,80 @@ class Market:
     prices: list
     tokens: list
 
-    raw_data: dict
+    raw: dict = field(default_factory=dict, repr=False)
 
 
     @property
-    def url(self):
-        return (
-            "https://polymarket.com/event/"
-            + self.slug
-        )
-
+    def url(self) -> str:
+        return "https://polymarket.com/event/" + self.slug
 
     @property
-    def raw(self):
-        return self.raw_data
+    def yes_price(self) -> float:
+        return self.prices[0] if self.prices else 0.0
+
+    @property
+    def no_price(self) -> float:
+        return self.prices[1] if len(self.prices) > 1 else 0.0
+
+    @property
+    def yes_token(self) -> str:
+        return self.tokens[0] if self.tokens else ""
+
+    @property
+    def no_token(self) -> str:
+        return self.tokens[1] if len(self.tokens) > 1 else ""
 
 
-    def dump(self):
-        """
-        Return market as dictionary
-        """
-
-        return asdict(self)
-
-
-    def json(self):
-        """
-        Return JSON representation
-        """
-
-        return json.dumps(
-            self.dump(),
-            indent=4
-        )
+    def dump(self) -> dict:
+        """Return market as dictionary (excludes raw)."""
+        d = asdict(self)
+        d.pop("raw", None)
+        d["url"] = self.url
+        return d
 
 
-    def print(self):
-        """
-        Print all market information
-        """
+    def json(self) -> str:
+        """Return JSON representation."""
+        return json.dumps(self.dump(), indent=4)
 
+
+    def show(self):
+        """Print all market information."""
         print("=" * 60)
         print("POLYALPHA MARKET")
         print("=" * 60)
-
         for key, value in self.dump().items():
-            print(
-                f"{key:<15}: {value}"
-            )
-
-        print(
-            f"{'url':<15}: {self.url}"
-        )
+            print(f"{key:<15}: {value}")
 
 
     def help(self):
-
         print("""
 Market
 
 Attributes
 ----------
-
-id
-question
+id              condition ID
+question        market question string
 description
-slug
+slug            e.g. btc-updown-5m-1751234000
+active / closed / archived
+start_time / end_time
+volume / liquidity
+outcomes        ["YES", "NO"]
+prices          [yes_price, no_price]
+tokens          [yes_token_id, no_token_id]
+raw             raw API response dict
 
-active
-closed
-archived
-
-start_time
-end_time
-
-volume
-liquidity
-
-outcomes
-prices
-tokens
-
-url
-raw
-
+Computed
+--------
+url             polymarket.com link
+yes_price / no_price
+yes_token / no_token
 
 Methods
 -------
-
-print()
-dump()
-json()
+show()          print all fields
+dump()          dict (excludes raw)
+json()          JSON string
 help()
-
         """)

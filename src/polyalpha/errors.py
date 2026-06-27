@@ -1,0 +1,22 @@
+class PolyalphaError(Exception):
+    """Base exception for all polyalpha errors."""
+
+
+class MarketNotFound(PolyalphaError):
+    """No market matched the given asset/timeframe or slug."""
+
+
+class MarketClosed(PolyalphaError):
+    """Market exists but is no longer active."""
+
+
+class StreamDisconnected(PolyalphaError):
+    """WebSocket dropped and could not reconnect."""
+
+
+class InsufficientBalance(PolyalphaError):
+    """Paper balance too low to place the order."""
+
+
+class OrderNotFound(PolyalphaError):
+    """No paper order matched the given ID."""
