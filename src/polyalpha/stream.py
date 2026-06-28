@@ -1,16 +1,30 @@
 """
-WebSocket streaming for Polymarket CLOB price feed.
+Real-time price streaming via the Polymarket CLOB WebSocket.
 
-Protocol:
-  - Subscribe:  {"type": "market", "assets_ids": [up_token_id, down_token_id],
-                 "custom_feature_enabled": true}
-  - PING/PONG:  Client must send text "PING" every 10 s — server replies "PONG".
-                Server also sends "PING"; reply immediately with "PONG".
-                Miss the 10 s window → server drops the connection.
-  - event_type: "book" | "price_change" | "last_trade_price" | "best_bid_ask"
-                "new_market" | "market_resolved" | "tick_size_change"
+WebSocket endpoint: wss://ws-subscriptions-clob.polymarket.com/ws/market
 
-Usage:
+Protocol
+--------
+Subscribe (sent once on connect):
+    {"type": "market", "assets_ids": [token_id, ...], "custom_feature_enabled": true}
+
+Keepalive:
+    • Client must send text "PING" at least every 10 s.
+    • Server replies with text "PONG".
+    • Server may also send "PING" — reply immediately with "PONG".
+    • Missing the window causes a silent server-side disconnect.
+
+Event types received:
+    book             — full order-book snapshot
+    price_change     — best bid/ask changed for one or more assets
+    best_bid_ask     — single asset bid/ask update
+    last_trade_price — last matched trade for an asset
+    market_resolved  — market settled; stream closes cleanly
+    new_market       — (ignored)
+    tick_size_change — (ignored)
+
+Usage
+-----
     stream = client.stream(market)
 
     @stream.on("price")
@@ -22,227 +36,246 @@ Usage:
         print("Market resolved")
 
     stream.start()                  # blocking
-    stream.start(background=True)   # daemon thread
-    stream.stop()
+    stream.start(background=True)   # daemon thread; call stream.stop() to exit
 """
 
+from __future__ import annotations
+
 import json
+import logging
 import threading
 import time
-import logging
 from collections import defaultdict
 from typing import Callable
 
-try:
-    import websocket  # websocket-client
-    _HAS_WS = True
-except ImportError:
-    _HAS_WS = False
-
-from .constants import CLOB_WS
-from .errors import StreamDisconnected
+from .core import (
+    WS_MAX_RETRIES,
+    WS_PING_INTERVAL,
+    WS_RETRY_DELAY,
+    CLOB_WS,
+    Market,
+    StreamDisconnected,
+)
 
 log = logging.getLogger(__name__)
 
-EVENTS        = {"price", "book", "trade", "close", "error", "connect"}
-PING_INTERVAL = 10   # seconds — must send text PING at least every 10 s
+# Event names exposed to callers
+EVENTS = frozenset({"price", "book", "trade", "close", "error", "connect"})
 
 
 class Stream:
     """
     Real-time price stream for a Polymarket Up/Down market.
 
-    Subscribes to both UP and DOWN token IDs via the CLOB market channel.
+    Subscribes to both UP and DOWN token IDs via the CLOB market channel,
+    auto-reconnects on drops, and keeps the server alive with text PINGs.
 
     Events
     ------
-    price     (up: float, down: float)
-    book      (data: dict)   raw order-book snapshot
-    trade     (data: dict)   last matched trade
-    close     ()             market resolved / WS closed cleanly
-    error     (exc: Exception)
-    connect   ()             fired on every successful (re)connect
+    ``price``    (up: float, down: float)   — emitted on any mid-price change
+    ``book``     (data: dict)               — raw order-book snapshot
+    ``trade``    (data: dict)               — last matched trade
+    ``close``    ()                         — market resolved / clean close
+    ``error``    (exc: Exception)           — unrecoverable error
+    ``connect``  ()                         — fired on every successful connect
     """
 
-    def __init__(self, market, retries: int = 5, retry_delay: float = 3.0):
-        if not _HAS_WS:
+    def __init__(
+        self,
+        market:      Market,
+        retries:     int   = WS_MAX_RETRIES,
+        retry_delay: float = WS_RETRY_DELAY,
+    ):
+        try:
+            import websocket as _ws_module  # websocket-client
+            self._ws_module = _ws_module
+        except ImportError:
             raise ImportError(
                 "websocket-client is required for streaming.\n"
                 "Install: pip install websocket-client"
-            )
+            ) from None
 
         self.market      = market
         self.retries     = retries
         self.retry_delay = retry_delay
 
         self._handlers: dict[str, list[Callable]] = defaultdict(list)
-        self._ws          = None
-        self._ping_thread = None
-        self._thread      = None
-        self._stop_flag   = threading.Event()
+        self._ws:          object | None           = None
+        self._thread:      threading.Thread | None = None
+        self._stop:        threading.Event         = threading.Event()
 
-        # Latest prices — readable at any time without a handler
-        self.up:   float = market.yes_price
-        self.down: float = market.no_price
+        # Latest prices — always readable without a callback
+        self.up:   float = market.up_price
+        self.down: float = market.down_price
 
-        # Per-token mid prices, keyed by token_id string
-        self._prices: dict[str, float] = {}
+        # Mid-price per token ID (populated from WS events)
+        self._token_prices: dict[str, float] = {}
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    # ── Public API ─────────────────────────────────────────────────────────────
 
-    def on(self, event: str):
+    def on(self, event: str) -> Callable:
         """
-        Decorator to register an event handler.
+        Decorator — register a handler for a named event.
 
-            @stream.on("price")
-            def handler(up, down): ...
+        Example
+        -------
+        >>> @stream.on("price")
+        ... def handler(up, down): ...
         """
         if event not in EVENTS:
-            raise ValueError(f"Unknown event '{event}'. Valid: {EVENTS}")
-        def decorator(fn: Callable):
+            raise ValueError(f"Unknown event '{event}'. Valid: {sorted(EVENTS)}")
+
+        def decorator(fn: Callable) -> Callable:
             self._handlers[event].append(fn)
             return fn
+
         return decorator
 
-    def add_handler(self, event: str, fn: Callable):
-        """Register a handler without using the decorator syntax."""
+    def add_handler(self, event: str, fn: Callable) -> None:
+        """Register *fn* as a handler for *event* without decorator syntax."""
         if event not in EVENTS:
-            raise ValueError(f"Unknown event '{event}'. Valid: {EVENTS}")
+            raise ValueError(f"Unknown event '{event}'. Valid: {sorted(EVENTS)}")
         self._handlers[event].append(fn)
 
-    def start(self, background: bool = False):
+    def start(self, background: bool = False) -> None:
         """
-        Start the stream.
+        Start the WebSocket stream.
 
-        Args:
-            background: if True, runs in a daemon thread and returns
-                        immediately. If False, blocks until stopped.
+        Parameters
+        ----------
+        background : if True, runs in a daemon thread and returns immediately.
+                     If False (default), blocks until the stream stops.
         """
-        self._stop_flag.clear()
+        self._stop.clear()
+
         if background:
             self._thread = threading.Thread(
-                target=self._run_with_retry,
-                daemon=True,
-                name=f"polyalpha-stream-{self.market.slug}",
+                target  = self._run_with_retry,
+                daemon  = True,
+                name    = f"polyalpha-stream-{self.market.slug}",
             )
             self._thread.start()
         else:
             self._run_with_retry()
 
-    def stop(self):
-        """Signal the stream to stop and close the WebSocket."""
-        self._stop_flag.set()
+    def stop(self) -> None:
+        """Signal the stream to stop and close the WebSocket cleanly."""
+        self._stop.set()
         if self._ws:
             try:
-                self._ws.close()
+                self._ws.close()  # type: ignore[union-attr]
             except Exception:
                 pass
 
     @property
     def running(self) -> bool:
+        """True while the background thread is alive."""
         return self._thread is not None and self._thread.is_alive()
 
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
+    # ── Retry loop ─────────────────────────────────────────────────────────────
 
-    def _run_with_retry(self):
-        attempts = 0
-        while not self._stop_flag.is_set():
+    def _run_with_retry(self) -> None:
+        """Connect, reconnect on drops, give up after ``self.retries`` failures."""
+        consecutive_failures = 0
+
+        while not self._stop.is_set():
             try:
                 self._connect()
-                attempts = 0  # reset counter on clean connect
+                # _connect() returns only on a clean stop or market_resolved
+                return
+
             except StreamDisconnected as exc:
-                attempts += 1
-                if attempts > self.retries:
-                    log.error("Stream: max retries exceeded")
+                consecutive_failures += 1
+                if consecutive_failures > self.retries:
+                    log.error("Stream: max retries (%d) exceeded — giving up", self.retries)
                     self._emit("error", exc)
-                    break
-                delay = self.retry_delay * attempts
+                    return
+
+                delay = self.retry_delay * consecutive_failures
                 log.warning(
-                    f"Stream: disconnected, retry {attempts}/{self.retries} "
-                    f"in {delay:.1f}s"
+                    "Stream: disconnected (attempt %d/%d) — retrying in %.1fs",
+                    consecutive_failures, self.retries, delay,
                 )
                 time.sleep(delay)
-            except Exception as exc:
-                log.exception(f"Stream: unexpected error: {exc}")
-                self._emit("error", exc)
-                break
 
-    def _connect(self):
-        # Subscribe to both UP and DOWN token IDs
+            except Exception as exc:
+                log.exception("Stream: unexpected error: %s", exc)
+                self._emit("error", exc)
+                return
+
+    # ── WebSocket lifecycle ────────────────────────────────────────────────────
+
+    def _connect(self) -> None:
+        """Open the WebSocket and block until it closes."""
         token_ids = [t for t in self.market.tokens if t]
         if not token_ids:
             raise StreamDisconnected("Market has no token IDs to subscribe to")
 
-        ws = websocket.WebSocketApp(
+        ws = self._ws_module.WebSocketApp(
             CLOB_WS,
-            on_open    = lambda ws: self._on_open(ws, token_ids),
-            on_message = self._on_message,
-            on_error   = self._on_ws_error,
-            on_close   = self._on_ws_close,
+            on_open    = lambda ws:          self._on_open(ws, token_ids),
+            on_message = lambda ws, raw:     self._on_message(ws, raw),
+            on_error   = lambda ws, exc:     self._on_ws_error(ws, exc),
+            on_close   = lambda ws, c, m:   self._on_ws_close(ws, c, m),
         )
         self._ws = ws
 
-        # Disable the built-in binary WebSocket ping — we send text PING ourselves
+        # Disable the library's binary WebSocket ping — we use text PING/PONG
         ws.run_forever(ping_interval=None, ping_timeout=None)
 
-        if not self._stop_flag.is_set():
+        if not self._stop.is_set():
             raise StreamDisconnected("WebSocket closed unexpectedly")
 
-    def _on_open(self, ws, token_ids: list[str]):
-        log.info(f"Stream: connected, subscribing to {len(token_ids)} token(s)")
+    def _on_open(self, ws, token_ids: list[str]) -> None:
+        log.info("Stream: connected — subscribing to %d token(s)", len(token_ids))
 
-        sub = json.dumps({
-            "type": "market",
-            "assets_ids": token_ids,
+        ws.send(json.dumps({
+            "type":                  "market",
+            "assets_ids":            token_ids,
             "custom_feature_enabled": True,
-        })
-        ws.send(sub)
+        }))
 
-        # Kick off client-side PING thread
-        ping = threading.Thread(
-            target=self._ping_loop,
-            args=(ws,),
-            daemon=True,
-            name="polyalpha-ping",
+        # Start the keepalive ping thread
+        ping_thread = threading.Thread(
+            target = self._ping_loop,
+            args   = (ws,),
+            daemon = True,
+            name   = "polyalpha-ping",
         )
-        ping.start()
-        self._ping_thread = ping
+        ping_thread.start()
 
         self._emit("connect")
 
-    def _ping_loop(self, ws):
-        """Send text 'PING' every 10 s to keep the server from dropping us."""
-        while not self._stop_flag.is_set():
-            time.sleep(PING_INTERVAL)
-            if self._stop_flag.is_set():
+    def _ping_loop(self, ws) -> None:
+        """Send text 'PING' every WS_PING_INTERVAL seconds."""
+        while not self._stop.is_set():
+            time.sleep(WS_PING_INTERVAL)
+            if self._stop.is_set():
                 break
             try:
                 ws.send("PING")
-                log.debug("Stream: sent PING")
+                log.debug("Stream: → PING")
             except Exception:
-                break  # connection gone; _on_ws_close will trigger retry
+                break   # socket gone; _on_ws_close will trigger reconnect
 
-    def _on_message(self, ws, raw: str):
-        # Server sends "PING" too — reply immediately
+    def _on_message(self, ws, raw: str) -> None:
+        # Server-sent PING — reply immediately
         if raw == "PING":
             try:
                 ws.send("PONG")
-                log.debug("Stream: replied PONG")
+                log.debug("Stream: ← PING → PONG")
             except Exception:
                 pass
             return
 
+        # Ignore heartbeats / empty frames
         if raw in ("PONG", "[]", ""):
             return
 
         try:
             msg = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
-            log.debug(f"Stream: non-JSON: {repr(raw[:80])}")
+            log.debug("Stream: non-JSON frame: %r", raw[:80])
             return
 
         if isinstance(msg, list):
@@ -252,7 +285,16 @@ class Stream:
         elif isinstance(msg, dict):
             self._dispatch(msg)
 
-    def _dispatch(self, msg: dict):
+    def _on_ws_error(self, ws, exc: Exception) -> None:
+        log.warning("Stream: WS error: %s", exc)
+        # Don't emit here — the retry loop handles it
+
+    def _on_ws_close(self, ws, code: int | None, message: str | None) -> None:
+        log.info("Stream: closed (code=%s)", code)
+
+    # ── Message dispatch ───────────────────────────────────────────────────────
+
+    def _dispatch(self, msg: dict) -> None:
         event_type = msg.get("event_type", "")
 
         if event_type == "price_change":
@@ -262,8 +304,8 @@ class Stream:
             self._handle_best_bid_ask(msg)
 
         elif event_type == "book":
+            self._handle_book(msg)
             self._emit("book", msg)
-            self._handle_book_price(msg)
 
         elif event_type == "last_trade_price":
             self._handle_last_trade(msg)
@@ -275,108 +317,102 @@ class Stream:
             self.stop()
 
         else:
-            log.debug(f"Stream: {event_type}: {str(msg)[:100]}")
+            log.debug("Stream: unhandled event_type=%r", event_type)
 
-    # ------------------------------------------------------------------
-    # Price extraction helpers
-    # ------------------------------------------------------------------
+    # ── Price extraction ───────────────────────────────────────────────────────
 
-    def _handle_price_change(self, msg: dict):
-        for pc in msg.get("price_changes", []):
-            asset_id = pc.get("asset_id", "")
-            try:
-                bid = pc.get("best_bid")
-                ask = pc.get("best_ask")
-                if bid and ask and float(bid) > 0 and float(ask) > 0:
-                    self._prices[asset_id] = round(
-                        (float(bid) + float(ask)) / 2, 6
-                    )
-                elif pc.get("price"):
-                    self._prices[asset_id] = float(pc["price"])
-            except (TypeError, ValueError):
-                pass
-        self._update_and_emit()
-
-    def _handle_best_bid_ask(self, msg: dict):
-        asset_id = msg.get("asset_id", "")
+    def _mid(self, bid: Any, ask: Any) -> float | None:
+        """Return bid/ask mid-price, or None if either is absent/zero."""
         try:
-            bid = msg.get("best_bid")
-            ask = msg.get("best_ask")
-            if bid and ask and float(bid) > 0 and float(ask) > 0:
-                self._prices[asset_id] = round(
-                    (float(bid) + float(ask)) / 2, 6
-                )
+            b, a = float(bid), float(ask)
+            if b > 0 and a > 0:
+                return round((b + a) / 2, 6)
         except (TypeError, ValueError):
             pass
-        self._update_and_emit()
+        return None
 
-    def _handle_book_price(self, msg: dict):
+    def _set_token_price(self, token_id: str, price: float) -> None:
+        if token_id and price > 0:
+            self._token_prices[token_id] = price
+
+    def _handle_price_change(self, msg: dict) -> None:
+        for pc in msg.get("price_changes", []):
+            asset_id = pc.get("asset_id", "")
+            mid = self._mid(pc.get("best_bid"), pc.get("best_ask"))
+            if mid is not None:
+                self._set_token_price(asset_id, mid)
+            elif pc.get("price"):
+                try:
+                    self._set_token_price(asset_id, float(pc["price"]))
+                except (TypeError, ValueError):
+                    pass
+        self._publish_prices()
+
+    def _handle_best_bid_ask(self, msg: dict) -> None:
+        asset_id = msg.get("asset_id", "")
+        mid = self._mid(msg.get("best_bid"), msg.get("best_ask"))
+        if mid is not None:
+            self._set_token_price(asset_id, mid)
+        self._publish_prices()
+
+    def _handle_book(self, msg: dict) -> None:
         asset_id = msg.get("asset_id", "")
         try:
             bids = msg.get("bids", [])
             asks = msg.get("asks", [])
             if bids and asks:
-                mid = round(
-                    (float(bids[0]["price"]) + float(asks[0]["price"])) / 2, 6
-                )
-                self._prices[asset_id] = mid
-        except (TypeError, ValueError, KeyError, IndexError):
+                mid = self._mid(bids[0]["price"], asks[0]["price"])
+                if mid is not None:
+                    self._set_token_price(asset_id, mid)
+        except (KeyError, IndexError):
             pass
-        self._update_and_emit()
+        self._publish_prices()
 
-    def _handle_last_trade(self, msg: dict):
+    def _handle_last_trade(self, msg: dict) -> None:
         asset_id = msg.get("asset_id", "")
         try:
             price = float(msg.get("price", 0))
-            if price > 0:
-                self._prices[asset_id] = price
+            self._set_token_price(asset_id, price)
         except (TypeError, ValueError):
             pass
-        self._update_and_emit()
+        self._publish_prices()
 
-    def _update_and_emit(self):
-        """Map per-token prices → (up, down) and emit 'price' event."""
+    def _publish_prices(self) -> None:
+        """Map per-token prices → (up, down) and emit a 'price' event."""
         tokens = self.market.tokens
         if not tokens:
             return
 
-        up_id   = tokens[0] if len(tokens) > 0 else None
+        up_id   = tokens[0] if tokens else None
         down_id = tokens[1] if len(tokens) > 1 else None
-
         changed = False
 
+        # Degenerate case: both tokens share the same ID — derive complement
         if up_id and down_id and up_id == down_id:
-            # Degenerate case: both tokens identical — derive down from complement
-            if up_id in self._prices:
-                p         = self._prices[up_id]
-                self.up   = p
-                self.down = round(1.0 - p, 6)
+            if up_id in self._token_prices:
+                self.up   = self._token_prices[up_id]
+                self.down = round(1.0 - self.up, 6)
                 changed   = True
         else:
-            if up_id and up_id in self._prices:
-                self.up = self._prices[up_id]
-                changed = True
-            if down_id and down_id in self._prices:
-                self.down = self._prices[down_id]
+            if up_id and up_id in self._token_prices:
+                self.up  = self._token_prices[up_id]
+                changed  = True
+            if down_id and down_id in self._token_prices:
+                self.down = self._token_prices[down_id]
                 changed   = True
 
         if changed:
             self._emit("price", self.up, self.down)
 
-    # ------------------------------------------------------------------
-    # WebSocket callbacks
-    # ------------------------------------------------------------------
+    # ── Event emission ─────────────────────────────────────────────────────────
 
-    def _on_ws_error(self, ws, exc):
-        log.warning(f"Stream: WS error: {exc}")
-        # Don't emit here — the retry loop in _run_with_retry handles reconnect
-
-    def _on_ws_close(self, ws, code, msg):
-        log.info(f"Stream: closed (code={code})")
-
-    def _emit(self, event: str, *args):
+    def _emit(self, event: str, *args) -> None:
         for fn in self._handlers.get(event, []):
             try:
                 fn(*args)
             except Exception as exc:
-                log.exception(f"Stream: handler '{event}' raised: {exc}")
+                log.exception("Stream: handler '%s' raised: %s", event, exc)
+
+
+# Type hint alias used inside _publish_prices
+from typing import Any

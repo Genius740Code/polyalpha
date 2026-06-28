@@ -11,7 +11,7 @@ class MarketClosed(PolyalphaError):
 
 
 class StreamDisconnected(PolyalphaError):
-    """WebSocket dropped and could not reconnect."""
+    """WebSocket dropped and could not reconnect within the retry budget."""
 
 
 class InsufficientBalance(PolyalphaError):
