@@ -2,16 +2,14 @@
 polyalpha client — market discovery via deterministic slug generation.
 
 Slug format: {asset}-updown-{timeframe}-{unix_end_ts}
-The timestamp is the END of the window (window_start + interval_seconds).
 
-Examples
---------
-  btc-updown-5m-1751234700     # BTC 5m window ending at 1751234700
-  eth-updown-15m-1751234700    # ETH 15m window ending at 1751234700
-  sol-updown-1h-1751234000     # SOL 1h window
+The timestamp is the END of the window (window_start + interval_seconds).
+The event has ONE market. That market's clobTokenIds JSON string contains
+BOTH tokens: [up_token, down_token], aligned with the outcomes array.
 """
 
 import time
+import json as _json
 import logging
 import httpx
 
@@ -19,24 +17,23 @@ from .market import Market
 from .stream import Stream
 from .paper import PaperEngine
 from .errors import MarketNotFound, MarketClosed
-from .constants import (
-    GAMMA_API,
-    TIMEFRAME_SECONDS,
-    ASSETS,
-    build_slug,
-    slug_prefix,
-)
+from .constants import GAMMA_API, TIMEFRAME_SECONDS, ASSETS, build_slug
 
 log = logging.getLogger(__name__)
 
 
-def _current_window_end(timeframe: str) -> int:
-    """
-    Return the Unix timestamp of the END of the current window.
+def _jloads(val, default):
+    """JSON-decode a value if it's a string, else return as-is."""
+    if isinstance(val, str):
+        try:
+            return _json.loads(val)
+        except Exception:
+            return default
+    return val if val is not None else default
 
-    Polymarket slugs use the window end time.
-    e.g. for 5m: floor(now / 300) * 300 + 300
-    """
+
+def _current_window_end(timeframe: str) -> int:
+    """Return the Unix timestamp of the END of the current window."""
     interval = TIMEFRAME_SECONDS[timeframe]
     now = int(time.time())
     window_start = (now // interval) * interval
@@ -44,11 +41,7 @@ def _current_window_end(timeframe: str) -> int:
 
 
 def _candidate_window_ends(timeframe: str, count: int = 3) -> list[int]:
-    """
-    Return [current, next, next+1] window end timestamps.
-    We try a few because a market might open slightly late or
-    we might be at the very edge of a boundary.
-    """
+    """Return [current, next, next+1] window end timestamps to try."""
     interval = TIMEFRAME_SECONDS[timeframe]
     current = _current_window_end(timeframe)
     return [current + (i * interval) for i in range(count)]
@@ -66,8 +59,8 @@ class MarketClient:
 
     def latest(self, asset: str, timeframe: str = "5m") -> Market:
         """
-        Get the active market for an asset/timeframe using deterministic
-        slug generation. Tries current window and up to 2 upcoming windows.
+        Get the active market for an asset/timeframe pair.
+        Uses deterministic slug generation — no search needed.
 
         Args:
             asset:     "BTC", "ETH", "SOL", "XRP", "DOGE"
@@ -93,7 +86,7 @@ class MarketClient:
             slug = build_slug(asset, timeframe, end_ts)
             log.debug(f"Trying slug: {slug}")
             try:
-                return self._fetch_by_event_slug(slug)
+                return self._fetch_by_slug(slug)
             except MarketNotFound as exc:
                 log.debug(f"Not found: {slug}")
                 last_exc = exc
@@ -103,7 +96,7 @@ class MarketClient:
 
         raise MarketNotFound(
             f"No active {asset} {timeframe} market found. "
-            f"Tried slugs: {[build_slug(asset, timeframe, ts) for ts in candidates]}"
+            f"Tried: {[build_slug(asset, timeframe, ts) for ts in candidates]}"
         )
 
     def get(self, slug: str) -> Market:
@@ -113,11 +106,11 @@ class MarketClient:
         Example:
             market = client.markets.get("btc-updown-5m-1751234700")
         """
-        return self._fetch_by_event_slug(slug)
+        return self._fetch_by_slug(slug)
 
     def search(self, query: str, limit: int = 10) -> list[Market]:
         """
-        Search open markets by keyword via Gamma /markets endpoint.
+        Search open markets by keyword.
 
         Example:
             markets = client.markets.search("ETH 15m")
@@ -129,23 +122,20 @@ class MarketClient:
             "limit": limit,
         })
         rows = data if isinstance(data, list) else data.get("markets", [])
-        return [self._parse_market(m) for m in rows]
+        return [self._parse_market_row(m) for m in rows]
 
     def available(self, timeframe: str = "5m") -> list[Market]:
         """
-        Return currently active markets for all known assets
-        at a given timeframe.
+        Return currently active markets for all known assets at a timeframe.
 
         Example:
-            markets = client.markets.available("15m")
-            for m in markets:
+            for m in client.markets.available("5m"):
                 print(m.slug, m.yes_price)
         """
         results = []
         for asset in ASSETS:
             try:
-                m = self.latest(asset, timeframe)
-                results.append(m)
+                results.append(self.latest(asset, timeframe))
             except MarketNotFound:
                 pass
         return results
@@ -154,102 +144,88 @@ class MarketClient:
     # Internal
     # ------------------------------------------------------------------
 
-    def _fetch_by_event_slug(self, slug: str) -> Market:
+    def _fetch_by_slug(self, slug: str) -> Market:
         """
-        Fetch via /events/slug/{slug}.
-        404 → MarketNotFound (caller handles retry with next window).
+        Fetch event via /events?slug={slug} (list endpoint, returns array).
+        404 or empty → MarketNotFound.
         """
         try:
-            data = self._get(f"/events/slug/{slug}")
+            data = self._get("/events", params={"slug": slug})
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
                 raise MarketNotFound(f"Event not found: {slug}") from exc
             raise
 
-        if not data:
+        # /events returns a list
+        events = data if isinstance(data, list) else [data]
+        events = [e for e in events if e]  # strip nulls
+
+        if not events:
             raise MarketNotFound(f"Event not found: {slug}")
 
-        markets = data.get("markets", [])
+        event = events[0]
+        markets = event.get("markets", [])
         if not markets:
             raise MarketNotFound(f"Event has no markets: {slug}")
 
-        return self._parse_event(data, slug)
+        return self._parse_event(event, slug)
 
     def _parse_event(self, event: dict, slug: str) -> Market:
         """
         Parse a Gamma Up/Down event into a Market object.
 
-        Each sub-market has a clobTokenIds field — a JSON-string list of
-        [yes_token, no_token] for that sub-market. For Up/Down events:
-          - Up sub-market:   clobTokenIds[0] = UP token
-          - Down sub-market: clobTokenIds[0] = DOWN token
-        We extract one token per sub-market and store as [up_token, down_token].
+        The event has ONE market. Its clobTokenIds JSON string holds
+        BOTH token IDs aligned with the outcomes array:
+            outcomes      = '["Up", "Down"]'
+            clobTokenIds  = '["<up_token_id>", "<down_token_id>"]'
+            outcomePrices = '["0.505", "0.495"]'
         """
-        import json as _j
-
         markets = event.get("markets", [])
+        m = markets[0] if markets else {}
 
-        # Sort into up/down by question text
-        up_market   = next(
-            (m for m in markets
-             if any(w in m.get("question","").lower() for w in ("up", "higher", "greater"))),
-            None
-        )
-        down_market = next(
-            (m for m in markets
-             if any(w in m.get("question","").lower() for w in ("down", "lower"))),
-            None
-        )
+        outcomes   = _jloads(m.get("outcomes",      "[]"), [])
+        token_ids  = _jloads(m.get("clobTokenIds",  "[]"), [])
+        prices_raw = _jloads(m.get("outcomePrices", "[]"), [])
 
-        # Fallback: index order
-        if not up_market and markets:
-            up_market = markets[0]
-        if not down_market and len(markets) > 1:
-            down_market = markets[1]
+        log.debug(f"parse_event slug={slug} outcomes={outcomes} "
+                  f"n_tokens={len(token_ids)} prices={prices_raw}")
 
-        def _price(m):
-            if not m:
-                return 0.5
-            # outcomePrices is a JSON-string like "[\"0.505\", \"0.495\"]"
-            raw = m.get("outcomePrices", "[]")
-            if isinstance(raw, str):
+        # Find Up / Down index in outcomes list
+        def _find_idx(variants):
+            for i, label in enumerate(outcomes):
+                if any(v.lower() in str(label).lower() for v in variants):
+                    return i
+            return None
+
+        up_idx   = _find_idx(["up", "higher", "greater"]) 
+        down_idx = _find_idx(["down", "lower"])
+
+        # Fallback order
+        if up_idx is None:
+            up_idx = 0
+        if down_idx is None:
+            down_idx = 1 if len(token_ids) > 1 else 0
+
+        def _tok(idx: int) -> str:
+            return str(token_ids[idx]) if idx < len(token_ids) else ""
+
+        def _price(idx: int) -> float:
+            if idx < len(prices_raw):
                 try:
-                    raw = _j.loads(raw)
-                except Exception:
-                    raw = []
-            if raw:
-                try:
-                    return float(raw[0])
-                except Exception:
+                    return float(prices_raw[idx])
+                except (TypeError, ValueError):
                     pass
+            # Fallback: mid from best bid/ask on the sub-market
             bid = m.get("bestBid")
             ask = m.get("bestAsk")
             if bid and ask:
                 return round((float(bid) + float(ask)) / 2, 6)
             return 0.5
 
-        def _token(m):
-            """
-            clobTokenIds is a JSON-string list like
-            "[\"12345...\", \"67890...\"]"
-            For Up/Down sub-markets the first entry is the outcome token.
-            """
-            if not m:
-                return ""
-            raw = m.get("clobTokenIds") or m.get("tokens", "[]")
-            if isinstance(raw, str):
-                try:
-                    raw = _j.loads(raw)
-                except Exception:
-                    raw = []
-            if isinstance(raw, list) and raw:
-                return str(raw[0])
-            return m.get("conditionId") or ""
-
-        up_price   = _price(up_market)
-        down_price = _price(down_market)
-        up_token   = _token(up_market)
-        down_token = _token(down_market)
+        up_token   = _tok(up_idx)
+        down_token = _tok(down_idx)
+        up_price   = _price(up_idx)
+        down_price = _price(down_idx)
 
         active = event.get("active", False) or any(
             m.get("active", False) for m in markets
@@ -280,22 +256,12 @@ class MarketClient:
         )
 
     @staticmethod
-    def _parse_market(data: dict) -> Market:
+    def _parse_market_row(data: dict) -> Market:
         """Parse a raw /markets row (used by search())."""
-        import json as _j
-
-        def _loads(val, default):
-            if isinstance(val, str):
-                try:
-                    return _j.loads(val)
-                except Exception:
-                    return default
-            return val if val is not None else default
-
-        outcomes = _loads(data.get("outcomes"), ["YES", "NO"])
-        tokens   = _loads(data.get("clobTokenIds") or data.get("tokens"), [])
-        prices_r = _loads(data.get("outcomePrices"), [])
-        prices   = [float(p) for p in prices_r] if prices_r else []
+        outcomes   = _jloads(data.get("outcomes"),      ["YES", "NO"])
+        token_ids  = _jloads(data.get("clobTokenIds") or data.get("tokens"), [])
+        prices_raw = _jloads(data.get("outcomePrices"), [])
+        prices     = [float(p) for p in prices_raw] if prices_raw else []
 
         return Market(
             id          = data.get("conditionId") or data.get("id", ""),
@@ -311,7 +277,7 @@ class MarketClient:
             liquidity   = float(data.get("liquidity", 0) or 0),
             outcomes    = outcomes,
             prices      = prices,
-            tokens      = tokens,
+            tokens      = token_ids,
             raw         = data,
         )
 
@@ -325,7 +291,9 @@ class MarketClient:
                 resp.raise_for_status()
                 return resp.json()
             except httpx.HTTPStatusError as exc:
-                log.warning(f"HTTP {exc.response.status_code} on attempt {attempt}: {url}")
+                log.warning(
+                    f"HTTP {exc.response.status_code} on attempt {attempt}: {url}"
+                )
                 last_exc = exc
                 if exc.response.status_code < 500:
                     break
@@ -352,7 +320,6 @@ class Client:
         )
         self.markets  = MarketClient(timeout=timeout, retries=retries)
         self.paper    = PaperEngine(balance=balance)
-        self._balance = balance
         self._timeout = timeout
         self._retries = retries
 
