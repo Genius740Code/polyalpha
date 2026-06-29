@@ -127,4 +127,6 @@ except MarketClosed:
 - [markets.md](./markets.md) — finding and inspecting markets
 - [streaming.md](./streaming.md) — live WebSocket price feeds
 - [paper-trading.md](./paper-trading.md) — simulating orders and tracking P&L
+- [sniper.md](./sniper.md) — automated trading bot
+- [market-analysis.md](./market-analysis.md) — technical analysis and signals
 - [api-reference.md](./api-reference.md) — complete class and method reference
