@@ -89,6 +89,13 @@ class SniperConfig:
     log_trades: bool = True
     log_prices: bool = False
 
+    # Technical analysis (optional)
+    use_ta: bool = False
+    ta_data_source: Optional[str] = None  # "binance" | "chainlink" | "custom"
+    ta_rsi_threshold: Optional[float] = None
+    ta_sma_period: Optional[int] = None
+    ta_rules: Optional[list] = None  # Custom TA rules
+
     def __post_init__(self):
         """Validate configuration parameters."""
         # Validate asset
@@ -313,9 +320,75 @@ class Sniper:
         # Event handlers
         self._handlers: dict[str, list[Callable]] = {}
 
+        # Technical analysis (optional)
+        self._ta_data = None
+        self._ta_indicators = None
+        self._ta_signals = None
+        if self.config.use_ta:
+            self._setup_ta()
+
         self._log.info("Sniper initialized: %s %s %s @ %s",
                       self.config.asset, self.config.timeframe,
                       self.config.side, self.config.entry_price)
+
+    # ── Technical Analysis Setup ───────────────────────────────────────────────
+
+    def _setup_ta(self) -> None:
+        """Set up technical analysis components."""
+        try:
+            from ..analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator
+
+            source = self.config.ta_data_source or "binance"
+            ta_config = DataFeedConfig(
+                source=source,
+                timeframe=self.config.timeframe,
+                lookback_periods=200,
+            )
+
+            feed = DataFeed(ta_config)
+            self._ta_data = feed.fetch(self.config.asset)
+            self._ta_indicators = IndicatorCalculator(self._ta_data)
+            self._ta_signals = SignalGenerator(self._ta_indicators)
+
+            self._log.info("Technical analysis initialized with %s data", source)
+        except ImportError:
+            self._log.warning("Technical analysis dependencies not available")
+            self.config.use_ta = False
+        except Exception as exc:
+            self._log.warning("Technical analysis setup failed: %s", exc)
+            self.config.use_ta = False
+
+    def _check_ta_conditions(self) -> bool:
+        """Check if technical analysis conditions are met."""
+        if not self.config.use_ta or self._ta_signals is None:
+            return True  # No TA or TA failed, allow entry
+
+        try:
+            # Use custom rules if provided
+            if self.config.ta_rules:
+                result = self._ta_signals.evaluate(self.config.ta_rules)
+                return result["result"]
+
+            # Use default simple rules
+            conditions_met = True
+
+            # Check RSI
+            if self.config.ta_rsi_threshold is not None:
+                rsi_ok = self._ta_signals.rsi_above(self.config.ta_rsi_threshold)
+                self._log.info("TA: RSI > %.1f: %s", self.config.ta_rsi_threshold, rsi_ok)
+                conditions_met = conditions_met and rsi_ok
+
+            # Check SMA
+            if self.config.ta_sma_period is not None:
+                sma_ok = self._ta_signals.price_above_sma(self.config.ta_sma_period)
+                self._log.info("TA: Price > SMA(%d): %s", self.config.ta_sma_period, sma_ok)
+                conditions_met = conditions_met and sma_ok
+
+            return conditions_met
+
+        except Exception as exc:
+            self._log.error("Technical analysis check failed: %s", exc)
+            return True  # Allow entry on error
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -549,7 +622,12 @@ class Sniper:
         if current_price >= self.config.entry_price and not self._pending_order:
             self._log.info("Entry threshold triggered: %.4f >= %.4f",
                           current_price, self.config.entry_price)
-            self._place_order()
+
+            # Check technical analysis conditions
+            if self._check_ta_conditions():
+                self._place_order()
+            else:
+                self._log.info("Technical analysis conditions not met, skipping entry")
 
     # ── Window Management ─────────────────────────────────────────────────────
 

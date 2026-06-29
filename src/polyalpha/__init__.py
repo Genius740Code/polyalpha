@@ -30,6 +30,7 @@ from .core import Market
 from .stream import Stream
 from .trading import PaperEngine, PaperOrder, PaperPosition
 from .bots import Sniper, Tracker
+from .analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator
 from .core.errors import (
     InsufficientBalance,
     MarketClosed,
@@ -54,6 +55,11 @@ __all__ = [
     # Bots
     "Sniper",
     "Tracker",
+    # Analysis
+    "DataFeed",
+    "DataFeedConfig",
+    "IndicatorCalculator",
+    "SignalGenerator",
     # Errors
     "PolyalphaError",
     "MarketNotFound",
