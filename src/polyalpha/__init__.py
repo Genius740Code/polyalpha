@@ -29,6 +29,7 @@ from .client import Client
 from .core import Market
 from .stream import Stream
 from .trading import PaperEngine, PaperOrder, PaperPosition
+from .bots import Sniper, Tracker
 from .core.errors import (
     InsufficientBalance,
     MarketClosed,
@@ -50,6 +51,9 @@ __all__ = [
     "PaperEngine",
     "PaperOrder",
     "PaperPosition",
+    # Bots
+    "Sniper",
+    "Tracker",
     # Errors
     "PolyalphaError",
     "MarketNotFound",
