@@ -6,6 +6,7 @@ Usage
     python examples/market.py
     python examples/market.py --asset ETH --timeframe 15m
     python examples/market.py --asset BTC
+    python examples/market.py --rate-limit 10
 """
 
 import argparse
@@ -18,9 +19,10 @@ import polyalpha
 parser = argparse.ArgumentParser(description="polyalpha market discovery")
 parser.add_argument("--asset",     default=None,  help="BTC, ETH, SOL, XRP, DOGE (default: all)")
 parser.add_argument("--timeframe", default="5m",  help="5m | 15m | 1h | 4h | 24h")
+parser.add_argument("--rate-limit", type=int, default=None, help="Max API requests per second (default: unlimited)")
 args = parser.parse_args()
 
-client = polyalpha.Client(log_level="INFO")
+client = polyalpha.Client(log_level="INFO", rate_limit=args.rate_limit)
 
 # ── Single asset ───────────────────────────────────────────────────────────────
 if args.asset:

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json as _json
 import logging
 import time
+from threading import Lock
 from typing import Any
 
 import httpx
@@ -58,6 +59,46 @@ def _candidate_ends(timeframe: str, count: int = 3) -> list[int]:
     return [current + i * interval for i in range(count)]
 
 
+class RateLimiter:
+    """Token bucket rate limiter for API requests."""
+
+    def __init__(self, max_requests: int, period_seconds: float = 1.0):
+        """
+        Initialize rate limiter.
+
+        Parameters
+        ----------
+        max_requests    : Maximum number of requests allowed per period.
+        period_seconds  : Time window in seconds (default 1.0).
+        """
+        self.max_requests = max_requests
+        self.period = period_seconds
+        self.tokens = max_requests
+        self.last_update = time.time()
+        self._lock = Lock()
+
+    def acquire(self) -> None:
+        """Block until a token is available."""
+        with self._lock:
+            now = time.time()
+            elapsed = now - self.last_update
+            
+            # Refill tokens based on elapsed time
+            self.tokens = min(
+                self.max_requests,
+                self.tokens + elapsed * (self.max_requests / self.period)
+            )
+            self.last_update = now
+            
+            if self.tokens < 1:
+                # Wait until we have a token
+                wait_time = (1 - self.tokens) * (self.period / self.max_requests)
+                time.sleep(wait_time)
+                self.tokens = 0
+            else:
+                self.tokens -= 1
+
+
 # ── MarketClient ───────────────────────────────────────────────────────────────
 
 class MarketClient:
@@ -65,11 +106,24 @@ class MarketClient:
     Discover and fetch Polymarket Up/Down markets via the Gamma API.
 
     Access through ``client.markets`` — do not instantiate directly.
+
+    Parameters
+    ----------
+    timeout    : HTTP request timeout in seconds (default 10).
+    retries    : Number of HTTP retries on 5xx errors (default 3).
+    rate_limit : Max API requests per second (default None = unlimited).
+                 Uses token-bucket algorithm with 1-second window.
     """
 
-    def __init__(self, timeout: int = 10, retries: int = 3):
+    def __init__(
+        self,
+        timeout: int = 10,
+        retries: int = 3,
+        rate_limit: int | None = None,
+    ):
         self._timeout = timeout
         self._retries = retries
+        self._rate_limiter = RateLimiter(rate_limit) if rate_limit else None
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -306,6 +360,10 @@ class MarketClient:
 
         for attempt in range(1, self._retries + 1):
             try:
+                # Apply rate limiting if enabled
+                if self._rate_limiter:
+                    self._rate_limiter.acquire()
+
                 response = httpx.get(url, params=params, timeout=self._timeout)
                 response.raise_for_status()
                 return response.json()

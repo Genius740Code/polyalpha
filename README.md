@@ -188,8 +188,11 @@ client = polyalpha.Client(
     timeout   = 10,         # HTTP timeout (seconds)
     retries   = 3,          # retries on 5xx errors
     log_level = "WARNING",  # "DEBUG" | "INFO" | "WARNING" | "ERROR"
+    rate_limit = None,      # max API requests per second (default: unlimited)
 )
 ```
+
+**Rate limiting:** Optional token-bucket rate limiter to prevent API abuse. Set to an integer (e.g., `10` for 10 requests/second) or `None` for unlimited.
 
 ---
 
@@ -216,6 +219,7 @@ except polyalpha.MarketNotFound as exc:
 
 ```bash
 python examples/market.py --asset BTC --timeframe 5m
+python examples/market.py --rate-limit 10
 python examples/stream.py --asset ETH --timeframe 15m --log DEBUG
 python examples/paper.py  --side UP   --amount 25 --limit 0.92
 ```

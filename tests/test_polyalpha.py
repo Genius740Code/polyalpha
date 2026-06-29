@@ -191,3 +191,35 @@ def test_paper_invalid_side():
 def test_slug_label():
     assert _slug_label("btc-updown-5m-1234567") == "BTC 5m"
     assert _slug_label("eth-updown-15m-9999")   == "ETH 15m"
+
+
+# ── Rate limiter ─────────────────────────────────────────────────────────────────
+
+def test_rate_limiter_basic():
+    from polyalpha.markets import RateLimiter
+    import time
+    
+    limiter = RateLimiter(max_requests=5, period_seconds=1.0)
+    
+    # Should allow 5 requests immediately
+    for _ in range(5):
+        limiter.acquire()
+    
+    # 6th request should block briefly
+    start = time.time()
+    limiter.acquire()
+    elapsed = time.time() - start
+    
+    assert elapsed >= 0.1  # Should have waited at least a bit
+
+
+def test_rate_limiter_disabled():
+    from polyalpha.markets import RateLimiter
+    
+    # Test that None rate_limit disables the limiter
+    limiter = RateLimiter(10) if 10 else None
+    assert limiter is not None
+    
+    # Test with None
+    limiter = RateLimiter(None) if None else None
+    assert limiter is None

@@ -6,6 +6,7 @@ Usage
     python examples/paper.py
     python examples/paper.py --side DOWN --amount 25
     python examples/paper.py --limit 0.92 --amount 20
+    python examples/paper.py --rate-limit 10
 """
 
 import argparse
@@ -22,9 +23,10 @@ parser.add_argument("--side",      default="UP",    help="UP | DOWN")
 parser.add_argument("--amount",    default=10.0,    type=float, help="USDC to spend")
 parser.add_argument("--limit",     default=None,    type=float, help="Limit trigger price")
 parser.add_argument("--balance",   default=100.0,   type=float, help="Starting paper balance")
+parser.add_argument("--rate-limit", type=int, default=None, help="Max API requests per second (default: unlimited)")
 args = parser.parse_args()
 
-client = polyalpha.Client(balance=args.balance, log_level="INFO")
+client = polyalpha.Client(balance=args.balance, log_level="INFO", rate_limit=args.rate_limit)
 
 print(f"Paper balance: ${client.paper.balance:.2f}\n")
 

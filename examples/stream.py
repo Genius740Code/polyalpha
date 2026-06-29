@@ -6,6 +6,7 @@ Usage
     python examples/stream.py
     python examples/stream.py --asset ETH --timeframe 15m
     python examples/stream.py --asset BTC --log DEBUG
+    python examples/stream.py --rate-limit 10
 """
 
 import argparse
@@ -20,9 +21,10 @@ parser = argparse.ArgumentParser(description="polyalpha WebSocket stream")
 parser.add_argument("--asset",     default="BTC",     help="BTC | ETH | SOL | XRP | DOGE")
 parser.add_argument("--timeframe", default="5m",      help="5m | 15m | 1h | 4h | 24h")
 parser.add_argument("--log",       default="WARNING",  help="DEBUG | INFO | WARNING")
+parser.add_argument("--rate-limit", type=int, default=None, help="Max API requests per second (default: unlimited)")
 args = parser.parse_args()
 
-client = polyalpha.Client(log_level=args.log)
+client = polyalpha.Client(log_level=args.log, rate_limit=args.rate_limit)
 
 # ── 1. Discover market ─────────────────────────────────────────────────────────
 print(f"Finding {args.asset} {args.timeframe} market…")

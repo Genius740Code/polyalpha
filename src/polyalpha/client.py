@@ -35,6 +35,7 @@ class Client:
     timeout   : HTTP request timeout in seconds (default 10).
     retries   : Number of HTTP retries on 5xx errors (default 3).
     log_level : Python logging level string, e.g. "DEBUG", "INFO", "WARNING".
+    rate_limit: Max API requests per second (default None = unlimited).
 
     Attributes
     ----------
@@ -44,7 +45,7 @@ class Client:
     Example
     -------
     >>> import polyalpha
-    >>> client = polyalpha.Client(balance=500.0, log_level="INFO")
+    >>> client = polyalpha.Client(balance=500.0, log_level="INFO", rate_limit=10)
     >>> market = client.markets.latest("BTC", "5m")
     >>> stream = client.stream(market)
     """
@@ -55,13 +56,14 @@ class Client:
         timeout:   int   = 10,
         retries:   int   = 3,
         log_level: str   = "WARNING",
+        rate_limit: int | None = None,
     ):
         logging.basicConfig(
             level  = getattr(logging, log_level.upper(), logging.WARNING),
             format = "%(levelname)s:%(name)s:%(message)s",
         )
 
-        self.markets = MarketClient(timeout=timeout, retries=retries)
+        self.markets = MarketClient(timeout=timeout, retries=retries, rate_limit=rate_limit)
         self.paper   = PaperEngine(balance=balance)
 
         self._timeout = timeout

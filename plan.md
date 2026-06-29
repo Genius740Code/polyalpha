@@ -277,12 +277,3 @@ These are fully designed but intentionally out of scope until paper mode is soli
 
 ---
 
-## Known Issues in Current Code
-
-| Issue | Fix |
-|-------|-----|
-| `raw_data` field name leaks into `dump()` output as `raw_data` not `raw` | rename field to `raw` or override `dump()` to alias |
-| `print()` shadows Python builtin | rename to `show()` or `display()` |
-| No real API call in `MarketClient.latest()` | implement Gamma API fetch with slug resolution |
-| Token IDs are placeholder strings | pull real condition IDs from Gamma response |
-| No error handling anywhere | add typed exceptions + HTTP retry |
