@@ -76,23 +76,6 @@ class Market:
     def down_token(self) -> str:
         return self.tokens[1] if len(self.tokens) > 1 else ""
 
-    # Keep legacy aliases so existing bot code doesn't break
-    @property
-    def yes_price(self) -> float:
-        return self.up_price
-
-    @property
-    def no_price(self) -> float:
-        return self.down_price
-
-    @property
-    def yes_token(self) -> str:
-        return self.up_token
-
-    @property
-    def no_token(self) -> str:
-        return self.down_token
-
     # ── Serialisation ──────────────────────────────────────────────────────────
 
     def dump(self) -> dict:

@@ -192,6 +192,22 @@ class MarketClient:
         -------
         >>> markets = client.markets.search("ETH 15m")
         """
+        # Sanitize input
+        if not isinstance(query, str):
+            raise ValueError(f"Query must be a string, got {type(query).__name__}")
+        
+        query = query.strip()
+        if len(query) == 0:
+            raise ValueError("Query cannot be empty")
+        if len(query) > 200:
+            raise ValueError("Query too long (max 200 characters)")
+        
+        # Sanitize limit
+        if not isinstance(limit, int):
+            raise ValueError(f"Limit must be an integer, got {type(limit).__name__}")
+        if limit <= 0 or limit > 100:
+            raise ValueError("Limit must be between 1 and 100")
+        
         data = self._get("/markets", params={
             "search": query,
             "active": "true",

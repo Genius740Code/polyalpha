@@ -56,6 +56,7 @@ from .core import (
     Market,
     StreamDisconnected,
 )
+from .markets import RateLimiter
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +86,7 @@ class Stream:
         market:      Market,
         retries:     int   = WS_MAX_RETRIES,
         retry_delay: float = WS_RETRY_DELAY,
+        price_threshold: float = 0.0001,
     ):
         try:
             import websocket as _ws_module  # websocket-client
@@ -98,6 +100,7 @@ class Stream:
         self.market      = market
         self.retries     = retries
         self.retry_delay = retry_delay
+        self._price_threshold = price_threshold
 
         self._handlers: dict[str, list[Callable]] = defaultdict(list)
         self._ws:          object | None           = None
@@ -107,6 +110,13 @@ class Stream:
         # Latest prices — always readable without a callback
         self.up:   float = market.up_price
         self.down: float = market.down_price
+
+        # Track last emitted prices to avoid unnecessary events
+        self._last_emitted_up:   float = self.up
+        self._last_emitted_down: float = self.down
+
+        # Rate limiter for WebSocket message processing (prevent message floods)
+        self._message_rate_limiter = RateLimiter(max_requests=100, period_seconds=1.0)
 
         # Mid-price per token ID (populated from WS events)
         self._token_prices: dict[str, float] = {}
@@ -259,7 +269,7 @@ class Stream:
                 break   # socket gone; _on_ws_close will trigger reconnect
 
     def _on_message(self, ws, raw: str) -> None:
-        # Server-sent PING — reply immediately
+        # Server-sent PING — reply immediately (no rate limit for control messages)
         if raw == "PING":
             try:
                 ws.send("PONG")
@@ -271,6 +281,9 @@ class Stream:
         # Ignore heartbeats / empty frames
         if raw in ("PONG", "[]", ""):
             return
+
+        # Apply rate limiting to message processing
+        self._message_rate_limiter.acquire()
 
         try:
             msg = json.loads(raw)
@@ -402,7 +415,12 @@ class Stream:
                 changed   = True
 
         if changed:
-            self._emit("price", self.up, self.down)
+            # Only emit if price change exceeds threshold
+            if (abs(self.up - self._last_emitted_up) >= self._price_threshold or
+                abs(self.down - self._last_emitted_down) >= self._price_threshold):
+                self._emit("price", self.up, self.down)
+                self._last_emitted_up = self.up
+                self._last_emitted_down = self.down
 
     # ── Event emission ─────────────────────────────────────────────────────────
 
