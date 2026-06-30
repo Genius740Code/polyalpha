@@ -1,9 +1,6 @@
-Inconsistent UP/DOWN vs YES/NO terminology
 Missing type hints in critical areas
 Duplicate code in data feed parsing
 Unsafe JSON parsing with broad exception handling
-No rate limiting on WebSocket messages
-Inefficient price updates in Stream
 Blocking rate limiter
 Incomplete test coverage
 
@@ -11,7 +8,6 @@ API surface bloat in init.py
 Magic numbers throughout codebase
 Inconsistent error handling for ta-lib
 Complex nested logic in Sniper
-No input sanitization in search
 Inefficient indicator calculations
 No HTTP connection pooling
 Missing version compatibility info
