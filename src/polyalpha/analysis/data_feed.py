@@ -420,7 +420,8 @@ class DataFeed:
             response = requests.get(
                 self.config.custom_url,
                 headers=headers,
-                timeout=10
+                timeout=10,
+                verify=True  # Explicit SSL verification
             )
             response.raise_for_status()
             data = response.json()

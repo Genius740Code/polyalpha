@@ -58,10 +58,9 @@ class Client:
         log_level: str   = "WARNING",
         rate_limit: int | None = None,
     ):
-        logging.basicConfig(
-            level  = getattr(logging, log_level.upper(), logging.WARNING),
-            format = "%(levelname)s:%(name)s:%(message)s",
-        )
+        # Configure library-specific logger without affecting global logging
+        self._log = logging.getLogger("polyalpha")
+        self._log.setLevel(getattr(logging, log_level.upper(), logging.WARNING))
 
         self.markets = MarketClient(timeout=timeout, retries=retries, rate_limit=rate_limit)
         self.paper   = PaperEngine(balance=balance)
