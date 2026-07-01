@@ -49,6 +49,20 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from ..core import ASSETS, TIMEFRAME_SECONDS, Market
+from ..core.constants import (
+    DEFAULT_WINDOW_SECONDS,
+    DEFAULT_MAX_CONSECUTIVE_LOSSES,
+    DEFAULT_PRE_WINDOW_BUFFER,
+    DEFAULT_POST_WINDOW_TIMEOUT,
+    DEFAULT_TA_LOOKBACK_PERIODS,
+    MARKET_DISCOVERY_BACKOFF,
+    POSITION_LIMIT_CHECK_DELAY,
+    ROLLOVER_PAUSE,
+    STREAM_SETUP_DELAY,
+    PRICE_CHECK_INTERVAL,
+    RESOLUTION_TIMEOUT,
+    RESOLUTION_CHECK_INTERVAL,
+)
 
 log = logging.getLogger(__name__)
 
@@ -72,17 +86,17 @@ class SniperConfig:
     # Trading parameters
     entry_price: float = 0.92
     exit_price: Optional[float] = 0.88
-    window_seconds: int = 35
+    window_seconds: int = DEFAULT_WINDOW_SECONDS
     amount: float = 20.0
 
     # Risk management
     max_position_size: Optional[float] = None
-    max_consecutive_losses: Optional[int] = 3
+    max_consecutive_losses: Optional[int] = DEFAULT_MAX_CONSECUTIVE_LOSSES
     max_trades: Optional[int] = None
 
     # Performance tuning
-    pre_window_buffer: int = 5
-    post_window_timeout: int = 10
+    pre_window_buffer: int = DEFAULT_PRE_WINDOW_BUFFER
+    post_window_timeout: int = DEFAULT_POST_WINDOW_TIMEOUT
 
     # Logging
     log_level: str = "INFO"
@@ -342,7 +356,7 @@ class Sniper:
             ta_config = DataFeedConfig(
                 source=source,
                 timeframe=self.config.timeframe,
-                lookback_periods=200,
+                lookback_periods=DEFAULT_TA_LOOKBACK_PERIODS,
             )
 
             feed = DataFeed(ta_config)
@@ -491,23 +505,46 @@ class Sniper:
 
     # ── Single Market Cycle ─────────────────────────────────────────────────────
 
-    def _run_single_cycle(self) -> None:
-        """Execute a single market cycle (discover → trade → resolve)."""
-        # Check trade limits
+    def _check_trade_limits(self) -> bool:
+        """Check if trading limits have been reached. Returns True if should stop."""
         if self.config.max_trades and self._stats.total_trades >= self.config.max_trades:
             self._log.info("Max trades (%d) reached", self.config.max_trades)
             self.stop("max_trades")
-            return
+            return True
 
-        # Check consecutive loss limit
         if (self.config.max_consecutive_losses and
             self._stats.consecutive_losses >= self.config.max_consecutive_losses):
             self._log.info("Max consecutive losses (%d) reached",
                           self.config.max_consecutive_losses)
             self.stop("max_losses")
-            return
+            return True
 
-        # Discover market
+        return False
+
+    def _check_position_limit(self) -> bool:
+        """Check if position size limit has been reached. Returns True if should skip."""
+        if not self.config.max_position_size:
+            return False
+
+        current_positions = self.client.paper.positions()
+        current_exposure = sum(
+            p.shares * p.current_price
+            for p in current_positions
+            if not p.resolved
+        )
+
+        if current_exposure >= self.config.max_position_size:
+            self._log.warning(
+                "Position size limit (%.2f) reached, skipping trade",
+                self.config.max_position_size
+            )
+            time.sleep(POSITION_LIMIT_CHECK_DELAY)
+            return True
+
+        return False
+
+    def _discover_market(self) -> bool:
+        """Discover a market. Returns True if successful."""
         self._set_state(self.STATE_DISCOVERING)
         try:
             self._market = self.client.markets.latest(
@@ -516,27 +553,23 @@ class Sniper:
             )
             self._log.info("Market found: %s", self._market.slug)
             self._emit("market_found", self._market)
+            return True
         except Exception as exc:
             self._log.error("Market discovery failed: %s", exc)
             self._emit("error", exc)
-            time.sleep(5)  # Backoff before retry
+            time.sleep(MARKET_DISCOVERY_BACKOFF)
+            return False
+
+    def _run_single_cycle(self) -> None:
+        """Execute a single market cycle (discover → trade → resolve)."""
+        if self._check_trade_limits():
             return
 
-        # Check position size limit
-        if self.config.max_position_size:
-            current_positions = self.client.paper.positions()
-            current_exposure = sum(
-                p.shares * p.current_price
-                for p in current_positions
-                if not p.resolved
-            )
-            if current_exposure >= self.config.max_position_size:
-                self._log.warning(
-                    "Position size limit (%.2f) reached, skipping trade",
-                    self.config.max_position_size
-                )
-                time.sleep(10)
-                return
+        if not self._discover_market():
+            return
+
+        if self._check_position_limit():
+            return
 
         # Set up stream and trade
         try:
@@ -554,7 +587,7 @@ class Sniper:
         self._set_state(self.STATE_ROLLOVER)
         self._emit("rollover", self._market)
         self._market = None
-        time.sleep(1)  # Brief pause before next cycle
+        time.sleep(ROLLOVER_PAUSE)
 
     # ── Stream Setup ───────────────────────────────────────────────────────────
 
@@ -584,7 +617,7 @@ class Sniper:
         self._stream.start(background=True)
 
         # Wait for connection
-        time.sleep(1)
+        time.sleep(STREAM_SETUP_DELAY)
         self._log.info("Stream attached for %s", self._market.slug)
 
     def _cleanup_stream(self) -> None:
@@ -650,7 +683,7 @@ class Sniper:
                 self._emit("window_enter", self._market)
                 return
 
-            time.sleep(0.1)
+            time.sleep(PRICE_CHECK_INTERVAL)
 
     def _parse_end_time(self, end_time_str: str) -> datetime:
         """Parse market end time string to datetime."""
@@ -731,7 +764,7 @@ class Sniper:
                     self._cancel_order("window_close")
                 return
 
-            time.sleep(0.1)
+            time.sleep(PRICE_CHECK_INTERVAL)
 
     # ── Resolution ────────────────────────────────────────────────────────────
 
@@ -743,11 +776,10 @@ class Sniper:
         self._set_state(self.STATE_RESOLVING)
 
         # Wait for stream close event
-        timeout = 120  # Max wait for resolution
         start = time.time()
 
         while not self._stop_event.is_set():
-            if time.time() - start >= timeout:
+            if time.time() - start >= RESOLUTION_TIMEOUT:
                 self._log.warning("Resolution timeout, forcing manual resolve")
                 # In production, this would query the API for outcome
                 # For paper, we'll mark as unresolved
@@ -757,7 +789,7 @@ class Sniper:
             if not self._stream or not self._stream.running:
                 break
 
-            time.sleep(0.5)
+            time.sleep(RESOLUTION_CHECK_INTERVAL)
 
         # Determine outcome from positions
         positions = self.client.paper.positions()

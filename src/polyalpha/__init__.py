@@ -28,7 +28,7 @@ Quick start
 from .client import Client
 from .core import Market
 from .stream import Stream
-from .trading import PaperEngine, PaperOrder, PaperPosition
+from .trading import PaperEngine
 from .bots import Sniper, Tracker
 from .analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator
 from .core.errors import (
@@ -50,8 +50,6 @@ __all__ = [
     "Stream",
     # Paper trading
     "PaperEngine",
-    "PaperOrder",
-    "PaperPosition",
     # Bots
     "Sniper",
     "Tracker",

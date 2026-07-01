@@ -77,7 +77,7 @@ class SignalGenerator:
             self._log.warning("RSI data unavailable")
             return False
 
-        return latest > threshold
+        return bool(latest > threshold)
 
     def rsi_below(self, threshold: float, period: int = 14) -> bool:
         """
@@ -105,7 +105,7 @@ class SignalGenerator:
             self._log.warning("RSI data unavailable")
             return False
 
-        return latest < threshold
+        return bool(latest < threshold)
 
     def rsi_between(self, lower: float, upper: float, period: int = 14) -> bool:
         """
@@ -137,7 +137,7 @@ class SignalGenerator:
             self._log.warning("RSI data unavailable")
             return False
 
-        return lower < latest < upper
+        return bool(lower < latest < upper)
 
     def price_above_sma(self, period: int = 20, price: str = "close") -> bool:
         """
@@ -163,7 +163,7 @@ class SignalGenerator:
             self._log.warning("SMA data unavailable")
             return False
 
-        return latest_price > latest_sma
+        return bool(latest_price > latest_sma)
 
     def price_below_sma(self, period: int = 20, price: str = "close") -> bool:
         """
@@ -189,7 +189,7 @@ class SignalGenerator:
             self._log.warning("SMA data unavailable")
             return False
 
-        return latest_price < latest_sma
+        return bool(latest_price < latest_sma)
 
     def price_above_ema(self, period: int = 20, price: str = "close") -> bool:
         """
@@ -215,7 +215,7 @@ class SignalGenerator:
             self._log.warning("EMA data unavailable")
             return False
 
-        return latest_price > latest_ema
+        return bool(latest_price > latest_ema)
 
     def price_below_ema(self, period: int = 20, price: str = "close") -> bool:
         """
@@ -241,7 +241,7 @@ class SignalGenerator:
             self._log.warning("EMA data unavailable")
             return False
 
-        return latest_price < latest_ema
+        return bool(latest_price < latest_ema)
 
     def price_above_bb_upper(
         self,
@@ -274,7 +274,7 @@ class SignalGenerator:
             self._log.warning("Bollinger Bands data unavailable")
             return False
 
-        return latest_price > latest_upper
+        return bool(latest_price > latest_upper)
 
     def price_below_bb_lower(
         self,
@@ -307,7 +307,7 @@ class SignalGenerator:
             self._log.warning("Bollinger Bands data unavailable")
             return False
 
-        return latest_price < latest_lower
+        return bool(latest_price < latest_lower)
 
     def price_inside_bb(
         self,
@@ -341,7 +341,7 @@ class SignalGenerator:
             self._log.warning("Bollinger Bands data unavailable")
             return False
 
-        return latest_lower < latest_price < latest_upper
+        return bool(latest_lower < latest_price < latest_upper)
 
     def macd_bullish_crossover(
         self,
@@ -389,7 +389,7 @@ class SignalGenerator:
         prev_signal = signal_values.iloc[-2]
         curr_signal = signal_values.iloc[-1]
 
-        return prev_macd <= prev_signal and curr_macd > curr_signal
+        return bool(prev_macd <= prev_signal and curr_macd > curr_signal)
 
     def macd_bearish_crossover(
         self,
@@ -437,7 +437,7 @@ class SignalGenerator:
         prev_signal = signal_values.iloc[-2]
         curr_signal = signal_values.iloc[-1]
 
-        return prev_macd >= prev_signal and curr_macd < curr_signal
+        return bool(prev_macd >= prev_signal and curr_macd < curr_signal)
 
     def macd_above_zero(
         self,
@@ -470,7 +470,7 @@ class SignalGenerator:
             self._log.warning("MACD histogram data unavailable")
             return False
 
-        return latest > 0
+        return bool(latest > 0)
 
     def macd_below_zero(
         self,
@@ -503,7 +503,7 @@ class SignalGenerator:
             self._log.warning("MACD histogram data unavailable")
             return False
 
-        return latest < 0
+        return bool(latest < 0)
 
     def stochastic_above(
         self,
@@ -543,7 +543,7 @@ class SignalGenerator:
             self._log.warning("Stochastic data unavailable")
             return False
 
-        return latest > threshold
+        return bool(latest > threshold)
 
     def stochastic_below(
         self,
@@ -583,7 +583,7 @@ class SignalGenerator:
             self._log.warning("Stochastic data unavailable")
             return False
 
-        return latest < threshold
+        return bool(latest < threshold)
 
     def volume_above_sma(self, period: int = 20) -> bool:
         """
@@ -607,7 +607,7 @@ class SignalGenerator:
             self._log.warning("Volume SMA data unavailable")
             return False
 
-        return latest_volume > latest_sma
+        return bool(latest_volume > latest_sma)
 
     def volume_below_sma(self, period: int = 20) -> bool:
         """
@@ -631,7 +631,7 @@ class SignalGenerator:
             self._log.warning("Volume SMA data unavailable")
             return False
 
-        return latest_volume < latest_sma
+        return bool(latest_volume < latest_sma)
 
     # ── Custom Signals ───────────────────────────────────────────────────────
 

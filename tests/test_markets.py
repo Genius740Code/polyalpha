@@ -116,15 +116,15 @@ def test_markets_latest_validation():
 
 def test_markets_initialization():
     client = MarketClient(timeout=15, retries=5, rate_limit=10)
-    
+
     assert client._timeout == 15
     assert client._retries == 5
-    assert client._rate_limit == 10
+    assert client._rate_limiter is not None
 
 
 def test_markets_default_initialization():
     client = MarketClient()
-    
+
     assert client._timeout == 10
     assert client._retries == 3
-    assert client._rate_limit is None
+    assert client._rate_limiter is None

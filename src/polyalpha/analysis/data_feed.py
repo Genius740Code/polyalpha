@@ -28,8 +28,34 @@ from typing import Optional, Callable
 import pandas as pd
 import requests
 
+from ..core.constants import (
+    DEFAULT_CACHE_MAX_TICKS,
+    API_REQUEST_TIMEOUT,
+    CACHE_EXPIRY_SECONDS,
+)
+
 log = logging.getLogger(__name__)
 
+
+# ── Constants ───────────────────────────────────────────────────────────────────
+
+TIMEFRAME_MAP = {
+    "1m": "1T",
+    "5m": "5T",
+    "15m": "15T",
+    "1h": "1H",
+    "4h": "4H",
+    "1d": "1D",
+}
+
+BINANCE_INTERVAL_MAP = {
+    "1m": "1m",
+    "5m": "5m",
+    "15m": "15m",
+    "1h": "1h",
+    "4h": "4h",
+    "1d": "1d",
+}
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -230,12 +256,12 @@ class DataFeed:
         if self._ws_lock:
             with self._ws_lock:
                 self._ws_cache.append(tick)
-                # Keep last 1000 ticks
-                if len(self._ws_cache) > 1000:
+                # Keep last N ticks
+                if len(self._ws_cache) > DEFAULT_CACHE_MAX_TICKS:
                     self._ws_cache.pop(0)
         else:
             self._ws_cache.append(tick)
-            if len(self._ws_cache) > 1000:
+            if len(self._ws_cache) > DEFAULT_CACHE_MAX_TICKS:
                 self._ws_cache.pop(0)
 
     def resample(self, timeframe: str) -> pd.DataFrame:
@@ -255,20 +281,10 @@ class DataFeed:
         if self._data is None:
             raise ValueError("No data available. Call fetch() first.")
 
-        # Map timeframe to pandas resample rule
-        timeframe_map = {
-            "1m": "1T",
-            "5m": "5T",
-            "15m": "15T",
-            "1h": "1H",
-            "4h": "4H",
-            "1d": "1D",
-        }
-
-        if timeframe not in timeframe_map:
+        if timeframe not in TIMEFRAME_MAP:
             raise ValueError(f"Invalid timeframe: {timeframe}")
 
-        rule = timeframe_map[timeframe]
+        rule = TIMEFRAME_MAP[timeframe]
         data = self._data.copy()
         data.set_index("timestamp", inplace=True)
 
@@ -338,20 +354,25 @@ class DataFeed:
 
     # ── Data Source Implementations ───────────────────────────────────────────
 
+    def _normalize_ohlcv(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Normalize DataFrame to standard OHLCV format.
+
+        Ensures timestamp is datetime and price/volume columns are float.
+        """
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df["open"] = df["open"].astype(float)
+        df["high"] = df["high"].astype(float)
+        df["low"] = df["low"].astype(float)
+        df["close"] = df["close"].astype(float)
+        df["volume"] = df["volume"].astype(float)
+        return df
+
     def _fetch_binance(self, asset: str) -> pd.DataFrame:
         """Fetch data from Binance API."""
         symbol = self.config.asset_map[asset]
 
-        # Map timeframe to Binance interval
-        interval_map = {
-            "1m": "1m",
-            "5m": "5m",
-            "15m": "15m",
-            "1h": "1h",
-            "4h": "4h",
-            "1d": "1d",
-        }
-        interval = interval_map[self.config.timeframe]
+        interval = BINANCE_INTERVAL_MAP[self.config.timeframe]
 
         params = {
             "symbol": symbol,
@@ -363,7 +384,7 @@ class DataFeed:
             response = requests.get(
                 self.config.binance_api_url,
                 params=params,
-                timeout=10
+                timeout=API_REQUEST_TIMEOUT
             )
             response.raise_for_status()
             data = response.json()
@@ -378,16 +399,12 @@ class DataFeed:
             "taker_buy_quote", "ignore"
         ])
 
-        # Convert types
+        # Convert timestamp from milliseconds
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df["open"] = df["open"].astype(float)
-        df["high"] = df["high"].astype(float)
-        df["low"] = df["low"].astype(float)
-        df["close"] = df["close"].astype(float)
-        df["volume"] = df["volume"].astype(float)
 
-        # Select and rename columns
+        # Select and normalize columns
         df = df[["timestamp", "open", "high", "low", "close", "volume"]]
+        df = self._normalize_ohlcv(df)
 
         return df
 
@@ -420,7 +437,7 @@ class DataFeed:
             response = requests.get(
                 self.config.custom_url,
                 headers=headers,
-                timeout=10,
+                timeout=API_REQUEST_TIMEOUT,
                 verify=True  # Explicit SSL verification
             )
             response.raise_for_status()
@@ -437,13 +454,8 @@ class DataFeed:
         else:
             raise ValueError("Unexpected custom API response format")
 
-        # Convert types
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        df["open"] = df["open"].astype(float)
-        df["high"] = df["high"].astype(float)
-        df["low"] = df["low"].astype(float)
-        df["close"] = df["close"].astype(float)
-        df["volume"] = df["volume"].astype(float)
+        # Normalize types
+        df = self._normalize_ohlcv(df)
 
         return df
 
@@ -469,15 +481,7 @@ class DataFeed:
         df.set_index("timestamp", inplace=True)
 
         # Resample to target timeframe
-        timeframe_map = {
-            "1m": "1T",
-            "5m": "5T",
-            "15m": "15T",
-            "1h": "1H",
-            "4h": "4H",
-            "1d": "1D",
-        }
-        rule = timeframe_map[self.config.timeframe]
+        rule = TIMEFRAME_MAP[self.config.timeframe]
 
         resampled = df.resample(rule).agg({
             "price": ["first", "max", "min", "last"]
@@ -506,9 +510,9 @@ class DataFeed:
         if not os.path.exists(cache_path):
             return None
 
-        # Check if cache is recent (less than 1 hour old)
+        # Check if cache is recent
         cache_age = time.time() - os.path.getmtime(cache_path)
-        if cache_age > 3600:
+        if cache_age > CACHE_EXPIRY_SECONDS:
             self._log.debug("Cache expired for %s", asset)
             return None
 

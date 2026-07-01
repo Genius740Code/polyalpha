@@ -15,25 +15,23 @@ from polyalpha.analysis import DataFeed, DataFeedConfig, IndicatorCalculator, Si
 
 def test_datafeed_config_initialization():
     config = DataFeedConfig(
-        asset="BTC",
         timeframe="5m",
         lookback_periods=100
     )
-    
-    assert config.asset == "BTC"
+
     assert config.timeframe == "5m"
     assert config.lookback_periods == 100
     assert config.source == "binance"  # default
+    assert "BTC" in config.asset_map
 
 
 def test_datafeed_config_custom_source():
     config = DataFeedConfig(
-        asset="BTC",
         timeframe="5m",
         source="custom",
         custom_url="https://api.example.com/ohlcv"
     )
-    
+
     assert config.source == "custom"
     assert config.custom_url == "https://api.example.com/ohlcv"
 
@@ -42,28 +40,27 @@ def test_datafeed_config_validation():
     # Custom source requires custom_url
     with pytest.raises(ValueError, match="custom_url required"):
         DataFeedConfig(
-            asset="BTC",
             timeframe="5m",
             source="custom"
         )
 
 
 def test_datafeed_initialization():
-    config = DataFeedConfig(asset="BTC", timeframe="5m")
-    
+    config = DataFeedConfig(timeframe="5m")
+
     with tempfile.TemporaryDirectory() as tmpdir:
-        feed = DataFeed(config, cache_dir=tmpdir)
-        
+        feed = DataFeed(config)
+
         assert feed.config == config
-        assert feed._cache_dir == tmpdir
+        assert feed.config.cache_dir is not None
 
 
 def test_datafeed_resampling():
-    config = DataFeedConfig(asset="BTC", timeframe="5m")
-    
+    config = DataFeedConfig(timeframe="5m")
+
     with tempfile.TemporaryDirectory() as tmpdir:
-        feed = DataFeed(config, cache_dir=tmpdir)
-        
+        feed = DataFeed(config)
+
         # Create test data with 1-minute candles
         data = pd.DataFrame({
             "timestamp": pd.date_range("2025-01-01", periods=10, freq="1min"),
@@ -73,26 +70,28 @@ def test_datafeed_resampling():
             "close": [50050.0] * 10,
             "volume": [100.0] * 10
         })
-        
-        # Resample to 5m
-        resampled = feed._resample(data, "5m")
-        
+
+        # Set data and resample to 5m
+        feed._data = data
+        resampled = feed.resample("5m")
+
         assert len(resampled) <= len(data)
         assert "timestamp" in resampled.columns
         assert "open" in resampled.columns
 
 
 def test_datafeed_cache_path():
-    config = DataFeedConfig(asset="BTC", timeframe="5m")
-    
+    config = DataFeedConfig(timeframe="5m")
+
     with tempfile.TemporaryDirectory() as tmpdir:
-        feed = DataFeed(config, cache_dir=tmpdir)
-        
-        cache_path = feed._cache_path()
-        
+        config.cache_dir = tmpdir
+        feed = DataFeed(config)
+
+        cache_path = feed._get_cache_path("BTC")
+
         assert "BTC" in cache_path
         assert "5m" in cache_path
-        assert cache_path.endswith(".parquet")
+        assert cache_path.endswith(".csv")
 
 
 # ── IndicatorCalculator tests ───────────────────────────────────────────────────

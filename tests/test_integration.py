@@ -429,8 +429,8 @@ def test_datafeed_binance_mock():
         [1704067500000, "50050.0", "50150.0", "49950.0", "50100.0", "110.0"],
     ]
     
-    config = DataFeedConfig(asset="BTC", timeframe="5m")
-    
+    config = DataFeedConfig(timeframe="5m")
+
     with patch('polyalpha.analysis.data_feed.requests.get') as mock_get:
         mock_response = Mock()
         mock_response.status_code = 200
@@ -457,7 +457,6 @@ def test_datafeed_custom_api_mock():
     }
     
     config = DataFeedConfig(
-        asset="BTC",
         timeframe="5m",
         source="custom",
         custom_url="https://api.example.com/ohlcv"

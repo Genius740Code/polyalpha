@@ -118,23 +118,20 @@ def test_sniper_config_initialization():
     config = SniperConfig(
         asset="BTC",
         timeframe="5m",
-        max_position_size=50.0,
-        max_positions=3
+        max_position_size=50.0
     )
-    
+
     assert config.asset == "BTC"
     assert config.timeframe == "5m"
     assert config.max_position_size == 50.0
-    assert config.max_positions == 3
 
 
 def test_sniper_config_defaults():
     config = SniperConfig(asset="BTC", timeframe="5m")
-    
-    assert config.max_position_size == 100.0  # default
-    assert config.max_positions == 5  # default
-    assert config.entry_threshold == 0.60  # default
-    assert config.exit_threshold == 0.90  # default
+
+    assert config.max_position_size is None  # default
+    assert config.entry_price == 0.92  # default
+    assert config.exit_price == 0.88  # default
 
 
 # ── Sniper trade record tests ─────────────────────────────────────────────────
@@ -147,12 +144,11 @@ def test_sniper_trade_record():
         exit_price=None,
         amount=10.0,
         shares=18.0,
-        fee=0.20,
         outcome=None,
         pnl=0.0,
         timestamp=datetime.now(timezone.utc)
     )
-    
+
     assert record.market_slug == "btc-updown-5m-123"
     assert record.side == "UP"
     assert record.outcome is None
@@ -165,13 +161,12 @@ def test_sniper_stats_initialization():
         total_trades=10,
         wins=6,
         losses=4,
-        total_pnl=50.0,
-        win_rate=60.0
+        total_pnl=50.0
     )
-    
+
     assert stats.total_trades == 10
     assert stats.wins == 6
-    assert stats.win_rate == 60.0
+    assert stats.win_rate == 60.0  # calculated property
 
 
 # ── Sniper bot tests ─────────────────────────────────────────────────────────
