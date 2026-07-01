@@ -23,6 +23,7 @@ from .core import Market
 from .markets import MarketClient
 from .stream import Stream
 from .trading import PaperEngine
+from .trading.paper import PaperConfig
 
 
 class Client:
@@ -31,11 +32,12 @@ class Client:
 
     Parameters
     ----------
-    balance   : Starting paper USDC balance (default 100.0).
-    timeout   : HTTP request timeout in seconds (default 10).
-    retries   : Number of HTTP retries on 5xx errors (default 3).
-    log_level : Python logging level string, e.g. "DEBUG", "INFO", "WARNING".
-    rate_limit: Max API requests per second (default None = unlimited).
+    balance     : Starting paper USDC balance (default 100.0).
+    timeout     : HTTP request timeout in seconds (default 10).
+    retries     : Number of HTTP retries on 5xx errors (default 3).
+    log_level   : Python logging level string, e.g. "DEBUG", "INFO", "WARNING".
+    rate_limit  : Max API requests per second (default None = unlimited).
+    paper_config: PaperConfig for paper trading realism options (default None).
 
     Attributes
     ----------
@@ -57,13 +59,14 @@ class Client:
         retries:   int   = 3,
         log_level: str   = "WARNING",
         rate_limit: int | None = None,
+        paper_config: PaperConfig | None = None,
     ):
         # Configure library-specific logger without affecting global logging
         self._log = logging.getLogger("polyalpha")
         self._log.setLevel(getattr(logging, log_level.upper(), logging.WARNING))
 
         self.markets = MarketClient(timeout=timeout, retries=retries, rate_limit=rate_limit)
-        self.paper   = PaperEngine(balance=balance)
+        self.paper   = PaperEngine(balance=balance, config=paper_config)
 
         self._timeout = timeout
         self._retries = retries

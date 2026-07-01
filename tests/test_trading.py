@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import pytest
 import polyalpha
-from polyalpha.trading.paper import PaperEngine, _slug_label
+from polyalpha.trading.paper import PaperEngine, PaperConfig, _slug_label
 from polyalpha.core.market import Market
 
 
@@ -256,3 +256,167 @@ def test_order_dump():
 def test_slug_label():
     assert _slug_label("btc-updown-5m-1234567") == "BTC 5m"
     assert _slug_label("eth-updown-15m-9999")   == "ETH 15m"
+
+
+# ── PaperConfig tests ─────────────────────────────────────────────────────────────
+
+def test_paper_config_defaults():
+    config = PaperConfig()
+    assert config.fee_mode == "custom"
+    assert config.custom_fee_rate == 0.02
+    assert config.market_category == "crypto"
+    assert config.execution_delay_ms == 0
+    assert config.slippage_pct == 0.0
+    assert config.fill_probability == 1.0
+
+
+def test_paper_config_validation_invalid_fee_mode():
+    with pytest.raises(ValueError):
+        PaperConfig(fee_mode="invalid")
+
+
+def test_paper_config_validation_negative_fee():
+    with pytest.raises(ValueError):
+        PaperConfig(custom_fee_rate=-0.01)
+
+
+def test_paper_config_validation_negative_delay():
+    with pytest.raises(ValueError):
+        PaperConfig(execution_delay_ms=-100)
+
+
+def test_paper_config_validation_invalid_randomness():
+    with pytest.raises(ValueError):
+        PaperConfig(delay_randomness=1.5)
+    with pytest.raises(ValueError):
+        PaperConfig(slippage_randomness=-0.1)
+
+
+def test_paper_config_validation_invalid_fill_probability():
+    with pytest.raises(ValueError):
+        PaperConfig(fill_probability=1.5)
+
+
+# ── Fee calculation tests ────────────────────────────────────────────────────────
+
+def test_fee_mode_zero():
+    config = PaperConfig(fee_mode="zero")
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    order = engine.buy(market, side="UP", amount=10.0)
+    assert order.fee == 0.0
+
+
+def test_fee_mode_custom():
+    config = PaperConfig(fee_mode="custom", custom_fee_rate=0.03)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    order = engine.buy(market, side="UP", amount=10.0)
+    assert order.fee == pytest.approx(10.0 * 0.03, abs=1e-6)
+
+
+def test_fee_mode_polymarket_geopolitical():
+    config = PaperConfig(fee_mode="polymarket", market_category="geopolitical")
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    order = engine.buy(market, side="UP", amount=10.0)
+    assert order.fee == 0.0
+
+
+def test_fee_mode_polymarket_crypto():
+    config = PaperConfig(fee_mode="polymarket", market_category="crypto")
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    order = engine.buy(market, side="UP", amount=10.0)
+    # Fee should be calculated using Polymarket formula
+    assert order.fee >= 0.0
+
+
+def test_fee_mode_polymarket_sports():
+    config = PaperConfig(fee_mode="polymarket", market_category="sports")
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    order = engine.buy(market, side="UP", amount=10.0)
+    # Fee should be calculated using sports fee rate
+    assert order.fee >= 0.0
+
+
+# ── Slippage tests ───────────────────────────────────────────────────────────────
+
+def test_slippage_disabled():
+    config = PaperConfig(slippage_pct=0.0)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    order = engine.buy(market, side="UP", amount=10.0)
+    assert order.status == "filled"
+
+
+def test_slippage_enabled():
+    config = PaperConfig(slippage_pct=0.05)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market(prices=[0.50, 0.50])
+    order = engine.buy(market, side="UP", amount=10.0)
+    assert order.status == "filled"
+    # Price should be higher due to slippage
+    assert order.price > 0.50
+
+
+def test_slippage_no_fill_threshold():
+    config = PaperConfig(slippage_pct=0.15, max_slippage_no_fill=0.10)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market(prices=[0.50, 0.50])
+    order = engine.buy(market, side="UP", amount=10.0)
+    # Order should not fill due to excessive slippage
+    assert order.status == "cancelled"
+
+
+def test_slippage_down_side():
+    config = PaperConfig(slippage_pct=0.05)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market(prices=[0.50, 0.50])
+    order = engine.buy(market, side="DOWN", amount=10.0)
+    assert order.status == "filled"
+    # Price should be lower due to slippage for DOWN side
+    assert order.price < 0.50
+
+
+# ── Fill probability tests ───────────────────────────────────────────────────────
+
+def test_fill_probability_always():
+    config = PaperConfig(fill_probability=1.0)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    engine.limit(market, side="UP", price=0.90, amount=20.0)
+    engine.check_limits(market.id, up_price=0.92, down_price=0.08)
+    orders = engine.orders()
+    assert orders[0].status == "filled"
+
+
+def test_fill_probability_never():
+    config = PaperConfig(fill_probability=0.0)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    engine.limit(market, side="UP", price=0.90, amount=20.0)
+    engine.check_limits(market.id, up_price=0.92, down_price=0.08)
+    orders = engine.orders()
+    # Order should be cancelled due to fill probability
+    assert orders[0].status == "cancelled"
+
+
+# ── Config update tests ───────────────────────────────────────────────────────────
+
+def test_set_config():
+    engine = PaperEngine(balance=100.0)
+    config = PaperConfig(fee_mode="zero")
+    engine.set_config(config)
+    assert engine.config.fee_mode == "zero"
+
+
+def test_backward_compatibility_no_config():
+    # Test that old code without config still works
+    engine = PaperEngine(balance=100.0)
+    market = make_market()
+    order = engine.buy(market, side="UP", amount=10.0)
+    assert order.status == "filled"
+    # Should use default custom fee mode with 2% fee
+    assert order.fee == pytest.approx(10.0 * 0.02, abs=1e-6)

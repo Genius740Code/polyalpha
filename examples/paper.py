@@ -7,6 +7,8 @@ Usage
     python examples/paper.py --side DOWN --amount 25
     python examples/paper.py --limit 0.92 --amount 20
     python examples/paper.py --rate-limit 10
+    python examples/paper.py --fee-mode polymarket --category crypto
+    python examples/paper.py --delay 2000 --slippage 0.05
 """
 
 import argparse
@@ -24,11 +26,40 @@ parser.add_argument("--amount",    default=10.0,    type=float, help="USDC to sp
 parser.add_argument("--limit",     default=None,    type=float, help="Limit trigger price")
 parser.add_argument("--balance",   default=100.0,   type=float, help="Starting paper balance")
 parser.add_argument("--rate-limit", type=int, default=None, help="Max API requests per second (default: unlimited)")
+parser.add_argument("--fee-mode", default="custom", choices=["polymarket", "custom", "zero"], help="Fee mode")
+parser.add_argument("--category", default="crypto", help="Market category for polymarket fee mode")
+parser.add_argument("--custom-fee", type=float, default=0.02, help="Custom fee rate (default: 0.02)")
+parser.add_argument("--delay", type=int, default=0, help="Execution delay in milliseconds (default: 0)")
+parser.add_argument("--slippage", type=float, default=0.0, help="Slippage percentage (default: 0.0)")
+parser.add_argument("--fill-prob", type=float, default=1.0, help="Fill probability for limit orders (default: 1.0)")
 args = parser.parse_args()
 
-client = polyalpha.Client(balance=args.balance, log_level="INFO", rate_limit=args.rate_limit)
+# Create paper trading configuration
+from polyalpha.trading.paper import PaperConfig
+config = PaperConfig(
+    fee_mode=args.fee_mode,
+    market_category=args.category,
+    custom_fee_rate=args.custom_fee,
+    execution_delay_ms=args.delay,
+    slippage_pct=args.slippage,
+    fill_probability=args.fill_prob,
+)
 
-print(f"Paper balance: ${client.paper.balance:.2f}\n")
+client = polyalpha.Client(balance=args.balance, log_level="INFO", rate_limit=args.rate_limit, paper_config=config)
+
+print(f"Paper balance: ${client.paper.balance:.2f}")
+print(f"Fee mode: {config.fee_mode}")
+if config.fee_mode == "polymarket":
+    print(f"Market category: {config.market_category}")
+elif config.fee_mode == "custom":
+    print(f"Custom fee率: {config.custom_fee_rate:.2%}")
+if config.execution_delay_ms > 0:
+    print(f"Execution delay: {config.execution_delay_ms}ms")
+if config.slippage_pct > 0:
+    print(f"Slippage: {config.slippage_pct:.2%}")
+if config.fill_probability < 1.0:
+    print(f"Fill probability: {config.fill_probability:.0%}")
+print()
 
 # ── 1. Discover market ─────────────────────────────────────────────────────────
 print(f"Finding {args.asset} {args.timeframe} market…")

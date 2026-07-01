@@ -29,6 +29,7 @@ from .client import Client
 from .core import Market
 from .stream import Stream
 from .trading import PaperEngine
+from .trading.paper import PaperConfig
 from .bots import Sniper, Tracker
 from .analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator
 from .core.errors import (
@@ -50,6 +51,7 @@ __all__ = [
     "Stream",
     # Paper trading
     "PaperEngine",
+    "PaperConfig",
     # Bots
     "Sniper",
     "Tracker",

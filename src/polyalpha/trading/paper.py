@@ -29,6 +29,8 @@ Usage
 from __future__ import annotations
 
 import logging
+import random
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -37,6 +39,51 @@ from typing import Optional
 from ..core import InsufficientBalance, OrderNotFound, TAKER_FEE_RATE
 
 log = logging.getLogger(__name__)
+
+
+# ── Configuration ────────────────────────────────────────────────────────────────
+
+@dataclass
+class PaperConfig:
+    """Configuration for paper trading realism options."""
+    # Fee configuration
+    fee_mode: str = "custom"  # "polymarket", "custom", or "zero"
+    custom_fee_rate: float = 0.02  # Used when fee_mode="custom"
+    market_category: str = "crypto"  # For polymarket mode: "crypto", "sports", "geopolitical", etc.
+    maker_fee_rate: float = 0.0  # Separate maker fee (optional)
+    
+    # Execution delay
+    execution_delay_ms: int = 0  # Delay in milliseconds (0 = no delay)
+    delay_randomness: float = 0.0  # Random variation as percentage (0-1)
+    
+    # Slippage
+    slippage_pct: float = 0.0  # Slippage percentage (e.g., 0.05 for 5%)
+    slippage_randomness: float = 0.0  # Random variation as percentage (0-1)
+    max_slippage_no_fill: float = 0.10  # If price moves beyond this, order doesn't fill
+    
+    # Fill probability
+    fill_probability: float = 1.0  # Default 100% fill
+    
+    def __post_init__(self):
+        """Validate configuration values."""
+        if self.fee_mode not in ("polymarket", "custom", "zero"):
+            raise ValueError(f"fee_mode must be 'polymarket', 'custom', or 'zero', got '{self.fee_mode}'")
+        if self.custom_fee_rate < 0:
+            raise ValueError(f"custom_fee_rate must be >= 0, got {self.custom_fee_rate}")
+        if self.maker_fee_rate < 0:
+            raise ValueError(f"maker_fee_rate must be >= 0, got {self.maker_fee_rate}")
+        if self.execution_delay_ms < 0:
+            raise ValueError(f"execution_delay_ms must be >= 0, got {self.execution_delay_ms}")
+        if not 0 <= self.delay_randomness <= 1:
+            raise ValueError(f"delay_randomness must be between 0 and 1, got {self.delay_randomness}")
+        if self.slippage_pct < 0:
+            raise ValueError(f"slippage_pct must be >= 0, got {self.slippage_pct}")
+        if not 0 <= self.slippage_randomness <= 1:
+            raise ValueError(f"slippage_randomness must be between 0 and 1, got {self.slippage_randomness}")
+        if not 0 <= self.max_slippage_no_fill <= 1:
+            raise ValueError(f"max_slippage_no_fill must be between 0 and 1, got {self.max_slippage_no_fill}")
+        if not 0 <= self.fill_probability <= 1:
+            raise ValueError(f"fill_probability must be between 0 and 1, got {self.fill_probability}")
 
 
 # ── Dataclasses ────────────────────────────────────────────────────────────────
@@ -139,12 +186,20 @@ class PaperEngine:
     Paper trading engine.  Access via ``client.paper``.
 
     All order-book and position state is held in memory for the session.
+    
+    Parameters
+    ----------
+    balance : float
+        Starting USDC balance (default: 100.0)
+    config : PaperConfig, optional
+        Configuration for fees, delays, slippage, and fill probability
     """
 
-    def __init__(self, balance: float = 100.0):
+    def __init__(self, balance: float = 100.0, config: Optional[PaperConfig] = None):
         self._balance:   float                       = float(balance)
         self._orders:    dict[str, PaperOrder]       = {}
         self._positions: dict[str, PaperPosition]    = {}   # key: "{market_id}:{side}"
+        self._config:    PaperConfig                  = config or PaperConfig()
 
     # ── Balance ────────────────────────────────────────────────────────────────
 
@@ -153,12 +208,190 @@ class PaperEngine:
         """Current paper USDC balance."""
         return self._balance
 
+    @property
+    def config(self) -> PaperConfig:
+        """Current paper trading configuration."""
+        return self._config
+
     def set_balance(self, amount: float) -> None:
         """Reset the paper balance to *amount*."""
         if amount < 0:
             raise ValueError("Balance cannot be negative")
         self._balance = float(amount)
         log.info("Paper: balance set to $%.2f", amount)
+
+    def set_config(self, config: PaperConfig) -> None:
+        """Update the paper trading configuration."""
+        self._config = config
+        log.info("Paper: configuration updated")
+
+    # ── Fee Calculation ───────────────────────────────────────────────────────────
+
+    def _calculate_fee(self, amount: float, price: float, shares: float, is_maker: bool = False) -> float:
+        """
+        Calculate fee based on configuration mode.
+        
+        Parameters
+        ----------
+        amount : float
+            USDC amount being traded
+        price : float
+            Price per share
+        shares : float
+            Number of shares
+        is_maker : bool
+            Whether this is a maker order (limit order that provides liquidity)
+        
+        Returns
+        -------
+        float
+            Fee amount in USDC
+        """
+        if self._config.fee_mode == "zero":
+            return 0.0
+        elif self._config.fee_mode == "custom":
+            fee_rate = self._config.maker_fee_rate if is_maker else self._config.custom_fee_rate
+            return round(amount * fee_rate, 6)
+        elif self._config.fee_mode == "polymarket":
+            return self._polymarket_fee(amount, price, shares, is_maker)
+        else:
+            # Fallback to default taker fee
+            return round(amount * TAKER_FEE_RATE, 6)
+
+    def _polymarket_fee(self, amount: float, price: float, shares: float, is_maker: bool = False) -> float:
+        """
+        Calculate Polymarket-style fee based on their formula.
+        
+        Formula: fee = C × p × feeRate × (p × (1 − p))^exponent
+        
+        Where:
+        - C: Number of shares traded
+        - p: Price of the trade
+        - feeRate: Category-specific (e.g., sports=0.03, crypto=0.02)
+        - exponent: 1
+        
+        Geopolitical markets have 0% fee.
+        """
+        # Geopolitical markets are fee-free
+        if self._config.market_category.lower() == "geopolitical":
+            return 0.0
+        
+        # Determine fee rate based on market category
+        category = self._config.market_category.lower()
+        if category == "sports":
+            fee_rate = 0.03
+        elif category in ("crypto", "finance", "politics", "tech"):
+            fee_rate = 0.02
+        elif category in ("economics", "culture", "weather", "other"):
+            fee_rate = 0.015
+        else:
+            fee_rate = 0.02  # Default to crypto rate
+        
+        # Apply Polymarket formula
+        exponent = 1
+        fee = shares * price * fee_rate * (price * (1 - price)) ** exponent
+        
+        # Round to 4 decimal places (Polymarket precision)
+        fee = round(fee, 4)
+        
+        # Minimum fee is 0.0001, anything smaller rounds to zero
+        if fee < 0.0001:
+            fee = 0.0
+        
+        # For maker orders, apply maker fee rate (typically lower)
+        if is_maker:
+            fee = fee * 0.75  # 25% maker rebate
+        
+        return fee
+
+    # ── Slippage Calculation ───────────────────────────────────────────────────────
+
+    def _apply_slippage(self, target_price: float, side: str) -> tuple[float, bool]:
+        """
+        Apply slippage to target price and determine if order should fill.
+        
+        Parameters
+        ----------
+        target_price : float
+        The intended execution price
+        side : str
+        "UP" or "DOWN"
+        
+        Returns
+        -------
+        tuple[float, bool]
+        (actual_price, filled) - actual price after slippage and whether order fills
+        """
+        if self._config.slippage_pct == 0:
+            return target_price, True
+        
+        # Calculate base slippage
+        slippage = target_price * self._config.slippage_pct
+        
+        # Add randomness if configured
+        if self._config.slippage_randomness > 0:
+            random_factor = random.uniform(
+                1 - self._config.slippage_randomness,
+                1 + self._config.slippage_randomness
+            )
+            slippage = slippage * random_factor
+        
+        # Apply slippage based on side (worse price for trader)
+        if side == "UP":
+            actual_price = target_price + slippage  # Higher price for buyer
+        else:
+            actual_price = target_price - slippage  # Lower price for buyer
+        
+        # Check if price moved too much (no fill)
+        price_change_pct = abs(actual_price - target_price) / target_price
+        if price_change_pct > self._config.max_slippage_no_fill:
+            log.info(
+                "Paper: slippage %.2f%% exceeds max %.2f%% - order not filled",
+                price_change_pct * 100,
+                self._config.max_slippage_no_fill * 100
+            )
+            return target_price, False
+        
+        return actual_price, True
+
+    # ── Execution Delay ───────────────────────────────────────────────────────────
+
+    def _apply_execution_delay(self) -> None:
+        """
+        Apply execution delay if configured.
+        """
+        if self._config.execution_delay_ms == 0:
+            return
+        
+        delay_ms = self._config.execution_delay_ms
+        
+        # Add randomness if configured
+        if self._config.delay_randomness > 0:
+            random_factor = random.uniform(
+                1 - self._config.delay_randomness,
+                1 + self._config.delay_randomness
+            )
+            delay_ms = int(delay_ms * random_factor)
+        
+        delay_seconds = delay_ms / 1000.0
+        log.debug("Paper: applying execution delay of %.0fms", delay_ms)
+        time.sleep(delay_seconds)
+
+    # ── Fill Probability ───────────────────────────────────────────────────────────
+
+    def _check_fill_probability(self) -> bool:
+        """
+        Check if order should fill based on fill probability.
+        
+        Returns
+        -------
+        bool
+            True if order should fill, False otherwise
+        """
+        if self._config.fill_probability >= 1.0:
+            return True
+        
+        return random.random() < self._config.fill_probability
 
     # ── Orders ─────────────────────────────────────────────────────────────────
 
@@ -187,7 +420,32 @@ class PaperEngine:
         if price <= 0:
             price = 0.5  # safe fallback before first WS price arrives
 
-        return self._fill(market, side, price, amount, is_limit=False)
+        # Apply execution delay if configured
+        self._apply_execution_delay()
+
+        # Apply slippage if configured
+        actual_price, filled = self._apply_slippage(price, side)
+        if not filled:
+            log.info("Paper: market order not filled due to slippage threshold")
+            # Create a cancelled order
+            order_id = _new_id()
+            order = PaperOrder(
+                id        = order_id,
+                market_id = market.id,
+                slug      = market.slug,
+                side      = side,
+                price     = price,
+                amount    = 0.0,
+                shares    = 0.0,
+                fee       = 0.0,
+                status    = "cancelled",
+                is_limit  = False,
+                filled_at = _now(),
+            )
+            self._orders[order_id] = order
+            return order
+
+        return self._fill(market, side, actual_price, amount, is_limit=False)
 
     def limit(self, market, side: str, price: float, amount: float) -> PaperOrder:
         """
@@ -439,8 +697,13 @@ class PaperEngine:
                 f"Order amount ${amount:.2f} exceeds balance ${self._balance:.2f}"
             )
 
-        fee    = round(amount * TAKER_FEE_RATE, 6)
-        net    = amount - fee
+        # Calculate shares first (needed for fee calculation)
+        net = amount  # Will subtract fee after calculation
+        shares = round(net / price, 6) if price > 0 else 0.0
+
+        # Calculate fee using new method
+        fee = self._calculate_fee(amount, price, shares, is_maker=is_limit)
+        net = amount - fee
         shares = round(net / price, 6) if price > 0 else 0.0
 
         self._balance -= amount
@@ -469,11 +732,34 @@ class PaperEngine:
 
     def _fill_limit(self, order: PaperOrder, current_price: float) -> None:
         """Fill a pending limit order at *current_price* (balance already reserved)."""
-        fee    = round(order.amount * TAKER_FEE_RATE, 6)
-        net    = order.amount - fee
-        shares = round(net / current_price, 6) if current_price > 0 else 0.0
+        # Check fill probability
+        if not self._check_fill_probability():
+            log.info(
+                "Paper: limit order %s not filled due to fill probability %.2f",
+                order.id[:8], self._config.fill_probability
+            )
+            order.status = "cancelled"
+            self._balance += order.amount  # refund
+            return
 
-        order.price     = current_price
+        # Apply slippage to limit order fill
+        actual_price, filled = self._apply_slippage(current_price, order.side)
+        if not filled:
+            log.info(
+                "Paper: limit order %s not filled due to slippage threshold",
+                order.id[:8]
+            )
+            order.status = "cancelled"
+            self._balance += order.amount  # refund
+            return
+
+        # Calculate fee using new method
+        shares = round(order.amount / actual_price, 6) if actual_price > 0 else 0.0
+        fee = self._calculate_fee(order.amount, actual_price, shares, is_maker=True)
+        net = order.amount - fee
+        shares = round(net / actual_price, 6) if actual_price > 0 else 0.0
+
+        order.price     = actual_price
         order.shares    = shares
         order.fee       = fee
         order.status    = "filled"
@@ -485,11 +771,11 @@ class PaperEngine:
             "",
         )
         self._upsert_position(
-            order.market_id, order.slug, question, order.side, shares, current_price, order.id,
+            order.market_id, order.slug, question, order.side, shares, actual_price, order.id,
         )
         log.info(
             "Paper: limit filled %s %.4f shares @ %.3f  fee=$%.4f",
-            order.side, shares, current_price, fee,
+            order.side, shares, actual_price, fee,
         )
 
     def _upsert_position(

@@ -1,6 +1,6 @@
 # Paper Trading
 
-`client.paper` is a `PaperEngine` that simulates Polymarket orders locally. No wallet, private key, or real money is involved. It tracks positions, applies a 2% taker fee, and computes P&L against live market prices.
+`client.paper` is a `PaperEngine` that simulates Polymarket orders locally. No wallet, private key, or real money is involved. It tracks positions, applies configurable fees, and computes P&L against live market prices.
 
 ---
 
@@ -17,6 +17,29 @@ print(order)
 
 # See your positions and total P&L
 client.paper.summary()
+```
+
+---
+
+## Configuration
+
+Paper trading supports advanced configuration for realistic simulation:
+
+```python
+from polyalpha.trading.paper import PaperConfig
+
+# Create a custom configuration
+config = PaperConfig(
+    fee_mode="polymarket",  # "polymarket", "custom", or "zero"
+    market_category="crypto",  # For polymarket mode
+    custom_fee_rate=0.02,  # 2% for custom mode
+    execution_delay_ms=2000,  # 2 second execution delay
+    slippage_pct=0.05,  # 5% slippage
+    fill_probability=0.8,  # 80% fill probability for limit orders
+)
+
+# Use with client
+client = polyalpha.Client(balance=500.0, paper_config=config)
 ```
 
 ---
@@ -138,17 +161,126 @@ Prints balance, all open positions with live P&L, and a total P&L line.
 
 ## Fees
 
-The simulated taker fee is 2% on every fill.
+Paper trading supports three fee modes:
+
+### 1. Polymarket Mode (Realistic)
+Uses Polymarket's actual fee structure based on market category:
 
 ```python
-from polyalpha import TAKER_FEE_RATE
-print(TAKER_FEE_RATE)  # 0.02
+config = PaperConfig(
+    fee_mode="polymarket",
+    market_category="crypto",  # crypto, sports, geopolitical, etc.
+)
 ```
 
-**Buy example** — spending $100:
+**Fee structure:**
+- **Geopolitical markets**: 0% fee
+- **Sports markets**: Peak 0.75% at 50/50 price
+- **Crypto/Finance/Politics/Tech**: Peak 1.80% at 50/50 price
+- **Formula**: `fee = C × p × feeRate × (p × (1 − p))^exponent`
+- Fees are symmetric around p = 0.50 and decrease at extremes
+- Rounded to 4 decimal places
+
+### 2. Custom Mode
+Use a fixed fee rate:
+
+```python
+config = PaperConfig(
+    fee_mode="custom",
+    custom_fee_rate=0.02,  # 2% fee
+)
+```
+
+### 3. Zero Mode
+No fees at all:
+
+```python
+config = PaperConfig(
+    fee_mode="zero",
+)
+```
+
+**Default behavior:** If no config is provided, uses custom mode with 2% fee.
+
+**Buy example** — spending $100 with 2% fee:
 - Fee: $100 × 0.02 = $2.00
 - Net USDC invested: $98.00
 - Shares at fill price 0.55: $98 / 0.55 ≈ 178.18 shares
+
+---
+
+## Execution Delay
+
+Simulate realistic execution latency:
+
+```python
+config = PaperConfig(
+    execution_delay_ms=2000,  # 2 second delay
+    delay_randomness=0.2,  # ±20% randomness
+)
+```
+
+This means when you place an order, it will execute after 2 seconds (±20% random variation) at whatever the price is at that time. This simulates:
+- Network latency
+- Order routing time
+- Exchange processing time
+
+**Note:** If you buy at 0.90 and the price moves to 0.91 during the delay, you'll fill at 0.91.
+
+---
+
+## Slippage
+
+Simulate price impact and partial fills:
+
+```python
+config = PaperConfig(
+    slippage_pct=0.05,  # 5% slippage
+    slippage_randomness=0.1,  # ±10% randomness
+    max_slippage_no_fill=0.10,  # Don't fill if price moves >10%
+)
+```
+
+**How it works:**
+- If slippage is 5% and you buy UP at 0.90, you might fill at 0.945 (worse price)
+- If the price moves beyond `max_slippage_no_fill`, the order won't fill
+- Slippage is direction-aware: UP orders get higher prices, DOWN orders get lower prices
+
+---
+
+## Fill Probability
+
+Limit orders don't always fill in real trading. Simulate this:
+
+```python
+config = PaperConfig(
+    fill_probability=0.7,  # 70% chance limit orders fill
+)
+```
+
+When a limit order is triggered, there's a 70% chance it fills. If it doesn't fill, the order is cancelled and balance is refunded.
+
+---
+
+## Complete Configuration Example
+
+```python
+from polyalpha.trading.paper import PaperConfig
+
+# Realistic Polymarket simulation
+config = PaperConfig(
+    fee_mode="polymarket",
+    market_category="crypto",
+    execution_delay_ms=2000,
+    delay_randomness=0.2,
+    slippage_pct=0.03,
+    slippage_randomness=0.1,
+    max_slippage_no_fill=0.10,
+    fill_probability=0.8,
+)
+
+client = polyalpha.Client(balance=1000.0, paper_config=config)
+```
 
 ---
 

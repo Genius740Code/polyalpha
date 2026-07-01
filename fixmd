@@ -1,12 +1,8 @@
 Missing type hints in critical areas
-Duplicate code in data feed parsing
-Unsafe JSON parsing with broad exception handling
 Blocking rate limiter
 
-API surface bloat in init.py
 Magic numbers throughout codebase
 Inconsistent error handling for ta-lib
-Complex nested logic in Sniper
 Inefficient indicator calculations
 No HTTP connection pooling
 Missing version compatibility info
