@@ -6,4 +6,3 @@ Inconsistent error handling for ta-lib
 Inefficient indicator calculations
 No HTTP connection pooling
 Missing version compatibility info
-Chainlink stub implementation

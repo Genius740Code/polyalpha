@@ -82,6 +82,11 @@ class DataFeedConfig:
         Whether to cache fetched data.
     cache_dir : str, optional
         Directory for cache files.
+    chainlink_rpc_url : str, optional
+        Ethereum RPC endpoint for Chainlink oracle access (if source="chainlink").
+        Example: "https://eth.llamarpc.com" or "https://mainnet.infura.io/v3/YOUR_KEY"
+    chainlink_contracts : dict
+        Mapping of assets to Chainlink oracle contract addresses.
     """
 
     source: str = "binance"
@@ -101,6 +106,16 @@ class DataFeedConfig:
 
     # Binance specific
     binance_api_url: str = "https://api.binance.com/api/v3/klines"
+
+    # Chainlink specific
+    chainlink_rpc_url: Optional[str] = None  # e.g., "https://eth.llamarpc.com" or "https://mainnet.infura.io/v3/YOUR_KEY"
+    chainlink_contracts: dict = field(default_factory=lambda: {
+        "BTC": "0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c",  # BTC/USD
+        "ETH": "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419",  # ETH/USD
+        "SOL": "0xD6aF7A0d92771C8c846814E3c8724a6642519e92",  # SOL/USD
+        "XRP": "0x97E9361F7B119D89350Ae73995bC1f8A6C78F9F2",  # XRP/USD
+        "DOGE": "0x8FbbF1933BFE539e4e6C4518A533941AF5B4C918",  # DOGE/USD
+    })
 
     def __post_init__(self):
         """Validate configuration."""
@@ -412,17 +427,183 @@ class DataFeed:
         """
         Fetch data from Chainlink oracles.
 
-        Note: This is a placeholder implementation. Chainlink data
-        access requires additional setup (web3.py, RPC endpoints, etc.).
-        For now, this falls back to Binance with a warning.
+        This implementation fetches current prices from Chainlink oracles
+        and historical OHLCV data from CoinGecko API for technical analysis.
         """
-        self._log.warning(
-            "Chainlink data source not fully implemented. "
-            "Falling back to Binance. "
-            "Note: Polymarket uses Chainlink oracles for price feeds. "
-            "Using Binance data may have price discrepancies."
-        )
-        return self._fetch_binance(asset)
+        try:
+            from web3 import Web3
+        except ImportError:
+            self._log.warning(
+                "web3.py not installed. Install with: pip install web3>=6.0.0. "
+                "Falling back to Binance."
+            )
+            return self._fetch_binance(asset)
+
+        if not self.config.chainlink_rpc_url:
+            self._log.warning(
+                "chainlink_rpc_url not configured. "
+                "Set chainlink_rpc_url in DataFeedConfig. "
+                "Falling back to Binance."
+            )
+            return self._fetch_binance(asset)
+
+        if asset not in self.config.chainlink_contracts:
+            self._log.warning(
+                f"Asset '{asset}' not in chainlink_contracts. "
+                f"Supported: {list(self.config.chainlink_contracts.keys())}. "
+                "Falling back to Binance."
+            )
+            return self._fetch_binance(asset)
+
+        try:
+            # Fetch current price from Chainlink oracle
+            current_price = self._fetch_chainlink_price(asset)
+            self._log.info(f"Current Chainlink price for {asset}: ${current_price:.2f}")
+
+            # Fetch historical OHLCV data from CoinGecko
+            historical_data = self._fetch_coingecko_historical(asset)
+
+            if historical_data is None or len(historical_data) == 0:
+                self._log.warning("Failed to fetch historical data from CoinGecko. Falling back to Binance.")
+                return self._fetch_binance(asset)
+
+            # Adjust the latest close price to match Chainlink current price
+            historical_data.loc[historical_data.index[-1], 'close'] = current_price
+            # Recalculate high/low if needed
+            historical_data.loc[historical_data.index[-1], 'high'] = max(
+                historical_data.loc[historical_data.index[-1], 'high'], current_price
+            )
+            historical_data.loc[historical_data.index[-1], 'low'] = min(
+                historical_data.loc[historical_data.index[-1], 'low'], current_price
+            )
+
+            return historical_data
+
+        except Exception as exc:
+            self._log.error(f"Chainlink data fetch error: {exc}")
+            self._log.warning("Falling back to Binance.")
+            return self._fetch_binance(asset)
+
+    def _fetch_chainlink_price(self, asset: str) -> float:
+        """Fetch current price from Chainlink oracle."""
+        from web3 import Web3
+
+        contract_address = self.config.chainlink_contracts[asset]
+        rpc_url = self.config.chainlink_rpc_url
+
+        w3 = Web3(Web3.HTTPProvider(rpc_url))
+
+        if not w3.is_connected():
+            raise ConnectionError("Failed to connect to RPC endpoint")
+
+        # Chainlink Price Feed ABI (minimal)
+        abi = [
+            {
+                "inputs": [],
+                "name": "latestRoundData",
+                "outputs": [
+                    {"name": "roundId", "type": "uint80"},
+                    {"name": "answer", "type": "int256"},
+                    {"name": "startedAt", "type": "uint256"},
+                    {"name": "updatedAt", "type": "uint256"},
+                    {"name": "answeredInRound", "type": "uint80"},
+                ],
+                "stateMutability": "view",
+                "type": "function",
+            },
+            {
+                "inputs": [],
+                "name": "decimals",
+                "outputs": [{"name": "", "type": "uint8"}],
+                "stateMutability": "view",
+                "type": "function",
+            },
+        ]
+
+        contract = w3.eth.contract(address=Web3.to_checksum_address(contract_address), abi=abi)
+
+        # Get decimals
+        decimals = contract.functions.decimals().call()
+
+        # Get latest price
+        latest_data = contract.functions.latestRoundData().call()
+        price = latest_data[1] / (10 ** decimals)
+
+        return float(price)
+
+    def _fetch_coingecko_historical(self, asset: str) -> Optional[pd.DataFrame]:
+        """Fetch historical OHLCV data from CoinGecko API."""
+        # Map asset to CoinGecko IDs
+        coingecko_ids = {
+            "BTC": "bitcoin",
+            "ETH": "ethereum",
+            "SOL": "solana",
+            "XRP": "ripple",
+            "DOGE": "dogecoin",
+        }
+
+        if asset not in coingecko_ids:
+            self._log.warning(f"Asset '{asset}' not supported by CoinGecko fallback")
+            return None
+
+        coin_id = coingecko_ids[asset]
+
+        # Map timeframe to CoinGecko days
+        timeframe_days = {
+            "1m": 1,
+            "5m": 1,
+            "15m": 1,
+            "1h": 1,
+            "4h": 2,
+            "1d": max(30, self.config.lookback_periods),
+        }
+
+        days = timeframe_days.get(self.config.timeframe, 30)
+
+        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc"
+        params = {
+            "vs_currency": "usd",
+            "days": days,
+        }
+
+        try:
+            response = requests.get(url, params=params, timeout=API_REQUEST_TIMEOUT)
+            response.raise_for_status()
+            data = response.json()
+        except Exception as exc:
+            self._log.error(f"CoinGecko API error: {exc}")
+            return None
+
+        # CoinGecko returns [timestamp, open, high, low, close]
+        df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        df["volume"] = 0  # CoinGecko OHLC doesn't include volume
+
+        # Resample to target timeframe if needed
+        if self.config.timeframe in ["1m", "5m", "15m", "1h", "4h"]:
+            df = self._resample_coingecko_data(df)
+
+        # Limit to lookback_periods
+        df = df.tail(self.config.lookback_periods).copy()
+
+        return self._normalize_ohlcv(df)
+
+    def _resample_coingecko_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Resample CoinGecko data to target timeframe."""
+        df = df.copy()
+        df.set_index("timestamp", inplace=True)
+
+        rule = TIMEFRAME_MAP[self.config.timeframe]
+        resampled = df.resample(rule).agg({
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+            "volume": "sum",
+        }).dropna()
+
+        resampled.reset_index(inplace=True)
+        return resampled
 
     def _fetch_custom(self, asset: str) -> pd.DataFrame:
         """Fetch data from custom API."""
