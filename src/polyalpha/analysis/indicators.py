@@ -69,6 +69,16 @@ class IndicatorCalculator:
             )
 
         self._log = logging.getLogger(__name__)
+        self._cache: dict[str, pd.Series | dict[str, pd.Series]] = {}
+
+    def _get_cache_key(self, indicator: str, **kwargs) -> str:
+        """Generate cache key for indicator with parameters."""
+        params_str = "_".join(f"{k}_{v}" for k, v in sorted(kwargs.items()))
+        return f"{indicator}_{params_str}" if params_str else indicator
+
+    def clear_cache(self) -> None:
+        """Clear the indicator cache."""
+        self._cache.clear()
 
     def _validate_data(self) -> None:
         """Validate input data."""
@@ -107,11 +117,23 @@ class IndicatorCalculator:
         if period <= 0:
             raise ValueError("period must be positive")
 
-        return pd.Series(
-            talib.SMA(self.data[price].values, timeperiod=period),
+        cache_key = self._get_cache_key("sma", period=period, price=price)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        try:
+            result = talib.SMA(self.data[price].values, timeperiod=period)
+        except Exception as exc:
+            self._log.error("ta-lib SMA calculation failed: %s", exc)
+            raise RuntimeError(f"SMA calculation failed: {exc}") from exc
+
+        series = pd.Series(
+            result,
             index=self.data.index,
             name=f"SMA{period}"
         )
+        self._cache[cache_key] = series
+        return series
 
     def ema(self, period: int = 20, price: str = "close") -> pd.Series:
         """
@@ -132,11 +154,23 @@ class IndicatorCalculator:
         if period <= 0:
             raise ValueError("period must be positive")
 
-        return pd.Series(
-            talib.EMA(self.data[price].values, timeperiod=period),
+        cache_key = self._get_cache_key("ema", period=period, price=price)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        try:
+            result = talib.EMA(self.data[price].values, timeperiod=period)
+        except Exception as exc:
+            self._log.error("ta-lib EMA calculation failed: %s", exc)
+            raise RuntimeError(f"EMA calculation failed: {exc}") from exc
+
+        series = pd.Series(
+            result,
             index=self.data.index,
             name=f"EMA{period}"
         )
+        self._cache[cache_key] = series
+        return series
 
     def macd(
         self,
@@ -144,7 +178,7 @@ class IndicatorCalculator:
         slow: int = 26,
         signal: int = 9,
         price: str = "close"
-    ) -> dict:
+    ) -> dict[str, pd.Series]:
         """
         Moving Average Convergence Divergence.
 
@@ -161,18 +195,22 @@ class IndicatorCalculator:
 
         Returns
         -------
-        dict
+        dict[str, pd.Series]
             Dictionary with keys: "macd", "signal", "histogram".
         """
         if fast <= 0 or slow <= 0 or signal <= 0:
             raise ValueError("periods must be positive")
 
-        macd, signal_line, histogram = talib.MACD(
-            self.data[price].values,
-            fastperiod=fast,
-            slowperiod=slow,
-            signalperiod=signal
-        )
+        try:
+            macd, signal_line, histogram = talib.MACD(
+                self.data[price].values,
+                fastperiod=fast,
+                slowperiod=slow,
+                signalperiod=signal
+            )
+        except Exception as exc:
+            self._log.error("ta-lib MACD calculation failed: %s", exc)
+            raise RuntimeError(f"MACD calculation failed: {exc}") from exc
 
         return {
             "macd": pd.Series(macd, index=self.data.index, name="MACD"),
@@ -180,7 +218,7 @@ class IndicatorCalculator:
             "histogram": pd.Series(histogram, index=self.data.index, name="MACD_Hist"),
         }
 
-    def adx(self, period: int = 14) -> dict:
+    def adx(self, period: int = 14) -> dict[str, pd.Series]:
         """
         Average Directional Index.
 
@@ -191,18 +229,22 @@ class IndicatorCalculator:
 
         Returns
         -------
-        dict
+        dict[str, pd.Series]
             Dictionary with keys: "adx", "plus_di", "minus_di".
         """
         if period <= 0:
             raise ValueError("period must be positive")
 
-        adx, plus_di, minus_di = talib.ADX(
-            self.data["high"].values,
-            self.data["low"].values,
-            self.data["close"].values,
-            timeperiod=period
-        )
+        try:
+            adx, plus_di, minus_di = talib.ADX(
+                self.data["high"].values,
+                self.data["low"].values,
+                self.data["close"].values,
+                timeperiod=period
+            )
+        except Exception as exc:
+            self._log.error("ta-lib ADX calculation failed: %s", exc)
+            raise RuntimeError(f"ADX calculation failed: {exc}") from exc
 
         return {
             "adx": pd.Series(adx, index=self.data.index, name="ADX"),
@@ -231,18 +273,30 @@ class IndicatorCalculator:
         if period <= 0:
             raise ValueError("period must be positive")
 
-        return pd.Series(
-            talib.RSI(self.data[price].values, timeperiod=period),
+        cache_key = self._get_cache_key("rsi", period=period, price=price)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        try:
+            result = talib.RSI(self.data[price].values, timeperiod=period)
+        except Exception as exc:
+            self._log.error("ta-lib RSI calculation failed: %s", exc)
+            raise RuntimeError(f"RSI calculation failed: {exc}") from exc
+
+        series = pd.Series(
+            result,
             index=self.data.index,
             name=f"RSI{period}"
         )
+        self._cache[cache_key] = series
+        return series
 
     def stochastic(
         self,
         k_period: int = 14,
         d_period: int = 3,
         smooth_k: int = 3
-    ) -> dict:
+    ) -> dict[str, pd.Series]:
         """
         Stochastic Oscillator.
 
@@ -257,22 +311,26 @@ class IndicatorCalculator:
 
         Returns
         -------
-        dict
+        dict[str, pd.Series]
             Dictionary with keys: "k", "d".
         """
         if k_period <= 0 or d_period <= 0 or smooth_k <= 0:
             raise ValueError("periods must be positive")
 
-        slowk, slowd = talib.STOCH(
-            self.data["high"].values,
-            self.data["low"].values,
-            self.data["close"].values,
-            fastk_period=k_period,
-            slowk_period=smooth_k,
-            slowk_matype=0,
-            slowd_period=d_period,
-            slowd_matype=0
-        )
+        try:
+            slowk, slowd = talib.STOCH(
+                self.data["high"].values,
+                self.data["low"].values,
+                self.data["close"].values,
+                fastk_period=k_period,
+                slowk_period=smooth_k,
+                slowk_matype=0,
+                slowd_period=d_period,
+                slowd_matype=0
+            )
+        except Exception as exc:
+            self._log.error("ta-lib Stochastic calculation failed: %s", exc)
+            raise RuntimeError(f"Stochastic calculation failed: {exc}") from exc
 
         return {
             "k": pd.Series(slowk, index=self.data.index, name="Stoch_K"),
@@ -296,13 +354,19 @@ class IndicatorCalculator:
         if period <= 0:
             raise ValueError("period must be positive")
 
-        return pd.Series(
-            talib.WILLR(
+        try:
+            result = talib.WILLR(
                 self.data["high"].values,
                 self.data["low"].values,
                 self.data["close"].values,
                 timeperiod=period
-            ),
+            )
+        except Exception as exc:
+            self._log.error("ta-lib Williams %R calculation failed: %s", exc)
+            raise RuntimeError(f"Williams %R calculation failed: {exc}") from exc
+
+        return pd.Series(
+            result,
             index=self.data.index,
             name=f"WilliamsR{period}"
         )
@@ -324,13 +388,19 @@ class IndicatorCalculator:
         if period <= 0:
             raise ValueError("period must be positive")
 
-        return pd.Series(
-            talib.CCI(
+        try:
+            result = talib.CCI(
                 self.data["high"].values,
                 self.data["low"].values,
                 self.data["close"].values,
                 timeperiod=period
-            ),
+            )
+        except Exception as exc:
+            self._log.error("ta-lib CCI calculation failed: %s", exc)
+            raise RuntimeError(f"CCI calculation failed: {exc}") from exc
+
+        return pd.Series(
+            result,
             index=self.data.index,
             name=f"CCI{period}"
         )
@@ -342,7 +412,7 @@ class IndicatorCalculator:
         period: int = 20,
         std_dev: float = 2.0,
         price: str = "close"
-    ) -> dict:
+    ) -> dict[str, pd.Series]:
         """
         Bollinger Bands.
 
@@ -357,7 +427,7 @@ class IndicatorCalculator:
 
         Returns
         -------
-        dict
+        dict[str, pd.Series]
             Dictionary with keys: "upper", "middle", "lower".
         """
         if period <= 0:
@@ -365,13 +435,17 @@ class IndicatorCalculator:
         if std_dev <= 0:
             raise ValueError("std_dev must be positive")
 
-        upper, middle, lower = talib.BBANDS(
-            self.data[price].values,
-            timeperiod=period,
-            nbdevup=std_dev,
-            nbdevdn=std_dev,
-            matype=0
-        )
+        try:
+            upper, middle, lower = talib.BBANDS(
+                self.data[price].values,
+                timeperiod=period,
+                nbdevup=std_dev,
+                nbdevdn=std_dev,
+                matype=0
+            )
+        except Exception as exc:
+            self._log.error("ta-lib Bollinger Bands calculation failed: %s", exc)
+            raise RuntimeError(f"Bollinger Bands calculation failed: {exc}") from exc
 
         return {
             "upper": pd.Series(upper, index=self.data.index, name="BB_Upper"),
@@ -396,23 +470,35 @@ class IndicatorCalculator:
         if period <= 0:
             raise ValueError("period must be positive")
 
-        return pd.Series(
-            talib.ATR(
+        cache_key = self._get_cache_key("atr", period=period)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        try:
+            result = talib.ATR(
                 self.data["high"].values,
                 self.data["low"].values,
                 self.data["close"].values,
                 timeperiod=period
-            ),
+            )
+        except Exception as exc:
+            self._log.error("ta-lib ATR calculation failed: %s", exc)
+            raise RuntimeError(f"ATR calculation failed: {exc}") from exc
+
+        series = pd.Series(
+            result,
             index=self.data.index,
             name=f"ATR{period}"
         )
+        self._cache[cache_key] = series
+        return series
 
     def keltner_channels(
         self,
         period: int = 20,
         atr_period: int = 10,
         atr_mult: float = 2.0
-    ) -> dict:
+    ) -> dict[str, pd.Series]:
         """
         Keltner Channels.
 
@@ -427,7 +513,7 @@ class IndicatorCalculator:
 
         Returns
         -------
-        dict
+        dict[str, pd.Series]
             Dictionary with keys: "upper", "middle", "lower".
         """
         if period <= 0 or atr_period <= 0:
@@ -455,8 +541,14 @@ class IndicatorCalculator:
         pd.Series
             OBV values.
         """
+        try:
+            result = talib.OBV(self.data["close"].values, self.data["volume"].values)
+        except Exception as exc:
+            self._log.error("ta-lib OBV calculation failed: %s", exc)
+            raise RuntimeError(f"OBV calculation failed: {exc}") from exc
+
         return pd.Series(
-            talib.OBV(self.data["close"].values, self.data["volume"].values),
+            result,
             index=self.data.index,
             name="OBV"
         )
@@ -478,8 +570,14 @@ class IndicatorCalculator:
         if period <= 0:
             raise ValueError("period must be positive")
 
+        try:
+            result = talib.SMA(self.data["volume"].values, timeperiod=period)
+        except Exception as exc:
+            self._log.error("ta-lib Volume SMA calculation failed: %s", exc)
+            raise RuntimeError(f"Volume SMA calculation failed: {exc}") from exc
+
         return pd.Series(
-            talib.SMA(self.data["volume"].values, timeperiod=period),
+            result,
             index=self.data.index,
             name=f"VolSMA{period}"
         )
@@ -501,15 +599,21 @@ class IndicatorCalculator:
         if period <= 0:
             raise ValueError("period must be positive")
 
+        try:
+            result = talib.ROC(self.data["volume"].values, timeperiod=period)
+        except Exception as exc:
+            self._log.error("ta-lib Volume ROC calculation failed: %s", exc)
+            raise RuntimeError(f"Volume ROC calculation failed: {exc}") from exc
+
         return pd.Series(
-            talib.ROC(self.data["volume"].values, timeperiod=period),
+            result,
             index=self.data.index,
             name=f"VolROC{period}"
         )
 
     # ── Combined Calculations ────────────────────────────────────────────────
 
-    def calculate_all(self, config: Optional[dict] = None) -> dict:
+    def calculate_all(self, config: Optional[dict] = None) -> dict[str, pd.Series | dict[str, pd.Series]]:
         """
         Calculate multiple indicators at once.
 
@@ -521,7 +625,7 @@ class IndicatorCalculator:
 
         Returns
         -------
-        dict
+        dict[str, pd.Series | dict[str, pd.Series]]
             Dictionary with all calculated indicators.
         """
         if config is None:
@@ -534,7 +638,7 @@ class IndicatorCalculator:
                 "atr": [14],
             }
 
-        results = {}
+        results: dict[str, pd.Series | dict[str, pd.Series]] = {}
 
         # SMAs
         if "sma" in config:
@@ -601,21 +705,21 @@ class IndicatorCalculator:
 
         return valid_values.iloc[-1]
 
-    def get_latest_values(self, indicators: dict) -> dict:
+    def get_latest_values(self, indicators: dict[str, pd.Series | dict[str, pd.Series]]) -> dict[str, float | dict[str, float | None]]:
         """
         Get latest values from multiple indicators.
 
         Parameters
         ----------
-        indicators : dict
+        indicators : dict[str, pd.Series | dict[str, pd.Series]]
             Dictionary of indicator series.
 
         Returns
         -------
-        dict
+        dict[str, float | dict[str, float | None]]
             Dictionary of latest values.
         """
-        latest = {}
+        latest: dict[str, float | dict[str, float | None]] = {}
 
         for key, value in indicators.items():
             if isinstance(value, dict):

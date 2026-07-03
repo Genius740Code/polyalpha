@@ -669,13 +669,13 @@ class SignalGenerator:
 
     # ── Composite Signals ───────────────────────────────────────────────────
 
-    def evaluate(self, rules: list[dict]) -> dict:
+    def evaluate(self, rules: list[dict[str, Any]]) -> dict[str, Any]:
         """
         Evaluate multiple signal rules.
 
         Parameters
         ----------
-        rules : list[dict]
+        rules : list[dict[str, Any]]
             List of rule dictionaries. Each rule has:
             - "condition": str or Callable
             - "params": dict (optional)
@@ -683,7 +683,7 @@ class SignalGenerator:
 
         Returns
         -------
-        dict
+        dict[str, Any]
             Dictionary with evaluation results.
 
         Example
@@ -695,7 +695,7 @@ class SignalGenerator:
         ... ]
         >>> result = signals.evaluate(rules)
         """
-        results = {
+        results: dict[str, Any] = {
             "signals": [],
             "result": True,
             "details": [],
@@ -753,16 +753,16 @@ class SignalGenerator:
 
     # ── Signal Summary ─────────────────────────────────────────────────────
 
-    def summary(self) -> dict:
+    def summary(self) -> dict[str, Any]:
         """
         Generate a summary of current signal states.
 
         Returns
         -------
-        dict
+        dict[str, Any]
             Dictionary with common signal states.
         """
-        summary = {
+        summary: dict[str, Any] = {
             "rsi": self.indicators.get_latest_value(self.indicators.rsi(14)),
             "rsi_status": self._get_rsi_status(),
             "price_vs_sma20": self.price_above_sma(20),
