@@ -53,6 +53,11 @@ from .core import (
     WS_PING_INTERVAL,
     WS_RETRY_DELAY,
     CLOB_WS,
+    DEFAULT_RATE_LIMIT_MAX_REQUESTS,
+    DEFAULT_RATE_LIMIT_PERIOD,
+    DEFAULT_PRICE_THRESHOLD,
+    PRICE_ROUNDING,
+    FALLBACK_PRICE,
     Market,
     StreamDisconnected,
 )
@@ -86,7 +91,7 @@ class Stream:
         market:      Market,
         retries:     int   = WS_MAX_RETRIES,
         retry_delay: float = WS_RETRY_DELAY,
-        price_threshold: float = 0.0001,
+        price_threshold: float = DEFAULT_PRICE_THRESHOLD,
     ):
         try:
             import websocket as _ws_module  # websocket-client
@@ -116,7 +121,10 @@ class Stream:
         self._last_emitted_down: float = self.down
 
         # Rate limiter for WebSocket message processing (prevent message floods)
-        self._message_rate_limiter = RateLimiter(max_requests=100, period_seconds=1.0)
+        self._message_rate_limiter = RateLimiter(
+            max_requests=DEFAULT_RATE_LIMIT_MAX_REQUESTS,
+            period_seconds=DEFAULT_RATE_LIMIT_PERIOD
+        )
 
         # Mid-price per token ID (populated from WS events)
         self._token_prices: dict[str, float] = {}
@@ -339,7 +347,7 @@ class Stream:
         try:
             b, a = float(bid), float(ask)
             if b > 0 and a > 0:
-                return round((b + a) / 2, 6)
+                return round((b + a) / 2, PRICE_ROUNDING)
         except (TypeError, ValueError):
             pass
         return None
@@ -404,7 +412,7 @@ class Stream:
         if up_id and down_id and up_id == down_id:
             if up_id in self._token_prices:
                 self.up   = self._token_prices[up_id]
-                self.down = round(1.0 - self.up, 6)
+                self.down = round(1.0 - self.up, PRICE_ROUNDING)
                 changed   = True
         else:
             if up_id and up_id in self._token_prices:

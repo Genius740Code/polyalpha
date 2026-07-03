@@ -7,7 +7,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import pytest
 from polyalpha.stream import Stream, EVENTS
-from polyalpha.core.constants import WS_MAX_RETRIES, WS_RETRY_DELAY
+from polyalpha.core.constants import (
+    WS_MAX_RETRIES,
+    WS_RETRY_DELAY,
+    DEFAULT_PRICE_THRESHOLD,
+)
 from polyalpha.core.market import Market
 
 
@@ -54,7 +58,7 @@ def test_stream_default_initialization():
     
     assert stream.retries == WS_MAX_RETRIES
     assert stream.retry_delay == WS_RETRY_DELAY
-    assert stream._price_threshold == 0.0001
+    assert stream._price_threshold == DEFAULT_PRICE_THRESHOLD
 
 
 def test_stream_rate_limiter_initialization():
@@ -67,21 +71,22 @@ def test_stream_rate_limiter_initialization():
 
 def test_stream_websocket_import_error():
     # Temporarily hide websocket-client
-    original_import = __builtins__.__import__
+    import builtins
+    original_import = builtins.__import__
     
     def mock_import(name, *args, **kwargs):
         if name == "websocket":
             raise ImportError("No module named 'websocket'")
         return original_import(name, *args, **kwargs)
     
-    __builtins__.__import__ = mock_import
+    builtins.__import__ = mock_import
     
     try:
         market = make_market()
         with pytest.raises(ImportError, match="websocket-client is required"):
             Stream(market)
     finally:
-        __builtins__.__import__ = original_import
+        builtins.__import__ = original_import
 
 
 # ── Stream event handler tests ─────────────────────────────────────────────────
@@ -139,42 +144,50 @@ def test_stream_handler_exception():
 # ── Stream price threshold tests ───────────────────────────────────────────────
 
 def test_stream_price_threshold():
-    market = make_market(prices=[0.50, 0.50])
+    market = make_market(prices=[0.50, 0.50], tokens=["tok_up", "tok_down"])
     stream = Stream(market, price_threshold=0.01)
-    
+
     events_called = []
-    
+
     @stream.on("price")
     def on_price(up, down):
         events_called.append((up, down))
-    
+
+    # Initialize last emitted prices
+    stream._last_emitted_up = 0.50
+    stream._last_emitted_down = 0.50
+
     # Small change below threshold - should not emit
-    stream.up = 0.505
-    stream.down = 0.495
+    stream._token_prices["tok_up"] = 0.505
+    stream._token_prices["tok_down"] = 0.495
     stream._publish_prices()
     assert len(events_called) == 0
-    
+
     # Large change above threshold - should emit
-    stream.up = 0.60
-    stream.down = 0.40
+    stream._token_prices["tok_up"] = 0.60
+    stream._token_prices["tok_down"] = 0.40
     stream._publish_prices()
     assert len(events_called) == 1
     assert events_called[0] == (0.60, 0.40)
 
 
 def test_stream_price_threshold_zero():
-    market = make_market(prices=[0.50, 0.50])
+    market = make_market(prices=[0.50, 0.50], tokens=["tok_up", "tok_down"])
     stream = Stream(market, price_threshold=0.0)
-    
+
     events_called = []
-    
+
     @stream.on("price")
     def on_price(up, down):
         events_called.append((up, down))
-    
+
+    # Initialize last emitted prices
+    stream._last_emitted_up = 0.50
+    stream._last_emitted_down = 0.50
+
     # Any change should emit with zero threshold
-    stream.up = 0.5001
-    stream.down = 0.4999
+    stream._token_prices["tok_up"] = 0.5001
+    stream._token_prices["tok_down"] = 0.4999
     stream._publish_prices()
     assert len(events_called) == 1
 
@@ -209,7 +222,7 @@ def test_stream_degenerate_token_case():
 
 
 def test_stream_empty_market_tokens():
-    market = make_market(tokens=[])
+    market = make_market(tokens=[], prices=[0.0, 0.0])
     stream = Stream(market)
     
     # Should not crash with empty tokens
@@ -231,13 +244,15 @@ def test_stream_dispatch_price_change():
     def on_price(up, down):
         events_called.append(("price", up, down))
     
-    # Simulate price_change event
+    # Simulate price_change event (correct structure)
     msg = {
         "event_type": "price_change",
-        "data": {
-            "token_id": "tok_up",
-            "price": 0.60
-        }
+        "price_changes": [
+            {
+                "asset_id": "tok_up",
+                "price": 0.60
+            }
+        ]
     }
     
     stream._dispatch(msg)
@@ -258,14 +273,12 @@ def test_stream_dispatch_book_update():
     def on_book(book):
         events_called.append(("book", book))
     
-    # Simulate book update
+    # Simulate book update (correct structure)
     msg = {
         "event_type": "best_bid_ask",
-        "data": {
-            "token_id": "tok_up",
-            "best_bid": 0.58,
-            "best_ask": 0.62
-        }
+        "asset_id": "tok_up",
+        "best_bid": 0.58,
+        "best_ask": 0.62
     }
     
     stream._dispatch(msg)
@@ -284,13 +297,11 @@ def test_stream_dispatch_trade():
     def on_trade(trade):
         events_called.append(("trade", trade))
     
-    # Simulate trade event
+    # Simulate trade event (correct structure)
     msg = {
         "event_type": "last_trade_price",
-        "data": {
-            "token_id": "tok_up",
-            "price": 0.61
-        }
+        "asset_id": "tok_up",
+        "price": 0.61
     }
     
     stream._dispatch(msg)

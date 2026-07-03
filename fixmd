@@ -1,8 +1,0 @@
-Missing type hints in critical areas
-Blocking rate limiter
-
-Magic numbers throughout codebase
-Inconsistent error handling for ta-lib
-Inefficient indicator calculations
-No HTTP connection pooling
-Missing version compatibility info

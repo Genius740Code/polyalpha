@@ -71,6 +71,19 @@ class Client:
         self._timeout = timeout
         self._retries = retries
 
+    def close(self) -> None:
+        """Clean up resources (HTTP connections, etc.)."""
+        self.markets.close()
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - ensures resources are cleaned up."""
+        self.close()
+        return False
+
     def stream(self, market: Market, retries: int | None = None) -> Stream:
         """
         Create a real-time WebSocket price stream for *market*.

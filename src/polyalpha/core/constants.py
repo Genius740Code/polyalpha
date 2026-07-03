@@ -54,3 +54,54 @@ RESOLUTION_CHECK_INTERVAL = 0.5  # Seconds between resolution checks
 def build_slug(asset: str, timeframe: str, window_end_ts: int) -> str:
     """Return the deterministic Gamma event slug for an asset/timeframe window."""
     return f"{asset.lower()}-updown-{timeframe}-{window_end_ts}"
+
+# ── Rate Limiting ───────────────────────────────────────────────────────────────
+
+DEFAULT_RATE_LIMIT_MAX_REQUESTS = 100  # Default max requests per period for rate limiter
+DEFAULT_RATE_LIMIT_PERIOD = 1.0  # Default period in seconds for rate limiter
+
+# ── HTTP Configuration ───────────────────────────────────────────────────────────
+
+HTTP_MAX_KEEPALIVE_CONNECTIONS = 20  # Max keepalive connections for HTTP pool
+HTTP_MAX_CONNECTIONS = 100  # Max total connections for HTTP pool
+HTTP_KEEPALIVE_EXPIRY = 30.0  # Keepalive expiry in seconds
+HTTP_RETRY_DELAY_MULTIPLIER = 1.0  # Multiplier for exponential backoff
+
+# ── Market Discovery ───────────────────────────────────────────────────────────
+
+MARKET_CANDIDATE_COUNT = 3  # Number of candidate windows to probe
+
+# ── Price Thresholds ────────────────────────────────────────────────────────────
+
+DEFAULT_PRICE_THRESHOLD = 0.0001  # Minimum price change to emit event
+FALLBACK_PRICE = 0.5  # Fallback price when market price is unavailable
+
+# ── Fee Configuration ───────────────────────────────────────────────────────────
+
+FEE_RATE_SPORTS = 0.03  # Fee rate for sports markets
+FEE_RATE_CRYPTO = 0.02  # Fee rate for crypto/finance/politics/tech markets
+FEE_RATE_ECONOMICS = 0.015  # Fee rate for economics/culture/weather/other markets
+MAKER_REBATE_PCT = 0.75  # Maker rebate percentage (25% discount)
+MINIMUM_FEE = 0.0001  # Minimum fee amount in USDC
+
+# ── Display ───────────────────────────────────────────────────────────────────
+
+SUMMARY_DIV_WIDTH = 64  # Width of divider in summary output
+
+# ── Validation ─────────────────────────────────────────────────────────────────
+
+MAX_QUERY_LENGTH = 200  # Maximum query length for search
+MAX_SEARCH_LIMIT = 100  # Maximum limit for search results
+MIN_SEARCH_LIMIT = 1  # Minimum limit for search results
+DEFAULT_SEARCH_LIMIT = 10  # Default limit for search results
+
+# ── Precision ─────────────────────────────────────────────────────────────────
+
+PRICE_ROUNDING = 6  # Decimal places for price rounding
+FEE_ROUNDING = 6  # Decimal places for fee rounding
+POLYMARKET_FEE_ROUNDING = 4  # Decimal places for Polymarket fee rounding
+SHARE_ROUNDING = 6  # Decimal places for share rounding
+DISPLAY_ROUNDING_SHARES = 4  # Decimal places for displaying shares
+DISPLAY_ROUNDING_PRICES = 4  # Decimal places for displaying prices
+DISPLAY_ROUNDING_PNL = 4  # Decimal places for displaying P&L
+DISPLAY_ROUNDING_PNL_PCT = 2  # Decimal places for displaying P&L percentage

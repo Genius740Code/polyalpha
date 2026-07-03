@@ -11,6 +11,7 @@ the next two so we always catch a market even if the clock is mid-window.
 
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import logging
 import time
@@ -23,6 +24,19 @@ from .core import (
     ASSETS,
     GAMMA_API,
     TIMEFRAME_SECONDS,
+    HTTP_MAX_CONNECTIONS,
+    HTTP_MAX_KEEPALIVE_CONNECTIONS,
+    HTTP_KEEPALIVE_EXPIRY,
+    HTTP_RETRY_DELAY_MULTIPLIER,
+    MARKET_CANDIDATE_COUNT,
+    DEFAULT_RATE_LIMIT_MAX_REQUESTS,
+    DEFAULT_RATE_LIMIT_PERIOD,
+    MAX_QUERY_LENGTH,
+    MAX_SEARCH_LIMIT,
+    MIN_SEARCH_LIMIT,
+    DEFAULT_SEARCH_LIMIT,
+    PRICE_ROUNDING,
+    FALLBACK_PRICE,
     Market,
     MarketClosed,
     MarketNotFound,
@@ -52,7 +66,7 @@ def _current_window_end(timeframe: str) -> int:
     return window_start + interval
 
 
-def _candidate_ends(timeframe: str, count: int = 3) -> list[int]:
+def _candidate_ends(timeframe: str, count: int = MARKET_CANDIDATE_COUNT) -> list[int]:
     """Return [current, next, next+1] window-end timestamps to probe."""
     interval = TIMEFRAME_SECONDS[timeframe]
     current  = _current_window_end(timeframe)
@@ -98,6 +112,27 @@ class RateLimiter:
             else:
                 self.tokens -= 1
 
+    async def acquire_async(self) -> None:
+        """Async version - wait until a token is available."""
+        with self._lock:
+            now = time.time()
+            elapsed = now - self.last_update
+            
+            # Refill tokens based on elapsed time
+            self.tokens = min(
+                self.max_requests,
+                self.tokens + elapsed * (self.max_requests / self.period)
+            )
+            self.last_update = now
+            
+            if self.tokens < 1:
+                # Wait until we have a token
+                wait_time = (1 - self.tokens) * (self.period / self.max_requests)
+                await asyncio.sleep(wait_time)
+                self.tokens = 0
+            else:
+                self.tokens -= 1
+
 
 # ── MarketClient ───────────────────────────────────────────────────────────────
 
@@ -124,6 +159,18 @@ class MarketClient:
         self._timeout = timeout
         self._retries = retries
         self._rate_limiter = RateLimiter(rate_limit) if rate_limit else None
+        
+        # Configure HTTP client with connection pooling
+        limits = httpx.Limits(
+            max_keepalive_connections=HTTP_MAX_KEEPALIVE_CONNECTIONS,
+            max_connections=HTTP_MAX_CONNECTIONS,
+            keepalive_expiry=HTTP_KEEPALIVE_EXPIRY,
+        )
+        self._client = httpx.Client(
+            timeout=timeout,
+            limits=limits,
+            http2=True,
+        )
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -184,7 +231,7 @@ class MarketClient:
         """
         return self._fetch_by_slug(slug)
 
-    def search(self, query: str, limit: int = 10) -> list[Market]:
+    def search(self, query: str, limit: int = DEFAULT_SEARCH_LIMIT) -> list[Market]:
         """
         Search open markets by keyword.
 
@@ -199,14 +246,14 @@ class MarketClient:
         query = query.strip()
         if len(query) == 0:
             raise ValueError("Query cannot be empty")
-        if len(query) > 200:
-            raise ValueError("Query too long (max 200 characters)")
+        if len(query) > MAX_QUERY_LENGTH:
+            raise ValueError(f"Query too long (max {MAX_QUERY_LENGTH} characters)")
         
         # Sanitize limit
         if not isinstance(limit, int):
             raise ValueError(f"Limit must be an integer, got {type(limit).__name__}")
-        if limit <= 0 or limit > 100:
-            raise ValueError("Limit must be between 1 and 100")
+        if limit < MIN_SEARCH_LIMIT or limit > MAX_SEARCH_LIMIT:
+            raise ValueError(f"Limit must be between {MIN_SEARCH_LIMIT} and {MAX_SEARCH_LIMIT}")
         
         data = self._get("/markets", params={
             "search": query,
@@ -306,8 +353,8 @@ class MarketClient:
             bid = m.get("bestBid")
             ask = m.get("bestAsk")
             if bid and ask:
-                return round((float(bid) + float(ask)) / 2, 6)
-            return 0.5
+                return round((float(bid) + float(ask)) / 2, PRICE_ROUNDING)
+            return FALLBACK_PRICE
 
         active = event.get("active", False) or any(
             sub.get("active", False) for sub in markets
@@ -380,7 +427,7 @@ class MarketClient:
                 if self._rate_limiter:
                     self._rate_limiter.acquire()
 
-                response = httpx.get(url, params=params, timeout=self._timeout)
+                response = self._client.get(url, params=params)
                 response.raise_for_status()
                 return response.json()
 
@@ -398,6 +445,20 @@ class MarketClient:
                 last_exc = exc
 
             if attempt < self._retries:
-                time.sleep(1.0 * attempt)
+                time.sleep(HTTP_RETRY_DELAY_MULTIPLIER * attempt)
 
         raise last_exc  # type: ignore[misc]
+
+    def close(self) -> None:
+        """Close the HTTP client and release resources."""
+        if hasattr(self, '_client'):
+            self._client.close()
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - ensures client is closed."""
+        self.close()
+        return False

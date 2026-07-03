@@ -36,7 +36,26 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-from ..core import InsufficientBalance, OrderNotFound, TAKER_FEE_RATE
+from ..core import (
+    InsufficientBalance,
+    OrderNotFound,
+    TAKER_FEE_RATE,
+    FEE_RATE_SPORTS,
+    FEE_RATE_CRYPTO,
+    FEE_RATE_ECONOMICS,
+    MAKER_REBATE_PCT,
+    MINIMUM_FEE,
+    SUMMARY_DIV_WIDTH,
+    FALLBACK_PRICE,
+    PRICE_ROUNDING,
+    FEE_ROUNDING,
+    POLYMARKET_FEE_ROUNDING,
+    SHARE_ROUNDING,
+    DISPLAY_ROUNDING_SHARES,
+    DISPLAY_ROUNDING_PRICES,
+    DISPLAY_ROUNDING_PNL,
+    DISPLAY_ROUNDING_PNL_PCT,
+)
 
 log = logging.getLogger(__name__)
 
@@ -143,37 +162,37 @@ class PaperPosition:
 
     @property
     def cost_basis(self) -> float:
-        return round(self.shares * self.avg_price, 6)
+        return round(self.shares * self.avg_price, PRICE_ROUNDING)
 
     @property
     def current_value(self) -> float:
         """Shares × 1.0 if won, 0.0 if lost, else shares × live price."""
         if self.resolved:
-            return round(self.shares, 6) if self.outcome == "WON" else 0.0
-        return round(self.shares * self.current_price, 6)
+            return round(self.shares, PRICE_ROUNDING) if self.outcome == "WON" else 0.0
+        return round(self.shares * self.current_price, PRICE_ROUNDING)
 
     @property
     def pnl(self) -> float:
-        return round(self.current_value - self.cost_basis, 6)
+        return round(self.current_value - self.cost_basis, PRICE_ROUNDING)
 
     @property
     def pnl_pct(self) -> float:
         if self.cost_basis == 0:
             return 0.0
-        return round((self.pnl / self.cost_basis) * 100, 2)
+        return round((self.pnl / self.cost_basis) * 100, DISPLAY_ROUNDING_PNL_PCT)
 
     def dump(self) -> dict:
         return {
             "market":        self.slug,
             "question":      self.question,
             "side":          self.side,
-            "shares":        round(self.shares,        4),
-            "avg_price":     round(self.avg_price,     4),
-            "current_price": round(self.current_price, 4),
-            "cost_basis":    round(self.cost_basis,    4),
-            "current_value": round(self.current_value, 4),
-            "pnl":           round(self.pnl,           4),
-            "pnl_pct":       round(self.pnl_pct,       2),
+            "shares":        round(self.shares,        DISPLAY_ROUNDING_SHARES),
+            "avg_price":     round(self.avg_price,     DISPLAY_ROUNDING_PRICES),
+            "current_price": round(self.current_price, DISPLAY_ROUNDING_PRICES),
+            "cost_basis":    round(self.cost_basis,    DISPLAY_ROUNDING_PRICES),
+            "current_value": round(self.current_value, DISPLAY_ROUNDING_PRICES),
+            "pnl":           round(self.pnl,           DISPLAY_ROUNDING_PNL),
+            "pnl_pct":       round(self.pnl_pct,       DISPLAY_ROUNDING_PNL_PCT),
             "resolved":      self.resolved,
             "outcome":       self.outcome,
         }
@@ -251,12 +270,12 @@ class PaperEngine:
             return 0.0
         elif self._config.fee_mode == "custom":
             fee_rate = self._config.maker_fee_rate if is_maker else self._config.custom_fee_rate
-            return round(amount * fee_rate, 6)
+            return round(amount * fee_rate, FEE_ROUNDING)
         elif self._config.fee_mode == "polymarket":
             return self._polymarket_fee(amount, price, shares, is_maker)
         else:
             # Fallback to default taker fee
-            return round(amount * TAKER_FEE_RATE, 6)
+            return round(amount * TAKER_FEE_RATE, FEE_ROUNDING)
 
     def _polymarket_fee(self, amount: float, price: float, shares: float, is_maker: bool = False) -> float:
         """
@@ -279,28 +298,28 @@ class PaperEngine:
         # Determine fee rate based on market category
         category = self._config.market_category.lower()
         if category == "sports":
-            fee_rate = 0.03
+            fee_rate = FEE_RATE_SPORTS
         elif category in ("crypto", "finance", "politics", "tech"):
-            fee_rate = 0.02
+            fee_rate = FEE_RATE_CRYPTO
         elif category in ("economics", "culture", "weather", "other"):
-            fee_rate = 0.015
+            fee_rate = FEE_RATE_ECONOMICS
         else:
-            fee_rate = 0.02  # Default to crypto rate
+            fee_rate = FEE_RATE_CRYPTO  # Default to crypto rate
         
         # Apply Polymarket formula
         exponent = 1
         fee = shares * price * fee_rate * (price * (1 - price)) ** exponent
         
         # Round to 4 decimal places (Polymarket precision)
-        fee = round(fee, 4)
+        fee = round(fee, POLYMARKET_FEE_ROUNDING)
         
         # Minimum fee is 0.0001, anything smaller rounds to zero
-        if fee < 0.0001:
+        if fee < MINIMUM_FEE:
             fee = 0.0
         
         # For maker orders, apply maker fee rate (typically lower)
         if is_maker:
-            fee = fee * 0.75  # 25% maker rebate
+            fee = fee * MAKER_REBATE_PCT  # 25% maker rebate
         
         return fee
 
@@ -418,7 +437,7 @@ class PaperEngine:
 
         price = market.up_price if side == "UP" else market.down_price
         if price <= 0:
-            price = 0.5  # safe fallback before first WS price arrives
+            price = FALLBACK_PRICE  # safe fallback before first WS price arrives
 
         # Apply execution delay if configured
         self._apply_execution_delay()
@@ -639,8 +658,7 @@ class PaperEngine:
         realised_pnl   = sum(p.pnl for p in resolved)
         unrealised_pnl = sum(p.pnl for p in open_pos)
 
-        W = 64
-        div = "─" * W
+        div = "─" * SUMMARY_DIV_WIDTH
         print(div)
         print("  POLYALPHA — PAPER TRADING SUMMARY")
         print(div)
@@ -699,12 +717,12 @@ class PaperEngine:
 
         # Calculate shares first (needed for fee calculation)
         net = amount  # Will subtract fee after calculation
-        shares = round(net / price, 6) if price > 0 else 0.0
+        shares = round(net / price, SHARE_ROUNDING) if price > 0 else 0.0
 
         # Calculate fee using new method
         fee = self._calculate_fee(amount, price, shares, is_maker=is_limit)
         net = amount - fee
-        shares = round(net / price, 6) if price > 0 else 0.0
+        shares = round(net / price, SHARE_ROUNDING) if price > 0 else 0.0
 
         self._balance -= amount
 
@@ -754,10 +772,10 @@ class PaperEngine:
             return
 
         # Calculate fee using new method
-        shares = round(order.amount / actual_price, 6) if actual_price > 0 else 0.0
+        shares = round(order.amount / actual_price, SHARE_ROUNDING) if actual_price > 0 else 0.0
         fee = self._calculate_fee(order.amount, actual_price, shares, is_maker=True)
         net = order.amount - fee
-        shares = round(net / actual_price, 6) if actual_price > 0 else 0.0
+        shares = round(net / actual_price, SHARE_ROUNDING) if actual_price > 0 else 0.0
 
         order.price     = actual_price
         order.shares    = shares
@@ -794,7 +812,7 @@ class PaperEngine:
             pos         = self._positions[key]
             total       = pos.shares + shares
             pos.avg_price = round(
-                (pos.shares * pos.avg_price + shares * price) / total, 6
+                (pos.shares * pos.avg_price + shares * price) / total, PRICE_ROUNDING
             )
             pos.shares  = total
             pos.order_ids.append(order_id)
