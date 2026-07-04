@@ -122,6 +122,16 @@ class PaperOrder:
     status:    str           # "open" | "filled" | "cancelled"
     is_limit:  bool
     filled_at: Optional[datetime] = None
+    
+    # Advanced order management
+    stop_loss: Optional[float] = None           # SL price trigger
+    take_profit: Optional[float] = None         # TP price trigger
+    trail_sl: Optional[float] = None            # Trailing SL distance
+    trail_tp: Optional[float] = None            # Trailing TP distance
+    trail_sl_price: Optional[float] = None       # Current trailing SL price
+    trail_tp_price: Optional[float] = None       # Current trailing TP price
+    oco_order_id: Optional[str] = None           # OCO linked order ID
+    tp_sl_triggered_by: Optional[str] = None     # Which order triggered this: "tp" | "sl" | None
 
     def dump(self) -> dict:
         return {
@@ -135,6 +145,14 @@ class PaperOrder:
             "status":    self.status,
             "is_limit":  self.is_limit,
             "filled_at": self.filled_at.isoformat() if self.filled_at else None,
+            "stop_loss": self.stop_loss,
+            "take_profit": self.take_profit,
+            "trail_sl": self.trail_sl,
+            "trail_tp": self.trail_tp,
+            "trail_sl_price": self.trail_sl_price,
+            "trail_tp_price": self.trail_tp_price,
+            "oco_order_id": self.oco_order_id,
+            "tp_sl_triggered_by": self.tp_sl_triggered_by,
         }
 
 
@@ -547,6 +565,328 @@ class PaperEngine:
         )
         return order
 
+    def buy_with_tp_sl(
+        self,
+        market,
+        side: str,
+        amount: float,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        trail_sl: float | None = None,
+        trail_tp: float | None = None,
+    ) -> PaperOrder:
+        """
+        Market buy with optional stop-loss and take-profit.
+
+        Parameters
+        ----------
+        market : Market object
+        side   : "UP" or "DOWN"
+        amount : USDC to spend
+        stop_loss : SL price trigger (optional)
+        take_profit : TP price trigger (optional)
+        trail_sl : Trailing SL distance as percentage (e.g., 0.05 for 5%)
+        trail_tp : Trailing TP distance as percentage (e.g., 0.10 for 10%)
+
+        Returns
+        -------
+        PaperOrder with TP/SL set
+
+        Example
+        -------
+        >>> order = client.paper.buy_with_tp_sl(
+        ...     market, side="UP", amount=10.0,
+        ...     stop_loss=0.45, take_profit=0.55
+        ... )
+        """
+        side = _validate_side(side)
+        amount = _validate_positive(float(amount), "amount")
+
+        price = market.up_price if side == "UP" else market.down_price
+        if price <= 0:
+            price = FALLBACK_PRICE
+
+        # Validate TP/SL prices
+        if stop_loss is not None:
+            stop_loss = _validate_positive(float(stop_loss), "stop_loss")
+        if take_profit is not None:
+            take_profit = _validate_positive(float(take_profit), "take_profit")
+        if trail_sl is not None:
+            trail_sl = _validate_positive(float(trail_sl), "trail_sl")
+        if trail_tp is not None:
+            trail_tp = _validate_positive(float(trail_tp), "trail_tp")
+
+        # Apply execution delay and slippage
+        self._apply_execution_delay()
+        actual_price, filled = self._apply_slippage(price, side)
+        if not filled:
+            log.info("Paper: market order not filled due to slippage threshold")
+            order_id = _new_id()
+            order = PaperOrder(
+                id=order_id,
+                market_id=market.id,
+                slug=market.slug,
+                side=side,
+                price=price,
+                amount=0.0,
+                shares=0.0,
+                fee=0.0,
+                status="cancelled",
+                is_limit=False,
+                filled_at=_now(),
+            )
+            self._orders[order_id] = order
+            return order
+
+        # Execute the fill
+        order = self._fill(market, side, actual_price, amount, is_limit=False)
+
+        # Set TP/SL on the order
+        order.stop_loss = stop_loss
+        order.take_profit = take_profit
+        order.trail_sl = trail_sl
+        order.trail_tp = trail_tp
+
+        # Initialize trailing prices
+        if trail_sl is not None:
+            order.trail_sl_price = actual_price * (1 - trail_sl) if side == "UP" else actual_price * (1 + trail_sl)
+        if trail_tp is not None:
+            order.trail_tp_price = actual_price * (1 + trail_tp) if side == "UP" else actual_price * (1 - trail_tp)
+
+        log.info(
+            "Paper: buy_with_tp_sl %s @ %.3f SL=%.3f TP=%.3f trail_SL=%.3f trail_TP=%.3f",
+            side, actual_price, stop_loss or 0, take_profit or 0, trail_sl or 0, trail_tp or 0,
+        )
+        return order
+
+    def sell_position(self, market, side: str, amount: float | None = None) -> PaperOrder:
+        """
+        Sell/close a position (simulated sell for prediction markets).
+
+        Parameters
+        ----------
+        market : Market object
+        side   : "UP" or "DOWN" - which position to close
+        amount : USDC to sell (optional, defaults to full position)
+
+        Returns
+        -------
+        PaperOrder representing the sell
+
+        Example
+        -------
+        >>> order = client.paper.sell_position(market, side="UP")
+        """
+        side = _validate_side(side)
+        key = f"{market.id}:{side}"
+
+        if key not in self._positions:
+            raise ValueError(f"No position found for {market.slug} {side}")
+
+        position = self._positions[key]
+        current_price = position.current_price
+
+        if current_price <= 0:
+            current_price = FALLBACK_PRICE
+
+        # Determine amount to sell
+        if amount is None:
+            # Sell full position
+            sell_shares = position.shares
+            sell_amount = sell_shares * current_price
+        else:
+            amount = _validate_positive(float(amount), "amount")
+            sell_shares = amount / current_price
+            sell_amount = amount
+
+        # Apply execution delay and slippage
+        self._apply_execution_delay()
+        actual_price, filled = self._apply_slippage(current_price, side)
+        if not filled:
+            log.info("Paper: sell order not filled due to slippage threshold")
+            order_id = _new_id()
+            order = PaperOrder(
+                id=order_id,
+                market_id=market.id,
+                slug=market.slug,
+                side=side,
+                price=current_price,
+                amount=0.0,
+                shares=0.0,
+                fee=0.0,
+                status="cancelled",
+                is_limit=False,
+                filled_at=_now(),
+            )
+            self._orders[order_id] = order
+            return order
+
+        # Calculate fee (selling also has fee)
+        fee = self._calculate_fee(sell_amount, actual_price, sell_shares, is_maker=False)
+        net_amount = sell_amount - fee
+
+        # Update balance (add proceeds)
+        self._balance += net_amount
+
+        # Create sell order
+        order_id = _new_id()
+        order = PaperOrder(
+            id=order_id,
+            market_id=market.id,
+            slug=market.slug,
+            side=side,
+            price=actual_price,
+            amount=sell_amount,
+            shares=sell_shares,
+            fee=fee,
+            status="filled",
+            is_limit=False,
+            filled_at=_now(),
+        )
+        self._orders[order_id] = order
+
+        # Reduce or close position
+        position.shares -= sell_shares
+        if position.shares <= 0.001:  # Close if negligible
+            position.shares = 0
+            position.resolved = True
+            position.outcome = "CLOSED"
+            log.info(
+                "Paper: closed position %s %s — proceeds $%.2f, balance $%.2f",
+                market.slug, side, net_amount, self._balance,
+            )
+        else:
+            log.info(
+                "Paper: reduced position %s %s by %.2f shares — proceeds $%.2f",
+                market.slug, side, sell_shares, net_amount,
+            )
+
+        return order
+
+    def set_trailing_sl(self, order_id: str, trail_distance: float) -> PaperOrder:
+        """
+        Set or update trailing stop-loss on an existing order.
+
+        Parameters
+        ----------
+        order_id : Order ID to modify
+        trail_distance : Trailing distance as percentage (e.g., 0.05 for 5%)
+
+        Returns
+        -------
+        Updated PaperOrder
+
+        Example
+        -------
+        >>> order = client.paper.set_trailing_sl(order.id, 0.05)
+        """
+        trail_distance = _validate_positive(float(trail_distance), "trail_distance")
+
+        order = self._orders.get(order_id)
+        if order is None:
+            raise OrderNotFound(f"No order found: {order_id}")
+        if order.status != "filled":
+            raise ValueError(f"Can only set trailing SL on filled orders, got status='{order.status}'")
+
+        order.trail_sl = trail_distance
+        # Initialize trailing SL price
+        order.trail_sl_price = order.price * (1 - trail_distance) if order.side == "UP" else order.price * (1 + trail_distance)
+
+        log.info(
+            "Paper: set trailing SL %.2f%% on order %s @ %.3f",
+            trail_distance * 100, order_id[:8], order.trail_sl_price,
+        )
+        return order
+
+    def set_trailing_tp(self, order_id: str, trail_distance: float) -> PaperOrder:
+        """
+        Set or update trailing take-profit on an existing order.
+
+        Parameters
+        ----------
+        order_id : Order ID to modify
+        trail_distance : Trailing distance as percentage (e.g., 0.10 for 10%)
+
+        Returns
+        -------
+        Updated PaperOrder
+
+        Example
+        -------
+        >>> order = client.paper.set_trailing_tp(order.id, 0.10)
+        """
+        trail_distance = _validate_positive(float(trail_distance), "trail_distance")
+
+        order = self._orders.get(order_id)
+        if order is None:
+            raise OrderNotFound(f"No order found: {order_id}")
+        if order.status != "filled":
+            raise ValueError(f"Can only set trailing TP on filled orders, got status='{order.status}'")
+
+        order.trail_tp = trail_distance
+        # Initialize trailing TP price
+        order.trail_tp_price = order.price * (1 + trail_distance) if order.side == "UP" else order.price * (1 - trail_distance)
+
+        log.info(
+            "Paper: set trailing TP %.2f%% on order %s @ %.3f",
+            trail_distance * 100, order_id[:8], order.trail_tp_price,
+        )
+        return order
+
+    def oco_order(
+       self,
+        market,
+        side: str,
+        amount: float,
+        stop_loss: float,
+        take_profit: float,
+    ) -> tuple[PaperOrder, PaperOrder]:
+        """
+        One-Cancels-Other (OCO) order - place SL and TP where one cancels the other.
+
+        Creates a main order and automatically sets up SL and TP as OCO-linked.
+        When either SL or TP is triggered, the other is automatically cancelled.
+
+        Parameters
+        ----------
+        market : Market object
+        side   : "UP" or "DOWN"
+        amount : USDC to spend
+        stop_loss : SL price trigger
+        take_profit : TP price trigger
+
+        Returns
+        -------
+        tuple of (main_order, oco_order) - main order and the OCO-linked SL/TP order
+
+        Example
+        -------
+        >>> main_order, oco_order = client.paper.oco_order(
+        ...     market, side="UP", amount=10.0,
+        ...     stop_loss=0.45, take_profit=0.55
+        ... )
+        """
+        side = _validate_side(side)
+        amount = _validate_positive(float(amount), "amount")
+        stop_loss = _validate_positive(float(stop_loss), "stop_loss")
+        take_profit = _validate_positive(float(take_profit), "take_profit")
+
+        # Create main order with TP/SL
+        main_order = self.buy_with_tp_sl(
+            market, side=side, amount=amount,
+            stop_loss=stop_loss, take_profit=take_profit,
+        )
+
+        # Link them as OCO
+        main_order.oco_order_id = main_order.id  # Self-linked for tracking
+
+        log.info(
+            "Paper: OCO order created %s SL=%.3f TP=%.3f",
+            main_order.id[:8], stop_loss, take_profit,
+        )
+
+        return main_order, main_order
+
     # ── Queries ────────────────────────────────────────────────────────────────
 
     def open(self) -> list[PaperOrder]:
@@ -600,6 +940,7 @@ class PaperEngine:
     def check_limits(self, market_id: str, up_price: float, down_price: float) -> None:
         """
         Update live position prices and fill any triggered limit orders.
+        Also checks and triggers TP/SL orders and updates trailing stops.
 
         Called automatically when a stream is attached via ``attach_stream()``.
         Can also be called manually when running without a stream.
@@ -616,6 +957,103 @@ class PaperEngine:
             current = up_price if order.side == "UP" else down_price
             if current >= order.price:
                 self._fill_limit(order, current)
+
+        # Check TP/SL on filled orders
+        self._check_tp_sl(market_id, up_price, down_price)
+
+    def _check_tp_sl(self, market_id: str, up_price: float, down_price: float) -> None:
+        """
+        Check and trigger TP/SL orders, update trailing stops.
+        
+        This method is called by check_limits on every price update.
+        """
+        for order in list(self._orders.values()):
+            # Only check filled orders with TP/SL set
+            if order.status != "filled" or order.market_id != market_id:
+                continue
+            
+            if order.stop_loss is None and order.take_profit is None and order.trail_sl is None and order.trail_tp is None:
+                continue
+            
+            # Skip if already triggered
+            if order.tp_sl_triggered_by is not None:
+                continue
+            
+            current_price = up_price if order.side == "UP" else down_price
+            triggered = None
+            
+            # Update trailing stop-loss
+            if order.trail_sl is not None:
+                new_trail_sl = current_price * (1 - order.trail_sl) if order.side == "UP" else current_price * (1 + order.trail_sl)
+                # Only move SL up (for UP) or down (for DOWN) - never against the trader
+                if order.side == "UP":
+                    if new_trail_sl > (order.trail_sl_price or 0):
+                        order.trail_sl_price = new_trail_sl
+                        log.debug("Paper: trailing SL moved up to %.3f for order %s", new_trail_sl, order.id[:8])
+                else:  # DOWN
+                    if new_trail_sl < (order.trail_sl_price or float('inf')):
+                        order.trail_sl_price = new_trail_sl
+                        log.debug("Paper: trailing SL moved down to %.3f for order %s", new_trail_sl, order.id[:8])
+            
+            # Update trailing take-profit
+            if order.trail_tp is not None:
+                new_trail_tp = current_price * (1 + order.trail_tp) if order.side == "UP" else current_price * (1 - order.trail_tp)
+                # Move TP in direction of trade to allow more profit potential
+                if order.side == "UP":
+                    if new_trail_tp > (order.trail_tp_price or 0):
+                        order.trail_tp_price = new_trail_tp
+                        log.debug("Paper: trailing TP moved up to %.3f for order %s", new_trail_tp, order.id[:8])
+                else:  # DOWN
+                    if new_trail_tp < (order.trail_tp_price or float('inf')):
+                        order.trail_tp_price = new_trail_tp
+                        log.debug("Paper: trailing TP moved down to %.3f for order %s", new_trail_tp, order.id[:8])
+            
+            # Check stop-loss trigger
+            sl_trigger = order.stop_loss if order.stop_loss is not None else order.trail_sl_price
+            if sl_trigger is not None:
+                if order.side == "UP" and current_price <= sl_trigger:
+                    triggered = "sl"
+                elif order.side == "DOWN" and current_price >= sl_trigger:
+                    triggered = "sl"
+            
+            # Check take-profit trigger
+            tp_trigger = order.take_profit if order.take_profit is not None else order.trail_tp_price
+            if tp_trigger is not None and triggered is None:
+                if order.side == "UP" and current_price >= tp_trigger:
+                    triggered = "tp"
+                elif order.side == "DOWN" and current_price <= tp_trigger:
+                    triggered = "tp"
+            
+            # Execute triggered order
+            if triggered:
+                order.tp_sl_triggered_by = triggered
+                log.info(
+                    "Paper: %s triggered for order %s @ %.3f (trigger: %.3f)",
+                    "STOP-LOSS" if triggered == "sl" else "TAKE-PROFIT",
+                    order.id[:8], current_price, sl_trigger if triggered == "sl" else tp_trigger,
+                )
+                
+                # Cancel OCO linked order if exists
+                if order.oco_order_id and order.oco_order_id != order.id:
+                    oco_order = self._orders.get(order.oco_order_id)
+                    if oco_order and oco_order.status == "filled":
+                        oco_order.stop_loss = None
+                        oco_order.take_profit = None
+                        oco_order.trail_sl = None
+                        oco_order.trail_tp = None
+                        log.info("Paper: cancelled OCO linked order %s", order.oco_order_id[:8])
+                
+                # Execute sell to close position
+                try:
+                    self.sell_position(
+                        type('obj', (object,), {
+                            'id': order.market_id,
+                            'slug': order.slug,
+                        })(),
+                        side=order.side,
+                    )
+                except ValueError as e:
+                    log.warning("Paper: failed to sell position on %s trigger: %s", triggered, e)
 
     def attach_stream(self, stream, market) -> None:
         """

@@ -147,6 +147,79 @@ client.paper.resolve(market, outcome="UP")
 client.paper.summary()
 ```
 
+### Advanced order management
+
+The paper trading engine supports advanced order types for professional risk management:
+
+**Stop-loss & Take-profit:**
+
+```python
+# Buy with stop-loss and/or take-profit
+order = client.paper.buy_with_tp_sl(
+    market, 
+    side="UP", 
+    amount=100.0,
+    stop_loss=0.45,      # Auto-sell if price drops to 0.45
+    take_profit=0.55,    # Auto-sell if price rises to 0.55
+)
+
+# Set trailing stop-loss (moves with favorable price movement)
+order = client.paper.buy_with_tp_sl(
+    market, 
+    side="UP", 
+    amount=100.0,
+    trail_sl=0.05,       # 5% trailing stop-loss
+)
+
+# Set trailing take-profit (allows more profit potential)
+order = client.paper.buy_with_tp_sl(
+    market, 
+    side="UP", 
+    amount=100.0,
+    trail_tp=0.10,       # 10% trailing take-profit
+)
+
+# Add trailing SL to existing order
+order = client.paper.buy(market, side="UP", amount=100.0)
+client.paper.set_trailing_sl(order.id, 0.05)
+client.paper.set_trailing_tp(order.id, 0.10)
+```
+
+**One-Cancels-Other (OCO) orders:**
+
+```python
+# Place SL and TP where one cancels the other
+main_order, oco_order = client.paper.oco_order(
+    market, 
+    side="UP", 
+    amount=100.0,
+    stop_loss=0.45,
+    take_profit=0.55,
+)
+# When SL triggers, TP is automatically cancelled (and vice versa)
+```
+
+**Selling/closing positions:**
+
+```python
+# Sell full position
+sell_order = client.paper.sell_position(market, side="UP")
+
+# Sell partial position
+sell_order = client.paper.sell_position(market, side="UP", amount=50.0)
+```
+
+**Automatic TP/SL triggering:**
+
+When a stream is attached, TP/SL orders are automatically checked on every price update:
+
+```python
+stream = client.stream(market)
+client.paper.attach_stream(stream, market)
+stream.start(background=True)
+# TP/SL will trigger automatically when price crosses thresholds
+```
+
 ### PaperOrder
 
 ```python
@@ -159,6 +232,17 @@ order.fee         # USDC fee paid
 order.status      # "open" | "filled" | "cancelled"
 order.is_limit    # bool
 order.filled_at   # datetime (UTC) or None
+
+# Advanced order fields
+order.stop_loss          # SL price trigger (optional)
+order.take_profit        # TP price trigger (optional)
+order.trail_sl           # Trailing SL distance as percentage (optional)
+order.trail_tp           # Trailing TP distance as percentage (optional)
+order.trail_sl_price     # Current trailing SL price (optional)
+order.trail_tp_price     # Current trailing TP price (optional)
+order.oco_order_id       # OCO linked order ID (optional)
+order.tp_sl_triggered_by # Which order triggered: "tp" | "sl" | None
+
 order.dump()      # → dict
 ```
 
@@ -222,6 +306,7 @@ python examples/market.py --asset BTC --timeframe 5m
 python examples/market.py --rate-limit 10
 python examples/stream.py --asset ETH --timeframe 15m --log DEBUG
 python examples/paper.py  --side UP   --amount 25 --limit 0.92
+python examples/advanced_orders.py  # Demonstrates TP/SL, trailing stops, OCO orders
 ```
 
 ---
