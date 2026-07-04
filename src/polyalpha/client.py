@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 
+from .ai import OpenRouterClient
 from .core import Market
 from .markets import MarketClient
 from .stream import Stream
@@ -32,17 +33,19 @@ class Client:
 
     Parameters
     ----------
-    balance     : Starting paper USDC balance (default 100.0).
-    timeout     : HTTP request timeout in seconds (default 10).
-    retries     : Number of HTTP retries on 5xx errors (default 3).
-    log_level   : Python logging level string, e.g. "DEBUG", "INFO", "WARNING".
-    rate_limit  : Max API requests per second (default None = unlimited).
-    paper_config: PaperConfig for paper trading realism options (default None).
+    balance            : Starting paper USDC balance (default 100.0).
+    timeout            : HTTP request timeout in seconds (default 10).
+    retries            : Number of HTTP retries on 5xx errors (default 3).
+    log_level          : Python logging level string, e.g. "DEBUG", "INFO", "WARNING".
+    rate_limit         : Max API requests per second (default None = unlimited).
+    paper_config       : PaperConfig for paper trading realism options (default None).
+    openrouter_api_key : OpenRouter API key for AI features (default None = disabled).
 
     Attributes
     ----------
     markets : MarketClient  — discover and fetch markets.
     paper   : PaperEngine   — simulate orders and track P&L.
+    ai      : OpenRouterClient | None — AI-powered analysis (if API key provided).
 
     Example
     -------
@@ -60,6 +63,7 @@ class Client:
         log_level: str   = "WARNING",
         rate_limit: int | None = None,
         paper_config: PaperConfig | None = None,
+        openrouter_api_key: str | None = None,
     ):
         # Configure library-specific logger without affecting global logging
         self._log = logging.getLogger("polyalpha")
@@ -67,6 +71,7 @@ class Client:
 
         self.markets = MarketClient(timeout=timeout, retries=retries, rate_limit=rate_limit)
         self.paper   = PaperEngine(balance=balance, config=paper_config)
+        self.ai      = OpenRouterClient(api_key=openrouter_api_key) if openrouter_api_key else None
 
         self._timeout = timeout
         self._retries = retries
@@ -74,6 +79,8 @@ class Client:
     def close(self) -> None:
         """Clean up resources (HTTP connections, etc.)."""
         self.markets.close()
+        if self.ai:
+            self.ai.close()
 
     def __enter__(self):
         """Context manager entry."""

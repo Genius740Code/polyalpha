@@ -40,6 +40,18 @@ from .core.errors import (
     PolyalphaError,
     StreamDisconnected,
 )
+from .ai import (
+    OpenRouterClient,
+    AIError,
+    AIAuthenticationError,
+    AIModelNotFoundError,
+    AIQuotaExceededError,
+    AIResponseError,
+    AITimeoutError,
+    AIConnectionError,
+    MarketAnalysis,
+    TradingSignal,
+)
 
 __version__ = "0.2.0"
 
@@ -60,6 +72,10 @@ __all__ = [
     "DataFeedConfig",
     "IndicatorCalculator",
     "SignalGenerator",
+    # AI
+    "OpenRouterClient",
+    "MarketAnalysis",
+    "TradingSignal",
     # Errors
     "PolyalphaError",
     "MarketNotFound",
@@ -67,4 +83,11 @@ __all__ = [
     "StreamDisconnected",
     "InsufficientBalance",
     "OrderNotFound",
+    "AIError",
+    "AIAuthenticationError",
+    "AIModelNotFoundError",
+    "AIQuotaExceededError",
+    "AIResponseError",
+    "AITimeoutError",
+    "AIConnectionError",
 ]
