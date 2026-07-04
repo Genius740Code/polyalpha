@@ -1,3 +1,6 @@
+import datetime
+import zoneinfo
+
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 GAMMA_API = "https://gamma-api.polymarket.com"
@@ -15,7 +18,17 @@ TIMEFRAME_SECONDS: dict[str, int] = {
 
 # ── Assets ─────────────────────────────────────────────────────────────────────
 
-ASSETS: list[str] = ["BTC", "ETH", "SOL", "XRP", "DOGE"]
+ASSETS: list[str] = ["BTC", "ETH", "SOL", "XRP", "DOGE", "HYPE", "BNB"]
+
+ASSET_NAMES: dict[str, str] = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "XRP": "xrp",
+    "DOGE": "doge",
+    "HYPE": "hype",
+    "BNB": "bnb",
+}
 
 # ── Fees ───────────────────────────────────────────────────────────────────────
 
@@ -53,7 +66,27 @@ RESOLUTION_CHECK_INTERVAL = 0.5  # Seconds between resolution checks
 
 def build_slug(asset: str, timeframe: str, window_end_ts: int) -> str:
     """Return the deterministic Gamma event slug for an asset/timeframe window."""
-    return f"{asset.lower()}-updown-{timeframe}-{window_end_ts}"
+    asset_upper = asset.upper()
+    asset_lower = asset.lower()
+    full_name = ASSET_NAMES.get(asset_upper, asset_lower)
+
+    if timeframe in ("1h", "24h"):
+        dt_utc = datetime.datetime.fromtimestamp(window_end_ts, tz=datetime.timezone.utc)
+        tz_et = zoneinfo.ZoneInfo("America/New_York")
+        dt_et = dt_utc.astimezone(tz_et)
+        
+        month_name = dt_et.strftime("%B").lower()
+        day = dt_et.day
+        year = dt_et.year
+        hour_12 = dt_et.strftime("%I").lstrip("0")
+        am_pm = dt_et.strftime("%p").lower()
+        
+        if timeframe == "1h":
+            return f"{full_name}-up-or-down-{month_name}-{day}-{year}-{hour_12}{am_pm}-et"
+        elif timeframe == "24h":
+            return f"what-price-will-{full_name}-hit-on-{month_name}-{day}"
+            
+    return f"{asset_lower}-updown-{timeframe}-{window_end_ts}"
 
 # ── Rate Limiting ───────────────────────────────────────────────────────────────
 

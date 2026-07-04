@@ -49,7 +49,16 @@ def test_public_exports():
 
 def test_build_slug():
     assert build_slug("BTC", "5m", 1_751_234_700) == "btc-updown-5m-1751234700"
-    assert build_slug("ETH", "1h",  999_999_999)  == "eth-updown-1h-999999999"
+    
+    # 1h format test
+    assert build_slug("BTC", "1h", 1783191600) == "bitcoin-up-or-down-july-4-2026-3pm-et"
+    
+    # 24h format test
+    import datetime
+    import zoneinfo
+    tz = zoneinfo.ZoneInfo("America/New_York")
+    ts_daily = int(datetime.datetime(2026, 7, 4, 0, 0, tzinfo=tz).timestamp())
+    assert build_slug("BTC", "24h", ts_daily) == "what-price-will-bitcoin-hit-on-july-4"
 
 
 def test_timeframe_seconds():
@@ -63,7 +72,9 @@ def test_assets_list():
     assert "SOL" in ASSETS
     assert "XRP" in ASSETS
     assert "DOGE" in ASSETS
-    assert len(ASSETS) == 5
+    assert "HYPE" in ASSETS
+    assert "BNB" in ASSETS
+    assert len(ASSETS) == 7
 
 
 def test_timeframe_completeness():
