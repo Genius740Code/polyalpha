@@ -30,6 +30,8 @@ ASSET_NAMES: dict[str, str] = {
     "BNB": "bnb",
 }
 
+TWEET_SUBJECTS: list[str] = ["elon-musk", "white-house", "zelensky"]
+
 # ── Fees ───────────────────────────────────────────────────────────────────────
 
 TAKER_FEE_RATE = 0.02   # 2% simulated taker fee on paper fills
@@ -87,6 +89,35 @@ def build_slug(asset: str, timeframe: str, window_end_ts: int) -> str:
             return f"what-price-will-{full_name}-hit-on-{month_name}-{day}"
             
     return f"{asset_lower}-updown-{timeframe}-{window_end_ts}"
+
+def build_tweet_slug(subject: str, start_ts: int, end_ts: int | None = None, monthly: bool = False) -> str:
+    """Return the Gamma event slug for a tweet market window."""
+    dt_start = datetime.datetime.fromtimestamp(start_ts, tz=datetime.timezone.utc)
+    try:
+        tz_et = zoneinfo.ZoneInfo("America/New_York")
+    except Exception:
+        tz_et = datetime.timezone(datetime.timedelta(hours=-4))
+        
+    dt_start_et = dt_start.astimezone(tz_et)
+    
+    if monthly:
+        month_name = dt_start_et.strftime("%B").lower()
+        year = dt_start_et.year
+        return f"{subject}-of-tweets-{month_name}-{year}"
+        
+    if end_ts is None:
+        raise ValueError("end_ts is required for non-monthly tweet markets")
+        
+    dt_end = datetime.datetime.fromtimestamp(end_ts, tz=datetime.timezone.utc)
+    dt_end_et = dt_end.astimezone(tz_et)
+    
+    start_month = dt_start_et.strftime("%B").lower()
+    start_day = dt_start_et.day
+    
+    end_month = dt_end_et.strftime("%B").lower()
+    end_day = dt_end_et.day
+    
+    return f"{subject}-of-tweets-{start_month}-{start_day}-{end_month}-{end_day}"
 
 # ── Rate Limiting ───────────────────────────────────────────────────────────────
 

@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import pytest
 import polyalpha
-from polyalpha.core.constants import build_slug, TIMEFRAME_SECONDS, ASSETS
+from polyalpha.core.constants import build_slug, build_tweet_slug, TIMEFRAME_SECONDS, ASSETS
 from polyalpha.core.market import Market
 
 
@@ -60,6 +60,19 @@ def test_build_slug():
     ts_daily = int(datetime.datetime(2026, 7, 4, 0, 0, tzinfo=tz).timestamp())
     assert build_slug("BTC", "24h", ts_daily) == "what-price-will-bitcoin-hit-on-july-4"
 
+def test_build_tweet_slug():
+    import datetime
+    import zoneinfo
+    tz = zoneinfo.ZoneInfo("America/New_York")
+    
+    # elon-musk-of-tweets-june-30-july-7
+    ts_start = int(datetime.datetime(2026, 6, 30, 0, 0, tzinfo=tz).timestamp())
+    ts_end = int(datetime.datetime(2026, 7, 7, 0, 0, tzinfo=tz).timestamp())
+    assert build_tweet_slug("elon-musk", ts_start, ts_end) == "elon-musk-of-tweets-june-30-july-7"
+    
+    # monthly: elon-musk-of-tweets-march-2026
+    ts_monthly = int(datetime.datetime(2026, 3, 15, 0, 0, tzinfo=tz).timestamp())
+    assert build_tweet_slug("elon-musk", ts_monthly, monthly=True) == "elon-musk-of-tweets-march-2026"
 
 def test_timeframe_seconds():
     assert TIMEFRAME_SECONDS["5m"]  == 300

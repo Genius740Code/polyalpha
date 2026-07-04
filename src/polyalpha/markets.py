@@ -22,6 +22,7 @@ import httpx
 
 from .core import (
     ASSETS,
+    TWEET_SUBJECTS,
     GAMMA_API,
     TIMEFRAME_SECONDS,
     HTTP_MAX_CONNECTIONS,
@@ -41,6 +42,7 @@ from .core import (
     MarketClosed,
     MarketNotFound,
     build_slug,
+    build_tweet_slug,
 )
 
 log = logging.getLogger(__name__)
@@ -219,6 +221,53 @@ class MarketClient:
         tried = [build_slug(asset, timeframe, ts) for ts in candidates]
         raise MarketNotFound(
             f"No active {asset} {timeframe} market found. Tried: {tried}"
+        )
+
+    def latest_tweet(self, subject: str, window: str = "7d") -> Market:
+        """
+        Return the active tweet market for a subject and window.
+        
+        Because tweet markets use rolling date windows, this probes 
+        the current date and combinations of offsets.
+        
+        Parameters
+        ----------
+        subject : "elon-musk" | "white-house" | "zelensky"
+        window  : "3d" | "7d" | "1mo"
+        """
+        subject = subject.lower()
+        if subject not in TWEET_SUBJECTS:
+            raise ValueError(f"Unknown subject '{subject}'. Supported: {TWEET_SUBJECTS}")
+            
+        now_ts = int(time.time())
+        tried = []
+        
+        if window == "1mo":
+            slug = build_tweet_slug(subject, now_ts, monthly=True)
+            tried.append(slug)
+            try:
+                return self._fetch_by_slug(slug)
+            except (MarketNotFound, MarketClosed):
+                pass
+        else:
+            days = 7 if window == "7d" else 3
+            # Probe combinations of start offsets
+            # usually markets are active for current days
+            for offset_start in range(-days, 1):
+                start_ts = now_ts + (offset_start * 86400)
+                end_ts = start_ts + (days * 86400)
+                
+                slug = build_tweet_slug(subject, start_ts, end_ts)
+                if slug in tried:
+                    continue
+                tried.append(slug)
+                try:
+                    return self._fetch_by_slug(slug)
+                except (MarketNotFound, MarketClosed):
+                    pass
+                    
+        raise MarketNotFound(
+            f"No active {subject} {window} tweet market found. Tried: {tried}"
         )
 
     def get(self, slug: str) -> Market:
