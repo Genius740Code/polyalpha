@@ -35,6 +35,9 @@ market = client.markets.latest("SOL",  "1h")
 # Direct slug lookup
 market = client.markets.get("btc-updown-5m-1751234700")
 
+# Latest tweet market (e.g. Elon Musk, White House, Zelensky)
+market = client.markets.latest_tweet("elon-musk", "7d")
+
 # Keyword search
 markets = client.markets.search("ETH 15m")   # → list[Market]
 
@@ -42,7 +45,7 @@ markets = client.markets.search("ETH 15m")   # → list[Market]
 markets = client.markets.available("5m")     # → list[Market]
 ```
 
-**Supported assets:** BTC, ETH, SOL, XRP, DOGE  
+**Supported assets:** BTC, ETH, SOL, XRP, DOGE, HYPE, BNB
 **Supported timeframes:** 5m, 15m, 1h, 4h, 24h
 
 ### Market object

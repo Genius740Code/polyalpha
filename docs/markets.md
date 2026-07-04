@@ -16,7 +16,7 @@ This is the most common call. It generates the deterministic slug for the curren
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `asset` | `str` | — | `"BTC"`, `"ETH"`, `"SOL"`, `"XRP"`, or `"DOGE"` (case-insensitive) |
+| `asset` | `str` | — | `"BTC"`, `"ETH"`, `"SOL"`, `"XRP"`, `"DOGE"`, `"HYPE"`, or `"BNB"` (case-insensitive) |
 | `timeframe` | `str` | `"5m"` | `"5m"`, `"15m"`, `"1h"`, `"4h"`, or `"24h"` |
 
 **Raises**
@@ -25,10 +25,32 @@ This is the most common call. It generates the deterministic slug for the curren
 - `MarketNotFound` — if no active market exists for that window
 
 ```python
-# All five assets at the 15-minute timeframe
+# All supported assets at the 15-minute timeframe
 for m in client.markets.available("15m"):
     print(m.slug, m.up_price, m.down_price)
 ```
+
+---
+
+## Finding tweet markets
+
+```python
+market = client.markets.latest_tweet("elon-musk", "7d")
+```
+
+This method probes the immediate surrounding calendar combinations dynamically to find the active Gamma API event URL for "number of tweets" markets, since they do not strictly begin or end exactly at the present second.
+
+**Parameters**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `subject` | `str` | — | `"elon-musk"`, `"white-house"`, or `"zelensky"` (case-insensitive) |
+| `window` | `str` | `"7d"` | `"3d"`, `"7d"`, or `"1mo"` |
+
+**Raises**
+
+- `ValueError` — if the subject is not in the supported list
+- `MarketNotFound` — if no active tweet market exists for that window
 
 ---
 
