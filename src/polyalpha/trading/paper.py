@@ -34,7 +34,10 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from ..report.engine import ReportEngine
 
 from ..core import (
     InsufficientBalance,
@@ -237,6 +240,16 @@ class PaperEngine:
         self._orders:    dict[str, PaperOrder]       = {}
         self._positions: dict[str, PaperPosition]    = {}   # key: "{market_id}:{side}"
         self._config:    PaperConfig                  = config or PaperConfig()
+        # Lazy-initialised in the report property to avoid circular imports
+        self._report: Optional["ReportEngine"] = None
+
+    @property
+    def report(self) -> "ReportEngine":
+        """Analytics and reporting engine. Access via ``client.paper.report``."""
+        if self._report is None:
+            from ..report.engine import ReportEngine
+            self._report = ReportEngine(self)
+        return self._report
 
     # ── Balance ────────────────────────────────────────────────────────────────
 

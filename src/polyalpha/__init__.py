@@ -30,6 +30,7 @@ from .core import Market
 from .stream import Stream
 from .trading import PaperEngine
 from .trading.paper import PaperConfig
+from .report import ReportPreset
 from .bots import Sniper, Tracker
 from .analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator
 from .core.errors import (
@@ -64,6 +65,7 @@ __all__ = [
     # Paper trading
     "PaperEngine",
     "PaperConfig",
+    "ReportPreset",
     # Bots
     "Sniper",
     "Tracker",

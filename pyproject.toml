@@ -41,6 +41,12 @@ analysis = [
     "web3>=6.0.0",
 ]
 
+report = [
+    "plotly>=5.18.0",
+    "rich>=13.0.0",
+    "kaleido>=0.2.1",   # optional — only needed for save_png()
+]
+
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
@@ -51,7 +57,7 @@ dev = [
 ]
 
 all = [
-    "polyalpha[analysis,dev]",
+    "polyalpha[analysis,report,dev]",
 ]
 
 [project.urls]
