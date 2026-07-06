@@ -8,9 +8,13 @@ and live trading (future release).
 Current bots:
 - Sniper: Time-window entry bot with threshold-based execution
 - Tracker: P&L tracking and reporting utility
+
+Configuration:
+- weather_config: Pre-configured city templates for weather bots
 """
 
 from .sniper import Sniper
 from .tracker import Tracker
+from .weather_config import CITIES, get_config, list_configs, print_config
 
-__all__ = ["Sniper", "Tracker"]
+__all__ = ["Sniper", "Tracker", "CITIES", "get_config", "list_configs", "print_config"]

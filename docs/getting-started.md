@@ -130,3 +130,22 @@ except MarketClosed:
 - [sniper.md](./sniper.md) — automated trading bot
 - [market-analysis.md](./market-analysis.md) — technical analysis and signals
 - [api-reference.md](./api-reference.md) — complete class and method reference
+
+## Weather bot configuration
+
+For weather trading bots, pre-configured city templates are available:
+
+```python
+from polyalpha.bots import CITIES, print_config, list_configs
+
+# List available cities
+print(list_configs())
+
+# Use a configuration
+config = CITIES["Seoul"]
+
+# Print for copy-paste
+print_config("Seoul")
+```
+
+See the README for the full list of available cities and configuration fields.

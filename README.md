@@ -283,6 +283,49 @@ client = polyalpha.Client(
 
 ---
 
+## Weather bot configuration
+
+For weather trading bots, pre-configured city templates are available for easy setup:
+
+```python
+from polyalpha.bots import CITIES, print_config, list_configs
+
+# List all available cities
+print(list_configs())
+# ['Seoul', 'Shanghai', 'Chengdu', 'Shenzhen', 'Hong Kong', 'Tokyo', 'Singapore', 'Bangkok', 'Manila', 'Jakarta']
+
+# Use a pre-configured city
+config = CITIES["Seoul"]
+# {
+#     "station": "RKSI",
+#     "source": "iem",
+#     "lat": 37.469,
+#     "lon": 126.451,
+#     "tz": "Asia/Seoul",
+#     "bucket_mode": "round",
+# }
+
+# Print configuration for copy-paste
+print_config("Seoul")
+# "Seoul": {
+#     "station": "RKSI",
+#     "source": "iem",
+#     "lat": 37.469,
+#     "lon": 126.451,
+#     "tz": "Asia/Seoul",
+#     "bucket_mode": "round",
+# },
+```
+
+**Configuration fields:**
+- `station`: Weather station identifier (ICAO airport code or regional code)
+- `source`: Data provider (e.g., "iem" for Iowa Environmental Mesonet, "hko" for Hong Kong Observatory)
+- `lat`/`lon`: Geographic coordinates
+- `tz`: Timezone identifier for proper time handling
+- `bucket_mode`: Time aggregation method ("round" or "floor")
+
+---
+
 ## Error handling
 
 ```python
@@ -310,6 +353,7 @@ python examples/market.py --rate-limit 10
 python examples/stream.py --asset ETH --timeframe 15m --log DEBUG
 python examples/paper.py  --side UP   --amount 25 --limit 0.92
 python examples/advanced_orders.py  # Demonstrates TP/SL, trailing stops, OCO orders
+python examples/weather_config_example.py  # Weather bot configuration usage
 ```
 
 ---
