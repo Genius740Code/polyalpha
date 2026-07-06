@@ -136,6 +136,10 @@ class PaperOrder:
     trail_tp_price: Optional[float] = None       # Current trailing TP price
     oco_order_id: Optional[str] = None           # OCO linked order ID
     tp_sl_triggered_by: Optional[str] = None     # Which order triggered this: "tp" | "sl" | None
+    
+    # Time window for order execution
+    time_window_start: Optional[datetime] = None  # Start of time window for execution
+    time_window_end: Optional[datetime] = None    # End of time window for execution
 
     def dump(self) -> dict:
         return {
@@ -157,6 +161,8 @@ class PaperOrder:
             "trail_tp_price": self.trail_tp_price,
             "oco_order_id": self.oco_order_id,
             "tp_sl_triggered_by": self.tp_sl_triggered_by,
+            "time_window_start": self.time_window_start.isoformat() if self.time_window_start else None,
+            "time_window_end": self.time_window_end.isoformat() if self.time_window_end else None,
         }
 
 
@@ -533,7 +539,7 @@ class PaperEngine:
 
     # ── Orders ─────────────────────────────────────────────────────────────────
 
-    def buy(self, market, side: str, amount: float) -> PaperOrder:
+    def buy(self, market, side: str, amount: float, time_window_start: Optional[datetime] = None, time_window_end: Optional[datetime] = None) -> PaperOrder:
         """
         Simulated market buy — fills immediately at the current market price.
 
@@ -542,6 +548,10 @@ class PaperEngine:
         market : Market object
         side   : "UP" or "DOWN"
         amount : USDC to spend
+        time_window_start : datetime, optional
+            Only allow execution after this time (UTC)
+        time_window_end : datetime, optional
+            Only allow execution before this time (UTC)
 
         Returns
         -------
@@ -550,6 +560,12 @@ class PaperEngine:
         Example
         -------
         >>> order = client.paper.buy(market, side="UP", amount=10.0)
+        >>> # Only buy within 1 minute of market close
+        >>> from datetime import datetime, timezone, timedelta
+        >>> end_time = datetime.fromisoformat(market.end_time)
+        >>> order = client.paper.buy(market, side="UP", amount=10.0,
+        ...     time_window_start=end_time - timedelta(minutes=1),
+        ...     time_window_end=end_time)
         """
         side   = _validate_side(side)
         amount = _validate_positive(float(amount), "amount")
@@ -557,6 +573,14 @@ class PaperEngine:
         price = market.up_price if side == "UP" else market.down_price
         if price <= 0:
             price = FALLBACK_PRICE  # safe fallback before first WS price arrives
+
+        # Check time window if set
+        if time_window_start is not None or time_window_end is not None:
+            now = datetime.now(timezone.utc)
+            if time_window_start is not None and now < time_window_start:
+                raise ValueError(f"Cannot buy: current time {now} is before time window start {time_window_start}")
+            if time_window_end is not None and now > time_window_end:
+                raise ValueError(f"Cannot buy: current time {now} is after time window end {time_window_end}")
 
         # Apply execution delay if configured
         self._apply_execution_delay()
@@ -579,13 +603,18 @@ class PaperEngine:
                 status    = "cancelled",
                 is_limit  = False,
                 filled_at = _now(),
+                time_window_start=time_window_start,
+                time_window_end=time_window_end,
             )
             self._orders[order_id] = order
             return order
 
-        return self._fill(market, side, actual_price, amount, is_limit=False)
+        order = self._fill(market, side, actual_price, amount, is_limit=False)
+        order.time_window_start = time_window_start
+        order.time_window_end = time_window_end
+        return order
 
-    def limit(self, market, side: str, price: float, amount: float) -> PaperOrder:
+    def limit(self, market, side: str, price: float, amount: float, time_window_start: Optional[datetime] = None, time_window_end: Optional[datetime] = None) -> PaperOrder:
         """
         Simulated limit order — fills when the streamed price crosses *price*.
 
@@ -598,6 +627,10 @@ class PaperEngine:
         side   : "UP" or "DOWN"
         price  : trigger price — fills when token price >= this value
         amount : USDC to spend
+        time_window_start : datetime, optional
+            Only allow execution after this time (UTC)
+        time_window_end : datetime, optional
+            Only allow execution before this time (UTC)
 
         Returns
         -------
@@ -606,6 +639,12 @@ class PaperEngine:
         Example
         -------
         >>> order = client.paper.limit(market, side="UP", price=0.92, amount=25.0)
+        >>> # Only fill within 1 minute of market close
+        >>> from datetime import datetime, timezone, timedelta
+        >>> end_time = datetime.fromisoformat(market.end_time)
+        >>> order = client.paper.limit(market, side="UP", price=0.92, amount=25.0,
+        ...     time_window_start=end_time - timedelta(minutes=1),
+        ...     time_window_end=end_time)
         """
         side   = _validate_side(side)
         price  = _validate_positive(float(price),  "price")
@@ -628,6 +667,8 @@ class PaperEngine:
             fee       = 0.0,
             status    = "open",
             is_limit  = True,
+            time_window_start=time_window_start,
+            time_window_end=time_window_end,
         )
         self._orders[order_id] = order
         self._balance -= amount  # reserve
@@ -675,6 +716,8 @@ class PaperEngine:
         take_profit: float | None = None,
         trail_sl: float | None = None,
         trail_tp: float | None = None,
+        time_window_start: Optional[datetime] = None,
+        time_window_end: Optional[datetime] = None,
     ) -> PaperOrder:
         """
         Market buy with optional stop-loss and take-profit.
@@ -688,6 +731,10 @@ class PaperEngine:
         take_profit : TP price trigger (optional)
         trail_sl : Trailing SL distance as percentage (e.g., 0.05 for 5%)
         trail_tp : Trailing TP distance as percentage (e.g., 0.10 for 10%)
+        time_window_start : datetime, optional
+            Only allow execution after this time (UTC)
+        time_window_end : datetime, optional
+            Only allow execution before this time (UTC)
 
         Returns
         -------
@@ -699,6 +746,15 @@ class PaperEngine:
         ...     market, side="UP", amount=10.0,
         ...     stop_loss=0.45, take_profit=0.55
         ... )
+        >>> # Only buy within 1 minute of market close
+        >>> from datetime import datetime, timezone, timedelta
+        >>> end_time = datetime.fromisoformat(market.end_time)
+        >>> order = client.paper.buy_with_tp_sl(
+        ...     market, side="UP", amount=10.0,
+        ...     stop_loss=0.45, take_profit=0.55,
+        ...     time_window_start=end_time - timedelta(minutes=1),
+        ...     time_window_end=end_time
+        ... )
         """
         side = _validate_side(side)
         amount = _validate_positive(float(amount), "amount")
@@ -706,6 +762,14 @@ class PaperEngine:
         price = market.up_price if side == "UP" else market.down_price
         if price <= 0:
             price = FALLBACK_PRICE
+
+        # Check time window if set
+        if time_window_start is not None or time_window_end is not None:
+            now = datetime.now(timezone.utc)
+            if time_window_start is not None and now < time_window_start:
+                raise ValueError(f"Cannot buy: current time {now} is before time window start {time_window_start}")
+            if time_window_end is not None and now > time_window_end:
+                raise ValueError(f"Cannot buy: current time {now} is after time window end {time_window_end}")
 
         # Validate TP/SL prices
         if stop_loss is not None:
@@ -747,6 +811,8 @@ class PaperEngine:
         order.take_profit = take_profit
         order.trail_sl = trail_sl
         order.trail_tp = trail_tp
+        order.time_window_start = time_window_start
+        order.time_window_end = time_window_end
 
         # Initialize trailing prices
         if trail_sl is not None:
@@ -1061,10 +1127,44 @@ class PaperEngine:
                 continue
             current = up_price if order.side == "UP" else down_price
             if current >= order.price:
-                self._fill_limit(order, current)
+                # Check time window before filling
+                if self._is_within_time_window(order):
+                    self._fill_limit(order, current)
+                else:
+                    log.debug(
+                        "Paper: limit order %s not filled - outside time window",
+                        order.id[:8]
+                    )
 
         # Check TP/SL on filled orders
         self._check_tp_sl(market_id, up_price, down_price)
+
+    def _is_within_time_window(self, order: PaperOrder) -> bool:
+        """
+        Check if current time is within the order's time window.
+        
+        Parameters
+        ----------
+        order : PaperOrder
+            The order to check
+            
+        Returns
+        -------
+        bool
+            True if current time is within time window or no window is set
+        """
+        if order.time_window_start is None and order.time_window_end is None:
+            return True  # No time window restriction
+        
+        now = datetime.now(timezone.utc)
+        
+        if order.time_window_start is not None and now < order.time_window_start:
+            return False  # Before window start
+        
+        if order.time_window_end is not None and now > order.time_window_end:
+            return False  # After window end
+        
+        return True
 
     def _check_tp_sl(self, market_id: str, up_price: float, down_price: float) -> None:
         """

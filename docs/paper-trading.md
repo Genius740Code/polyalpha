@@ -353,3 +353,115 @@ If you want to reset the paper engine during a session:
 ```python
 client.paper.reset()  # clears orders, positions, restores original balance
 ```
+
+---
+
+## Time Window Execution
+
+Control when orders are allowed to execute using time windows. This is useful for strategies that only want to trade during specific periods, such as the final minute before market close.
+
+### Basic Usage
+
+```python
+from datetime import datetime, timezone, timedelta
+
+client = polyalpha.Client(balance=500.0)
+market = client.markets.latest("BTC", "5m")
+
+# Parse market end time
+end_time = datetime.fromisoformat(market.end_time)
+
+# Only allow execution within 1 minute of market close
+order = client.paper.buy(
+    market, 
+    side="UP", 
+    amount=25.0,
+    time_window_start=end_time - timedelta(minutes=1),
+    time_window_end=end_time
+)
+```
+
+### Time Window with Limit Orders
+
+```python
+# Place a limit order that only fills within the time window
+order = client.paper.limit(
+    market,
+    side="UP",
+    price=0.92,
+    amount=25.0,
+    time_window_start=end_time - timedelta(minutes=1),
+    time_window_end=end_time
+)
+
+# Attach stream - order will only fill if price crosses threshold
+# AND current time is within the window
+stream = client.stream(market)
+client.paper.attach_stream(stream, market)
+stream.start(background=True)
+```
+
+### Time Window with TP/SL
+
+```python
+# Buy with stop-loss/take-profit, but only within time window
+order = client.paper.buy_with_tp_sl(
+    market,
+    side="UP",
+    amount=100.0,
+    stop_loss=0.45,
+    take_profit=0.55,
+    time_window_start=end_time - timedelta(minutes=1),
+    time_window_end=end_time
+)
+```
+
+### Time Window Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `time_window_start` | `datetime` (UTC) | Earliest time order can execute |
+| `time_window_end` | `datetime` (UTC) | Latest time order can execute |
+
+**Behavior:**
+- **Market orders**: If current time is outside the window, the order is rejected with a `ValueError`
+- **Limit orders**: The order is placed but will only fill when both price crosses threshold AND time is within window
+- **No window set**: Orders execute normally without time restrictions
+
+### Example: BTC 5-Minute Strategy
+
+```python
+# Strategy: Only trade BTC 5-minute markets in the final 30 seconds
+market = client.markets.latest("BTC", "5m")
+end_time = datetime.fromisoformat(market.end_time)
+
+# Place limit order that only fills in last 30 seconds
+order = client.paper.limit(
+    market,
+    side="UP",
+    price=0.90,
+    amount=50.0,
+    time_window_start=end_time - timedelta(seconds=30),
+    time_window_end=end_time
+)
+
+stream = client.stream(market)
+client.paper.attach_stream(stream, market)
+stream.start(background=True)
+```
+
+### Checking Time Windows
+
+The time window is automatically checked on every price update when a stream is attached. You can also manually check:
+
+```python
+# Manually check if an order is within its time window
+from polyalpha.trading.paper import PaperEngine
+engine = client.paper
+
+# This is called automatically by check_limits()
+if engine._is_within_time_window(order):
+    print("Order can execute now")
+else:
+    print("Order outside time window")
+```

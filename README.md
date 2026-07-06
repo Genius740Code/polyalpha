@@ -291,6 +291,34 @@ stream.start(background=True)
 # TP/SL will trigger automatically when price crosses thresholds
 ```
 
+**Time window execution:**
+
+Control when orders are allowed to execute using time windows. This is useful for strategies that only want to trade during specific periods, such as the final minute before market close:
+
+```python
+from datetime import datetime, timedelta
+
+# Only allow execution within 1 minute of market close
+end_time = datetime.fromisoformat(market.end_time)
+order = client.paper.buy(
+    market,
+    side="UP",
+    amount=25.0,
+    time_window_start=end_time - timedelta(minutes=1),
+    time_window_end=end_time
+)
+
+# Limit orders with time windows
+order = client.paper.limit(
+    market,
+    side="UP",
+    price=0.92,
+    amount=25.0,
+    time_window_start=end_time - timedelta(minutes=1),
+    time_window_end=end_time
+)
+```
+
 ### PaperOrder
 
 ```python
