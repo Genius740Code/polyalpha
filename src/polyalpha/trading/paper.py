@@ -87,6 +87,9 @@ class PaperConfig:
     # Fill probability
     fill_probability: float = 1.0  # Default 100% fill
     
+    # Condition check mode for limit orders
+    check_mode: str | int = "continuous"  # "continuous", "once", or int for N times
+    
     def __post_init__(self):
         """Validate configuration values."""
         if self.fee_mode not in ("polymarket", "custom", "zero"):
@@ -107,6 +110,11 @@ class PaperConfig:
             raise ValueError(f"max_slippage_no_fill must be between 0 and 1, got {self.max_slippage_no_fill}")
         if not 0 <= self.fill_probability <= 1:
             raise ValueError(f"fill_probability must be between 0 and 1, got {self.fill_probability}")
+        # Validate check_mode
+        if isinstance(self.check_mode, str) and self.check_mode not in ("continuous", "once"):
+            raise ValueError(f"check_mode must be 'continuous', 'once', or a positive integer, got '{self.check_mode}'")
+        if isinstance(self.check_mode, int) and self.check_mode < 1:
+            raise ValueError(f"check_mode as integer must be >= 1, got {self.check_mode}")
 
 
 # ── Dataclasses ────────────────────────────────────────────────────────────────
@@ -140,6 +148,9 @@ class PaperOrder:
     # Time window for order execution
     time_window_start: Optional[datetime] = None  # Start of time window for execution
     time_window_end: Optional[datetime] = None    # End of time window for execution
+    
+    # Condition check tracking
+    check_count: int = 0  # Number of times this order has been checked
 
     def dump(self) -> dict:
         return {
@@ -163,6 +174,7 @@ class PaperOrder:
             "tp_sl_triggered_by": self.tp_sl_triggered_by,
             "time_window_start": self.time_window_start.isoformat() if self.time_window_start else None,
             "time_window_end": self.time_window_end.isoformat() if self.time_window_end else None,
+            "check_count": self.check_count,
         }
 
 
@@ -1115,6 +1127,11 @@ class PaperEngine:
 
         Called automatically when a stream is attached via ``attach_stream()``.
         Can also be called manually when running without a stream.
+        
+        Respects check_mode configuration:
+        - "continuous": Check continuously (default)
+        - "once": Only check conditions once
+        - int N: Check conditions N times maximum
         """
         # Update live prices for all open positions in this market
         for pos in self._positions.values():
@@ -1125,6 +1142,18 @@ class PaperEngine:
         for order in list(self._orders.values()):
             if order.status != "open" or order.market_id != market_id:
                 continue
+            
+            # Increment check count
+            order.check_count += 1
+            
+            # Check if we should skip based on check_mode
+            if not self._should_check_order(order):
+                log.debug(
+                    "Paper: limit order %s skipped - check count %d exceeds check_mode %s",
+                    order.id[:8], order.check_count, self._config.check_mode
+                )
+                continue
+            
             current = up_price if order.side == "UP" else down_price
             if current >= order.price:
                 # Check time window before filling
@@ -1164,6 +1193,37 @@ class PaperEngine:
         if order.time_window_end is not None and now > order.time_window_end:
             return False  # After window end
         
+        return True
+
+    def _should_check_order(self, order: PaperOrder) -> bool:
+        """
+        Check if an order should be checked based on check_mode configuration.
+        
+        Parameters
+        ----------
+        order : PaperOrder
+            The order to check
+            
+        Returns
+        -------
+        bool
+            True if order should be checked, False if check limit exceeded
+        """
+        check_mode = self._config.check_mode
+        
+        # Continuous mode - always check
+        if check_mode == "continuous":
+            return True
+        
+        # Once mode - only check on first attempt
+        if check_mode == "once":
+            return order.check_count <= 1
+        
+        # Integer mode - check up to N times
+        if isinstance(check_mode, int):
+            return order.check_count <= check_mode
+        
+        # Default to continuous for safety
         return True
 
     def _check_tp_sl(self, market_id: str, up_price: float, down_price: float) -> None:

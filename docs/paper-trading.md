@@ -262,6 +262,72 @@ When a limit order is triggered, there's a 70% chance it fills. If it doesn't fi
 
 ---
 
+## Condition Check Mode
+
+Control how many times limit orders check their conditions before giving up:
+
+```python
+config = PaperConfig(
+    check_mode="continuous",  # Check continuously (default)
+    # check_mode="once",      # Only check once
+    # check_mode=5,           # Check exactly 5 times
+)
+```
+
+**Modes:**
+- **"continuous"** (default): Orders check conditions on every price update until filled or cancelled
+- **"once"**: Orders only check conditions once - if not met, they're skipped on subsequent updates
+- **int N**: Orders check conditions up to N times, then stop checking
+
+**Use cases:**
+- **"once"**: For one-time entry signals (e.g., "if BTC > $15k at market open, buy once")
+- **N times**: For limited retry attempts (e.g., "check 3 times for price to cross threshold")
+- **"continuous"**: For standard limit orders that wait indefinitely
+
+### Example: Check Once
+
+```python
+# Only check if BTC price is above $15k once
+config = PaperConfig(check_mode="once")
+
+client = polyalpha.Client(balance=500.0, paper_config=config)
+market = client.markets.latest("BTC", "5m")
+
+# This order will only check its condition once
+order = client.paper.limit(market, side="UP", price=0.92, amount=25.0)
+
+stream = client.stream(market)
+client.paper.attach_stream(stream, market)
+stream.start(background=True)
+# If price doesn't cross 0.92 on the first check, order won't fill even if it crosses later
+```
+
+### Example: Check N Times
+
+```python
+# Check conditions exactly 5 times
+config = PaperConfig(check_mode=5)
+
+client = polyalpha.Client(balance=500.0, paper_config=config)
+
+order = client.paper.limit(market, side="UP", price=0.92, amount=25.0)
+# Order will check up to 5 times, then stop checking even if still open
+```
+
+### Check Count Tracking
+
+Each order tracks how many times it has been checked:
+
+```python
+order = client.paper.limit(market, side="UP", price=0.92, amount=25.0)
+print(order.check_count)  # 0 initially
+
+# After stream runs and checks conditions
+print(order.check_count)  # Increments with each check
+```
+
+---
+
 ## Complete Configuration Example
 
 ```python

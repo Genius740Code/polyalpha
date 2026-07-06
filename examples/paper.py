@@ -32,10 +32,20 @@ parser.add_argument("--custom-fee", type=float, default=0.02, help="Custom fee r
 parser.add_argument("--delay", type=int, default=0, help="Execution delay in milliseconds (default: 0)")
 parser.add_argument("--slippage", type=float, default=0.0, help="Slippage percentage (default: 0.0)")
 parser.add_argument("--fill-prob", type=float, default=1.0, help="Fill probability for limit orders (default: 1.0)")
+parser.add_argument("--check-mode", default="continuous", help="Condition check mode: continuous, once, or integer N (default: continuous)")
 args = parser.parse_args()
 
 # Create paper trading configuration
 from polyalpha.trading.paper import PaperConfig
+
+# Parse check_mode - could be string or integer
+check_mode = args.check_mode
+if check_mode not in ("continuous", "once"):
+    try:
+        check_mode = int(check_mode)
+    except ValueError:
+        check_mode = "continuous"
+
 config = PaperConfig(
     fee_mode=args.fee_mode,
     market_category=args.category,
@@ -43,6 +53,7 @@ config = PaperConfig(
     execution_delay_ms=args.delay,
     slippage_pct=args.slippage,
     fill_probability=args.fill_prob,
+    check_mode=check_mode,
 )
 
 client = polyalpha.Client(balance=args.balance, log_level="INFO", rate_limit=args.rate_limit, paper_config=config)
@@ -59,6 +70,8 @@ if config.slippage_pct > 0:
     print(f"Slippage: {config.slippage_pct:.2%}")
 if config.fill_probability < 1.0:
     print(f"Fill probability: {config.fill_probability:.0%}")
+if config.check_mode != "continuous":
+    print(f"Check mode: {config.check_mode}")
 print()
 
 # ── 1. Discover market ─────────────────────────────────────────────────────────
