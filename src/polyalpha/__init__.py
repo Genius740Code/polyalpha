@@ -33,6 +33,7 @@ from .trading.paper import PaperConfig
 from .report import ReportPreset
 from .bots import Sniper, Tracker
 from .analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator
+from .database import TradeDatabase
 from .core.errors import (
     InsufficientBalance,
     MarketClosed,
@@ -66,6 +67,8 @@ __all__ = [
     "PaperEngine",
     "PaperConfig",
     "ReportPreset",
+    # Database
+    "TradeDatabase",
     # Bots
     "Sniper",
     "Tracker",

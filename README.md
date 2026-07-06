@@ -150,6 +150,74 @@ client.paper.resolve(market, outcome="UP")
 client.paper.summary()
 ```
 
+### Database persistence
+
+Paper trading trades can be automatically saved to a SQLite database for analysis and backtesting:
+
+```python
+# Enable database persistence when creating the client
+client = polyalpha.Client(balance=500.0, db_path="trades.db")
+
+# Or enable it later
+client.paper.enable_database("trades.db")
+
+# Trades are automatically saved when positions are resolved
+client.paper.resolve(market, outcome="UP")  # Trade saved to database
+
+# Access the database directly
+db = client.paper.database
+trades = db.load_all_trades()
+btc_trades = db.load_trades_by_asset("BTC")
+stats = db.get_statistics()
+
+# Disable database
+client.paper.disable_database()
+```
+
+**Direct database access:**
+
+```python
+from polyalpha.database import TradeDatabase
+
+# Create a database instance
+db = TradeDatabase("trades.db")
+
+# Save a trade manually
+db.save_trade(
+    market_slug="btc-updown-5m-1751234700",
+    market_id="abc123",
+    side="UP",
+    entry_price=0.92,
+    exit_price=None,
+    amount=10.0,
+    shares=10.5,
+    fee=0.2,
+    outcome="WON",
+    pnl=5.3,
+    timestamp=datetime.now(timezone.utc)
+)
+
+# Load trades with filters
+all_trades = db.load_all_trades()
+market_trades = db.load_trades_by_market("btc-updown-5m-1751234700")
+asset_trades = db.load_trades_by_asset("BTC")
+side_trades = db.load_trades_by_side("UP")
+outcome_trades = db.load_trades_by_outcome("WON")
+
+# Get statistics
+stats = db.get_statistics()
+print(f"Total trades: {stats.total_trades}")
+print(f"Win rate: {stats.win_rate:.1f}%")
+print(f"Total P&L: ${stats.total_pnl:.2f}")
+```
+
+**Database features:**
+- Automatic trade saving when positions are resolved
+- Filter trades by market, asset, side, outcome, or date range
+- Calculate statistics (win rate, P&L, fees, etc.)
+- No additional dependencies (SQLite is in Python's standard library)
+- Easy to export data for analysis in other tools
+
 ### Advanced order management
 
 The paper trading engine supports advanced order types for professional risk management:
@@ -354,6 +422,7 @@ python examples/stream.py --asset ETH --timeframe 15m --log DEBUG
 python examples/paper.py  --side UP   --amount 25 --limit 0.92
 python examples/advanced_orders.py  # Demonstrates TP/SL, trailing stops, OCO orders
 python examples/weather_config_example.py  # Weather bot configuration usage
+python examples/database_example.py  # Database persistence for paper trading
 ```
 
 ---

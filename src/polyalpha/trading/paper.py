@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from ..report.engine import ReportEngine
+    from ..database.database import TradeDatabase
 
 from ..core import (
     InsufficientBalance,
@@ -233,15 +234,23 @@ class PaperEngine:
         Starting USDC balance (default: 100.0)
     config : PaperConfig, optional
         Configuration for fees, delays, slippage, and fill probability
+    db_path : str, optional
+        Path to SQLite database file for trade persistence. If provided,
+        trades will be automatically saved when positions are resolved.
     """
 
-    def __init__(self, balance: float = 100.0, config: Optional[PaperConfig] = None):
+    def __init__(self, balance: float = 100.0, config: Optional[PaperConfig] = None, db_path: Optional[str] = None):
         self._balance:   float                       = float(balance)
         self._orders:    dict[str, PaperOrder]       = {}
         self._positions: dict[str, PaperPosition]    = {}   # key: "{market_id}:{side}"
         self._config:    PaperConfig                  = config or PaperConfig()
         # Lazy-initialised in the report property to avoid circular imports
         self._report: Optional["ReportEngine"] = None
+        # Optional database for trade persistence
+        self._db: Optional["TradeDatabase"] = None
+        self._db_enabled: bool = False
+        if db_path:
+            self.enable_database(db_path)
 
     @property
     def report(self) -> "ReportEngine":
@@ -274,6 +283,85 @@ class PaperEngine:
         """Update the paper trading configuration."""
         self._config = config
         log.info("Paper: configuration updated")
+
+    # ── Database Integration ─────────────────────────────────────────────────────
+
+    def enable_database(self, db_path: str) -> None:
+        """
+        Enable database persistence for trades.
+        
+        Parameters
+        ----------
+        db_path : str
+            Path to SQLite database file. Will be created if it doesn't exist.
+        
+        Example
+        -------
+        >>> client.paper.enable_database("trades.db")
+        """
+        try:
+            from ..database.database import TradeDatabase
+            self._db = TradeDatabase(db_path)
+            self._db_enabled = True
+            log.info("Paper: database enabled at %s", db_path)
+        except ImportError:
+            log.error("Paper: database module not available. Install required dependencies.")
+            self._db_enabled = False
+
+    def disable_database(self) -> None:
+        """Disable database persistence and close connection."""
+        if self._db:
+            self._db.close()
+            self._db = None
+        self._db_enabled = False
+        log.info("Paper: database disabled")
+
+    @property
+    def database(self) -> Optional["TradeDatabase"]:
+        """Get the database instance if enabled, None otherwise."""
+        return self._db if self._db_enabled else None
+
+    def _save_trade_to_db(self, position: PaperPosition) -> None:
+        """
+        Save a resolved position as a trade to the database.
+        
+        This is called automatically when a position is resolved if database is enabled.
+        """
+        if not self._db_enabled or self._db is None:
+            return
+
+        try:
+            # Calculate total amount, shares, and fee from orders
+            total_amount = 0.0
+            total_shares = position.shares
+            total_fee = 0.0
+            entry_price = position.avg_price
+
+            for order_id in position.order_ids:
+                order = self._orders.get(order_id)
+                if order:
+                    total_amount += order.amount
+                    total_fee += order.fee
+                    if order.status == "filled":
+                        entry_price = order.price
+
+            # Save to database
+            self._db.save_trade(
+                market_slug=position.slug,
+                market_id=position.market_id,
+                side=position.side,
+                entry_price=entry_price,
+                exit_price=None,
+                amount=total_amount,
+                shares=total_shares,
+                fee=total_fee,
+                outcome=position.outcome,
+                pnl=position.pnl,
+                timestamp=datetime.now(timezone.utc),
+            )
+            log.debug("Paper: trade saved to database for %s %s", position.slug, position.side)
+        except Exception as exc:
+            log.error("Paper: failed to save trade to database: %s", exc)
 
     # ── Fee Calculation ───────────────────────────────────────────────────────────
 
@@ -768,6 +856,8 @@ class PaperEngine:
                 "Paper: closed position %s %s — proceeds $%.2f, balance $%.2f",
                 market.slug, side, net_amount, self._balance,
             )
+            # Save trade to database if enabled
+            self._save_trade_to_db(position)
         else:
             log.info(
                 "Paper: reduced position %s %s by %.2f shares — proceeds $%.2f",
@@ -947,6 +1037,8 @@ class PaperEngine:
                     "Paper: resolved %s → %s  payout=$%.2f  balance=$%.2f",
                     pos.slug, pos.outcome, payout, self._balance,
                 )
+                # Save trade to database if enabled
+                self._save_trade_to_db(pos)
 
     # ── Stream integration ─────────────────────────────────────────────────────
 

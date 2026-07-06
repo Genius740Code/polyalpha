@@ -39,6 +39,7 @@ class Client:
     log_level          : Python logging level string, e.g. "DEBUG", "INFO", "WARNING".
     rate_limit         : Max API requests per second (default None = unlimited).
     paper_config       : PaperConfig for paper trading realism options (default None).
+    db_path            : Path to SQLite database file for trade persistence (default None).
     openrouter_api_key : OpenRouter API key for AI features (default None = disabled).
 
     Attributes
@@ -63,6 +64,7 @@ class Client:
         log_level: str   = "WARNING",
         rate_limit: int | None = None,
         paper_config: PaperConfig | None = None,
+        db_path: str | None = None,
         openrouter_api_key: str | None = None,
     ):
         # Configure library-specific logger without affecting global logging
@@ -70,7 +72,7 @@ class Client:
         self._log.setLevel(getattr(logging, log_level.upper(), logging.WARNING))
 
         self.markets = MarketClient(timeout=timeout, retries=retries, rate_limit=rate_limit)
-        self.paper   = PaperEngine(balance=balance, config=paper_config)
+        self.paper   = PaperEngine(balance=balance, config=paper_config, db_path=db_path)
         self.ai      = OpenRouterClient(api_key=openrouter_api_key) if openrouter_api_key else None
 
         self._timeout = timeout
