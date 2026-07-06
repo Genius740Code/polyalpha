@@ -292,7 +292,8 @@ def generate_html(
     ts = generated_at.strftime("%Y-%m-%d %H:%M UTC")
     n  = len(trades)
     balance = metrics.get("net_pnl", {})
-    final_balance = initial_balance + (balance.get("usd", 0) if isinstance(balance, dict) else 0)
+    net_pnl_usd = balance.get("usd", 0) if isinstance(balance, dict) else 0
+    final_balance = initial_balance + net_pnl_usd
 
     # Metric cards HTML
     metric_rows = []

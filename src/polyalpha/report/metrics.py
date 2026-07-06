@@ -574,7 +574,7 @@ def _kurtosis(returns: list[float]) -> float:
     m4 = sum((r - mean_r) ** 4 for r in returns) / n
     # Population excess kurtosis
     kurt = m4 / std_r ** 4 - 3.0
-    # Sample correction
+    # Sample bias correction (Fisher's kurtosis)
     correction = ((n - 1) / ((n - 2) * (n - 3))) * ((n + 1) * kurt + 6)
     return round(correction, 4)
 
@@ -589,7 +589,7 @@ def _var(returns: list[float], alpha: float) -> float:
     if not returns:
         return float("nan")
     sorted_r = sorted(returns)
-    idx = max(0, int(math.floor(alpha * len(sorted_r))) - 1)
+    idx = max(0, int(math.ceil(alpha * len(sorted_r))) - 1)
     return round(abs(sorted_r[idx]), 6)
 
 
@@ -603,7 +603,7 @@ def _cvar(returns: list[float], alpha: float) -> float:
     if not returns:
         return float("nan")
     sorted_r = sorted(returns)
-    cutoff_idx = max(1, int(math.floor(alpha * len(sorted_r))))
+    cutoff_idx = max(1, int(math.ceil(alpha * len(sorted_r))))
     tail = sorted_r[:cutoff_idx]
     if not tail:
         return float("nan")

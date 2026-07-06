@@ -112,7 +112,7 @@ class ReportEngine:
         _trades  = self.trades()
         _metrics = compute_metrics(
             trades          = _trades,
-            initial_balance = self._paper._balance + sum(t.pnl for t in _trades),
+            initial_balance = self._initial_balance(_trades),
             metric_keys     = _preset.metrics,
             risk_free_rate  = self._risk_free_rate,
         )

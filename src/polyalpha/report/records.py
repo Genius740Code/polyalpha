@@ -162,7 +162,7 @@ def extract_trades(engine: "PaperEngine") -> list[TradeRecord]:
         # PnL = proceeds - cost_basis  (cost_basis = amount_in net of fee = shares * avg_price)
         cost_basis = total_shares * entry_price  # same as pos.cost_basis
         pnl        = round(proceeds - cost_basis, 6)
-        pnl_pct    = round((pnl / total_amount) * 100, 4) if total_amount > 0 else 0.0
+        pnl_pct    = round((pnl / cost_basis) * 100, 4) if cost_basis > 0 else 0.0
 
         # ── Fill type ─────────────────────────────────────────────────────────
         limit_count  = sum(1 for o in fill_orders if o.is_limit)
@@ -244,8 +244,8 @@ def build_equity_curve(
     equity: list[float] = []
     running = initial_balance
 
-    # Prepend origin point
-    timestamps.append(events[0][0])
+    # Prepend origin point at first trade's entry time
+    timestamps.append(trades[0].entry_time)
     equity.append(initial_balance)
 
     for ts, pnl in events:
