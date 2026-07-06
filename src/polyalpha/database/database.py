@@ -16,7 +16,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 log = logging.getLogger(__name__)
 
@@ -423,6 +423,240 @@ class TradeDatabase:
             trades.append(self._row_to_trade_record(row))
         
         return trades
+    
+    def load_trades(
+        self,
+        filters: Optional[Dict[str, Any]] = None,
+        sort_by: str = "timestamp",
+        sort_order: str = "desc",
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> List[TradeRecord]:
+        """
+        Load trades with advanced filtering, sorting, and pagination.
+        
+        Parameters
+        ----------
+        filters : dict, optional
+            Dictionary of filter criteria. Supported keys:
+            - asset: str (e.g., "BTC")
+            - side: str ("UP" or "DOWN")
+            - outcome: str ("WON", "LOST", "CLOSED")
+            - min_pnl: float (minimum P&L)
+            - max_pnl: float (maximum P&L)
+            - min_amount: float (minimum amount)
+            - max_amount: float (maximum amount)
+            - market_slug: str (exact match)
+            - market_id: str (exact match)
+        sort_by : str, optional
+            Field to sort by (default: "timestamp").
+            Options: "timestamp", "pnl", "amount", "entry_price", "shares", "fee"
+        sort_order : str, optional
+            Sort order: "asc" or "desc" (default: "desc").
+        limit : int, optional
+            Maximum number of trades to return (default: None = no limit).
+        offset : int, optional
+            Number of trades to skip (default: 0).
+        
+        Returns
+        -------
+        List[TradeRecord]
+            Filtered and sorted trades.
+        
+        Example
+        -------
+        >>> trades = db.load_trades(
+        ...     filters={"asset": "BTC", "side": "UP", "outcome": "WON"},
+        ...     sort_by="pnl",
+        ...     sort_order="desc",
+        ...     limit=10
+        ... )
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Build query with filters
+        query = """
+            SELECT id, market_slug, market_id, side, entry_price, exit_price,
+                   amount, shares, fee, outcome, pnl, timestamp
+            FROM trades
+        """
+        
+        params = []
+        where_clauses = []
+        
+        if filters:
+            # Asset filter (pattern match on market_slug)
+            if "asset" in filters:
+                pattern = f"{filters['asset'].lower()}%"
+                where_clauses.append("LOWER(market_slug) LIKE ?")
+                params.append(pattern)
+            
+            # Side filter
+            if "side" in filters:
+                where_clauses.append("side = ?")
+                params.append(filters["side"].upper())
+            
+            # Outcome filter
+            if "outcome" in filters:
+                where_clauses.append("outcome = ?")
+                params.append(filters["outcome"].upper())
+            
+            # P&L range filters
+            if "min_pnl" in filters:
+                where_clauses.append("pnl >= ?")
+                params.append(float(filters["min_pnl"]))
+            
+            if "max_pnl" in filters:
+                where_clauses.append("pnl <= ?")
+                params.append(float(filters["max_pnl"]))
+            
+            # Amount range filters
+            if "min_amount" in filters:
+                where_clauses.append("amount >= ?")
+                params.append(float(filters["min_amount"]))
+            
+            if "max_amount" in filters:
+                where_clauses.append("amount <= ?")
+                params.append(float(filters["max_amount"]))
+            
+            # Exact market_slug filter
+            if "market_slug" in filters:
+                where_clauses.append("market_slug = ?")
+                params.append(filters["market_slug"])
+            
+            # Exact market_id filter
+            if "market_id" in filters:
+                where_clauses.append("market_id = ?")
+                params.append(filters["market_id"])
+        
+        # Add WHERE clause if filters exist
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+        
+        # Validate sort_by field
+        valid_sort_fields = {
+            "timestamp", "pnl", "amount", "entry_price", "shares", "fee",
+            "market_slug", "side", "outcome"
+        }
+        if sort_by not in valid_sort_fields:
+            raise ValueError(
+                f"Invalid sort_by field '{sort_by}'. "
+                f"Valid options: {sorted(valid_sort_fields)}"
+            )
+        
+        # Validate sort_order
+        sort_order = sort_order.lower()
+        if sort_order not in ("asc", "desc"):
+            raise ValueError(f"sort_order must be 'asc' or 'desc', got '{sort_order}'")
+        
+        # Add ORDER BY clause
+        query += f" ORDER BY {sort_by} {sort_order.upper()}"
+        
+        # Add LIMIT and OFFSET for pagination
+        if limit is not None:
+            if limit <= 0:
+                raise ValueError(f"limit must be positive, got {limit}")
+            query += " LIMIT ?"
+            params.append(int(limit))
+        
+        if offset > 0:
+            query += " OFFSET ?"
+            params.append(int(offset))
+        
+        # Execute query
+        cursor.execute(query, params)
+        
+        # Convert rows to TradeRecord objects
+        trades = []
+        for row in cursor.fetchall():
+            trades.append(self._row_to_trade_record(row))
+        
+        log.debug(
+            "Loaded %d trades with filters=%s, sort_by=%s, limit=%s, offset=%d",
+            len(trades), filters, sort_by, limit, offset
+        )
+        return trades
+    
+    def aggregate_trades(
+        self,
+        group_by: str = "asset",
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Aggregate trades by a specified field.
+        
+        Parameters
+        ----------
+        group_by : str
+            Field to group by. Options: "asset", "side", "outcome", "market_slug".
+        filters : dict, optional
+            Same filter criteria as load_trades().
+        
+        Returns
+        -------
+        dict
+            Dictionary with group keys as keys and statistics as values.
+            Each value contains: count, total_pnl, avg_pnl, wins, losses, win_rate.
+        
+        Example
+        -------
+        >>> by_asset = db.aggregate_trades(group_by="asset")
+        >>> print(by_asset["BTC"])
+        >>> {'count': 10, 'total_pnl': 50.0, 'avg_pnl': 5.0, 'wins': 6, 'losses': 4, 'win_rate': 60.0}
+        """
+        # Validate group_by field
+        valid_group_fields = {"asset", "side", "outcome", "market_slug"}
+        if group_by not in valid_group_fields:
+            raise ValueError(
+                f"Invalid group_by field '{group_by}'. "
+                f"Valid options: {sorted(valid_group_fields)}"
+            )
+        
+        # Load trades with filters
+        trades = self.load_trades(filters=filters)
+        
+        # Group trades
+        groups: Dict[str, List[TradeRecord]] = {}
+        
+        for trade in trades:
+            if group_by == "asset":
+                # Extract asset from market_slug (first part before dash)
+                key = trade.market_slug.split("-")[0].upper()
+            elif group_by == "side":
+                key = trade.side
+            elif group_by == "outcome":
+                key = trade.outcome or "PENDING"
+            elif group_by == "market_slug":
+                key = trade.market_slug
+            else:
+                key = str(getattr(trade, group_by, "unknown"))
+            
+            if key not in groups:
+                groups[key] = []
+            groups[key].append(trade)
+        
+        # Calculate statistics for each group
+        results = {}
+        for key, group_trades in groups.items():
+            count = len(group_trades)
+            total_pnl = sum(t.pnl for t in group_trades)
+            avg_pnl = total_pnl / count if count > 0 else 0.0
+            wins = sum(1 for t in group_trades if t.outcome == "WON")
+            losses = sum(1 for t in group_trades if t.outcome == "LOST")
+            win_rate = (wins / count * 100) if count > 0 else 0.0
+            
+            results[key] = {
+                "count": count,
+                "total_pnl": total_pnl,
+                "avg_pnl": avg_pnl,
+                "wins": wins,
+                "losses": losses,
+                "win_rate": win_rate,
+            }
+        
+        log.debug("Aggregated %d trades by %s into %d groups", len(trades), group_by, len(results))
+        return results
     
     def get_statistics(self) -> TradeStatistics:
         """
