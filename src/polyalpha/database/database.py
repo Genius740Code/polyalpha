@@ -40,6 +40,7 @@ class TradeRecord:
     outcome: Optional[str]  # "WON" | "LOST" | "CLOSED" | None
     pnl: float
     timestamp: datetime
+    market_session: Optional[str] = None  # "london" | "new_york" | "asia" | "sydney" | None
     
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -56,6 +57,7 @@ class TradeRecord:
             "outcome": self.outcome,
             "pnl": self.pnl,
             "timestamp": self.timestamp.isoformat(),
+            "market_session": self.market_session,
         }
 
 
@@ -169,6 +171,7 @@ class TradeDatabase:
                 outcome TEXT,
                 pnl REAL NOT NULL,
                 timestamp TEXT NOT NULL,
+                market_session TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -201,6 +204,12 @@ class TradeDatabase:
             ON trades(market_id, side, timestamp)
         """)
         
+        # Create index for market session
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_market_session 
+            ON trades(market_session)
+        """)
+        
         # Initialize schema version if not exists
         cursor.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (1)")
         
@@ -220,6 +229,7 @@ class TradeDatabase:
         outcome: Optional[str],
         pnl: float,
         timestamp: datetime,
+        market_session: Optional[str] = None,
     ) -> None:
         """
         Validate trade data before saving.
@@ -261,6 +271,12 @@ class TradeDatabase:
             raise ValueError(f"timestamp must be a datetime object, got {type(timestamp)}")
         if timestamp.tzinfo is None:
             raise ValueError("timestamp must be timezone-aware")
+        
+        # Validate market_session if provided
+        if market_session is not None:
+            valid_sessions = {"london", "new_york", "asia", "sydney"}
+            if market_session not in valid_sessions:
+                raise ValueError(f"market_session must be one of {valid_sessions}, got '{market_session}'")
     
     def save_trade(
         self,
@@ -275,6 +291,7 @@ class TradeDatabase:
         outcome: Optional[str],
         pnl: float,
         timestamp: datetime,
+        market_session: Optional[str] = None,
         check_duplicates: bool = True,
     ) -> int:
         """
@@ -304,6 +321,8 @@ class TradeDatabase:
             Profit or loss in USDC.
         timestamp : datetime
             Trade timestamp (UTC).
+        market_session : str or None, optional
+            Market session name (e.g., "london", "new_york", "asia", "sydney").
         check_duplicates : bool, optional
             Whether to check for duplicate trades (default: True).
         
@@ -320,7 +339,7 @@ class TradeDatabase:
         # Validate data
         self._validate_trade_data(
             market_slug, market_id, side, entry_price, exit_price,
-            amount, shares, fee, outcome, pnl, timestamp
+            amount, shares, fee, outcome, pnl, timestamp, market_session
         )
         
         # Check for duplicates if enabled
@@ -339,11 +358,11 @@ class TradeDatabase:
         cursor.execute("""
             INSERT INTO trades (
                 market_slug, market_id, side, entry_price, exit_price,
-                amount, shares, fee, outcome, pnl, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                amount, shares, fee, outcome, pnl, timestamp, market_session
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             market_slug, market_id, side, entry_price, exit_price,
-            amount, shares, fee, outcome, pnl, timestamp_str
+            amount, shares, fee, outcome, pnl, timestamp_str, market_session
         ))
         
         conn.commit()
@@ -364,7 +383,7 @@ class TradeDatabase:
         ----------
         trades : list of dict
             List of trade dictionaries with keys: market_slug, market_id, side,
-            entry_price, exit_price, amount, shares, fee, outcome, pnl, timestamp.
+            entry_price, exit_price, amount, shares, fee, outcome, pnl, timestamp, market_session.
         check_duplicates : bool, optional
             Whether to check for duplicate trades (default: True).
         
@@ -398,6 +417,7 @@ class TradeDatabase:
                 outcome=trade.get("outcome"),
                 pnl=trade["pnl"],
                 timestamp=trade["timestamp"],
+                market_session=trade.get("market_session"),
             )
         
         # Check for duplicates if enabled
@@ -428,6 +448,7 @@ class TradeDatabase:
                 trade.get("outcome"),
                 trade["pnl"],
                 trade["timestamp"].isoformat(),
+                trade.get("market_session"),
             ))
         
         # Begin transaction
@@ -438,8 +459,8 @@ class TradeDatabase:
             cursor.executemany("""
                 INSERT INTO trades (
                     market_slug, market_id, side, entry_price, exit_price,
-                    amount, shares, fee, outcome, pnl, timestamp
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    amount, shares, fee, outcome, pnl, timestamp, market_session
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, trade_data)
             
             conn.commit()
@@ -505,6 +526,8 @@ class TradeDatabase:
             Profit or loss in USDC.
         timestamp : datetime
             Trade timestamp (UTC).
+        market_session : str or None, optional
+            Market session name (e.g., "london", "new_york", "asia", "sydney").
         check_duplicates : bool, optional
             Whether to check for duplicate trades (default: True).
         
@@ -521,7 +544,7 @@ class TradeDatabase:
         # Validate data
         self._validate_trade_data(
             market_slug, market_id, side, entry_price, exit_price,
-            amount, shares, fee, outcome, pnl, timestamp
+            amount, shares, fee, outcome, pnl, timestamp, market_session
         )
         
         # Check for duplicates if enabled
@@ -540,11 +563,11 @@ class TradeDatabase:
         cursor.execute("""
             INSERT INTO trades (
                 market_slug, market_id, side, entry_price, exit_price,
-                amount, shares, fee, outcome, pnl, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                amount, shares, fee, outcome, pnl, timestamp, market_session
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             market_slug, market_id, side, entry_price, exit_price,
-            amount, shares, fee, outcome, pnl, timestamp_str
+            amount, shares, fee, outcome, pnl, timestamp_str, market_session
         ))
         
         conn.commit()
@@ -864,7 +887,7 @@ class TradeDatabase:
         
         cursor.execute("""
             SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                   amount, shares, fee, outcome, pnl, timestamp
+                   amount, shares, fee, outcome, pnl, timestamp, market_session
             FROM trades
             ORDER BY timestamp DESC
         """)
@@ -895,7 +918,7 @@ class TradeDatabase:
         
         cursor.execute("""
             SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                   amount, shares, fee, outcome, pnl, timestamp
+                   amount, shares, fee, outcome, pnl, timestamp, market_session
             FROM trades
             WHERE market_slug = ?
             ORDER BY timestamp DESC
@@ -928,7 +951,7 @@ class TradeDatabase:
         pattern = f"{asset.lower()}%"
         cursor.execute("""
             SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                   amount, shares, fee, outcome, pnl, timestamp
+                   amount, shares, fee, outcome, pnl, timestamp, market_session
             FROM trades
             WHERE LOWER(market_slug) LIKE ?
             ORDER BY timestamp DESC
@@ -959,7 +982,7 @@ class TradeDatabase:
         
         cursor.execute("""
             SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                   amount, shares, fee, outcome, pnl, timestamp
+                   amount, shares, fee, outcome, pnl, timestamp, market_session
             FROM trades
             WHERE side = ?
             ORDER BY timestamp DESC
@@ -990,11 +1013,42 @@ class TradeDatabase:
         
         cursor.execute("""
             SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                   amount, shares, fee, outcome, pnl, timestamp
+                   amount, shares, fee, outcome, pnl, timestamp, market_session
             FROM trades
             WHERE outcome = ?
             ORDER BY timestamp DESC
         """, (outcome.upper(),))
+        
+        trades = []
+        for row in cursor.fetchall():
+            trades.append(self._row_to_trade_record(row))
+        
+        return trades
+    
+    def load_trades_by_market_session(self, market_session: str) -> List[TradeRecord]:
+        """
+        Load trades for a specific market session.
+        
+        Parameters
+        ----------
+        market_session : str
+            Market session name ("london", "new_york", "asia", "sydney").
+        
+        Returns
+        -------
+        List[TradeRecord]
+            Trades for the specified market session.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, market_slug, market_id, side, entry_price, exit_price,
+                   amount, shares, fee, outcome, pnl, timestamp, market_session
+            FROM trades
+            WHERE market_session = ?
+            ORDER BY timestamp DESC
+        """, (market_session,))
         
         trades = []
         for row in cursor.fetchall():
@@ -1027,7 +1081,7 @@ class TradeDatabase:
         
         cursor.execute("""
             SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                   amount, shares, fee, outcome, pnl, timestamp
+                   amount, shares, fee, outcome, pnl, timestamp, market_session
             FROM trades
             WHERE timestamp >= ? AND timestamp <= ?
             ORDER BY timestamp DESC
@@ -1592,6 +1646,9 @@ class TradeDatabase:
         if timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=timezone.utc)
         
+        # Handle market_session - may not exist in older databases
+        market_session = row.get("market_session")
+        
         return TradeRecord(
             id=row["id"],
             market_slug=row["market_slug"],
@@ -1605,4 +1662,5 @@ class TradeDatabase:
             outcome=row["outcome"],
             pnl=row["pnl"],
             timestamp=timestamp,
+            market_session=market_session,
         )

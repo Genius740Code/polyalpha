@@ -46,9 +46,10 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Optional
+from typing import Callable, Optional, List
 
 from ..core import ASSETS, TIMEFRAME_SECONDS, Market
+from ..core.market_sessions import validate_session_list, get_session
 from ..core.constants import (
     DEFAULT_WINDOW_SECONDS,
     DEFAULT_MAX_CONSECUTIVE_LOSSES,
@@ -93,6 +94,9 @@ class SniperConfig:
     max_position_size: Optional[float] = None
     max_consecutive_losses: Optional[int] = DEFAULT_MAX_CONSECUTIVE_LOSSES
     max_trades: Optional[int] = None
+
+    # Market session filtering
+    allowed_market_sessions: Optional[List[str]] = None  # e.g., ["london", "new_york"]
 
     # Performance tuning
     pre_window_buffer: int = DEFAULT_PRE_WINDOW_BUFFER
@@ -186,6 +190,10 @@ class SniperConfig:
                 f"post_window_timeout must be positive, got {self.post_window_timeout}"
             )
 
+        # Validate allowed_market_sessions
+        if self.allowed_market_sessions is not None:
+            self.allowed_market_sessions = validate_session_list(self.allowed_market_sessions)
+
 
 # ── Statistics ─────────────────────────────────────────────────────────────────
 
@@ -201,6 +209,7 @@ class TradeRecord:
     outcome: Optional[str]  # "WON" | "LOST" | None
     pnl: float
     timestamp: datetime
+    market_session: Optional[str] = None  # "london" | "new_york" | "asia" | "sydney" | None
 
 
 @dataclass
@@ -560,9 +569,43 @@ class Sniper:
             time.sleep(MARKET_DISCOVERY_BACKOFF)
             return False
 
+    def _check_market_session(self) -> bool:
+        """
+        Check if current time is within an allowed market session.
+        
+        Returns True if trading should proceed (either no filtering or
+        current session is allowed), False if should skip.
+        """
+        if self.config.allowed_market_sessions is None:
+            # No session filtering enabled
+            return True
+        
+        now = datetime.now(timezone.utc)
+        current_session = get_session(now)
+        
+        if current_session is None:
+            # Not in any session
+            self._log.debug("Not in any market session, skipping trade")
+            return False
+        
+        if current_session not in self.config.allowed_market_sessions:
+            self._log.info(
+                "Current session '%s' not in allowed sessions %s, skipping trade",
+                current_session,
+                self.config.allowed_market_sessions
+            )
+            return False
+        
+        self._log.debug("Current session '%s' is allowed", current_session)
+        return True
+
     def _run_single_cycle(self) -> None:
         """Execute a single market cycle (discover → trade → resolve)."""
         if self._check_trade_limits():
+            return
+
+        if not self._check_market_session():
+            time.sleep(60)  # Wait before checking again
             return
 
         if not self._discover_market():
@@ -814,6 +857,9 @@ class Sniper:
         if self._filled_order and self._filled_order.filled_at:
             timestamp = self._filled_order.filled_at
 
+        # Determine market session
+        market_session = get_session(timestamp)
+
         trade = TradeRecord(
             market_slug=self._market.slug,
             side=self.config.side,
@@ -824,6 +870,7 @@ class Sniper:
             outcome=position.outcome,
             pnl=position.pnl,
             timestamp=timestamp,
+            market_session=market_session,
         )
 
         self._stats.add_trade(trade)

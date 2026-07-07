@@ -48,6 +48,17 @@ from .errors import (
     StreamDisconnected,
 )
 from .market import Market
+from .market_sessions import (
+    MarketSession,
+    MARKET_SESSIONS,
+    SESSION_ALIASES,
+    normalize_session_name,
+    get_session,
+    get_all_sessions,
+    is_session_active,
+    get_active_sessions,
+    validate_session_list,
+)
 
 __all__ = [
     "ASSETS",
@@ -96,4 +107,13 @@ __all__ = [
     "PolyalphaError",
     "StreamDisconnected",
     "Market",
+    "MarketSession",
+    "MARKET_SESSIONS",
+    "SESSION_ALIASES",
+    "normalize_session_name",
+    "get_session",
+    "get_all_sessions",
+    "is_session_active",
+    "get_active_sessions",
+    "validate_session_list",
 ]
