@@ -44,6 +44,14 @@ Create a WebSocket price stream for a market.
 | `market` | `Market` | — | Market from `client.markets.latest()` |
 | `retries` | `int \| None` | `None` | Override reconnect budget; uses client default if `None` |
 
+#### `client.orderbook(market) → OrderBookFeed`
+
+Create a real-time order book feed for a market.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `market` | `Market` | — | Market from `client.markets.latest()` |
+
 ---
 
 ## polyalpha.MarketClient

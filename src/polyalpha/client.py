@@ -25,6 +25,7 @@ from .markets import MarketClient
 from .stream import Stream
 from .trading import PaperEngine
 from .trading.paper import PaperConfig
+from .orderbook import ClobBookClient, OrderBookFeed
 
 
 class Client:
@@ -74,6 +75,7 @@ class Client:
         self.markets = MarketClient(timeout=timeout, retries=retries, rate_limit=rate_limit)
         self.paper   = PaperEngine(balance=balance, config=paper_config, db_path=db_path)
         self.ai      = OpenRouterClient(api_key=openrouter_api_key) if openrouter_api_key else None
+        self._clob   = ClobBookClient(timeout=timeout, retries=retries, rate_limit=rate_limit)
 
         self._timeout = timeout
         self._retries = retries
@@ -81,6 +83,7 @@ class Client:
     def close(self) -> None:
         """Clean up resources (HTTP connections, etc.)."""
         self.markets.close()
+        self._clob.close()
         if self.ai:
             self.ai.close()
 
@@ -120,3 +123,18 @@ class Client:
             market  = market,
             retries = retries if retries is not None else self._retries,
         )
+
+    def orderbook(self, market: Market) -> OrderBookFeed:
+        """
+        Create a live order book feed for *market*.
+
+        Fetches REST snapshots and accepts WebSocket updates via
+        ``feed.attach_stream(client.stream(market))``.
+
+        Example
+        -------
+        >>> feed = client.orderbook(market)
+        >>> feed.refresh()
+        >>> print(feed.up.mid_price if feed.up else None)
+        """
+        return OrderBookFeed(market=market, clob=self._clob)

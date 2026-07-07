@@ -4,6 +4,7 @@ import zoneinfo
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 GAMMA_API = "https://gamma-api.polymarket.com"
+CLOB_API  = "https://clob.polymarket.com"
 CLOB_WS   = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 
 # ── Timeframes ─────────────────────────────────────────────────────────────────

@@ -20,3 +20,11 @@ class InsufficientBalance(PolyalphaError):
 
 class OrderNotFound(PolyalphaError):
     """No paper order matched the given ID."""
+
+
+class OrderBookError(PolyalphaError):
+    """Order book fetch or parse failed."""
+
+
+class OrderBookNotFound(OrderBookError):
+    """No order book data available for the requested token."""

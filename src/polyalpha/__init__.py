@@ -34,11 +34,32 @@ from .report import ReportPreset
 from .bots import Sniper, Tracker
 from .analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator
 from .database import TradeDatabase
+from .orderbook import (
+    BacktestEngine,
+    BookLevel,
+    BookSide,
+    ClobBookClient,
+    FillEstimate,
+    ImbalanceStrategy,
+    MarketOrderBook,
+    MomentumStrategy,
+    OrderBookFeed,
+    OrderBookManager,
+    OrderBookSnapshot,
+    RiskManager,
+    SpreadStrategy,
+    Strategy,
+    Trade as BookTrade,
+    estimate_fill,
+    book_summary,
+)
 from .core.errors import (
     InsufficientBalance,
     MarketClosed,
     MarketNotFound,
     OrderNotFound,
+    OrderBookError,
+    OrderBookNotFound,
     PolyalphaError,
     StreamDisconnected,
 )
@@ -69,6 +90,24 @@ __all__ = [
     "ReportPreset",
     # Database
     "TradeDatabase",
+    # Order book
+    "ClobBookClient",
+    "OrderBookFeed",
+    "OrderBookManager",
+    "OrderBookSnapshot",
+    "MarketOrderBook",
+    "BookLevel",
+    "BookSide",
+    "FillEstimate",
+    "BookTrade",
+    "Strategy",
+    "ImbalanceStrategy",
+    "SpreadStrategy",
+    "MomentumStrategy",
+    "BacktestEngine",
+    "RiskManager",
+    "estimate_fill",
+    "book_summary",
     # Bots
     "Sniper",
     "Tracker",
@@ -88,6 +127,8 @@ __all__ = [
     "StreamDisconnected",
     "InsufficientBalance",
     "OrderNotFound",
+    "OrderBookError",
+    "OrderBookNotFound",
     "AIError",
     "AIAuthenticationError",
     "AIModelNotFoundError",
