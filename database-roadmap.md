@@ -101,19 +101,30 @@ by_asset = db.aggregate_trades(group_by="asset")
 by_timeframe = db.aggregate_trades(group_by="timeframe")
 ```
 
-#### 1.2 Export Formats
+#### 1.2 Export Formats ✅ (COMPLETED)
 - **CSV Export**: Built-in CSV export functionality
 - **JSON Export**: Enhanced JSON with metadata
 - **Parquet Export**: For data science workflows
 - **Excel Export**: For business users
 
 ```python
-# Proposed API
+# Implemented API
 db.export_csv("trades.csv")
 db.export_json("trades.json")
 db.export_parquet("trades.parquet")
 db.export_excel("trades.xlsx")
+
+# With filters
+db.export_csv("btc_trades.csv", filters={"asset": "BTC"})
+db.export_json("won_trades.json", filters={"outcome": "WON"})
 ```
+
+**Implementation Notes:**
+- CSV and JSON use only Python standard library (no dependencies)
+- Parquet requires `pyarrow` (optional dependency)
+- Excel requires `openpyxl` (optional dependency)
+- All export methods support the same filter criteria as `load_trades()`
+- JSON export includes metadata (export timestamp, total trades, database path)
 
 #### 1.3 Data Validation
 - **Schema Validation**: Ensure data integrity

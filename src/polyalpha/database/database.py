@@ -11,6 +11,8 @@ and retrieving paper trading trades. It supports:
 
 from __future__ import annotations
 
+import csv
+import json
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -688,6 +690,219 @@ class TradeDatabase:
             avg_entry_price=avg_entry_price,
             avg_pnl_per_trade=avg_pnl_per_trade,
         )
+    
+    def export_csv(self, filepath: str | Path, filters: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Export trades to CSV format.
+        
+        Parameters
+        ----------
+        filepath : str or Path
+            Path to the output CSV file.
+        filters : dict, optional
+            Filter criteria to apply before export (same as load_trades()).
+        
+        Example
+        -------
+        >>> db.export_csv("trades.csv")
+        >>> db.export_csv("btc_trades.csv", filters={"asset": "BTC"})
+        """
+        filepath = Path(filepath)
+        trades = self.load_trades(filters=filters)
+        
+        if not trades:
+            log.warning("No trades to export to CSV")
+            return
+        
+        # Define CSV columns
+        fieldnames = [
+            "id", "market_slug", "market_id", "side", "entry_price",
+            "exit_price", "amount", "shares", "fee", "outcome", "pnl", "timestamp"
+        ]
+        
+        with filepath.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            for trade in trades:
+                row = {
+                    "id": trade.id,
+                    "market_slug": trade.market_slug,
+                    "market_id": trade.market_id,
+                    "side": trade.side,
+                    "entry_price": trade.entry_price,
+                    "exit_price": trade.exit_price,
+                    "amount": trade.amount,
+                    "shares": trade.shares,
+                    "fee": trade.fee,
+                    "outcome": trade.outcome,
+                    "pnl": trade.pnl,
+                    "timestamp": trade.timestamp.isoformat(),
+                }
+                writer.writerow(row)
+        
+        log.info("Exported %d trades to CSV: %s", len(trades), filepath)
+    
+    def export_json(self, filepath: str | Path, filters: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Export trades to JSON format with metadata.
+        
+        Parameters
+        ----------
+        filepath : str or Path
+            Path to the output JSON file.
+        filters : dict, optional
+            Filter criteria to apply before export (same as load_trades()).
+        
+        Example
+        -------
+        >>> db.export_json("trades.json")
+        >>> db.export_json("won_trades.json", filters={"outcome": "WON"})
+        """
+        filepath = Path(filepath)
+        trades = self.load_trades(filters=filters)
+        
+        if not trades:
+            log.warning("No trades to export to JSON")
+            return
+        
+        # Create export with metadata
+        export_data = {
+            "metadata": {
+                "export_timestamp": datetime.now(timezone.utc).isoformat(),
+                "total_trades": len(trades),
+                "database_path": str(self.db_path),
+            },
+            "trades": [trade.to_dict() for trade in trades]
+        }
+        
+        with filepath.open("w", encoding="utf-8") as f:
+            json.dump(export_data, f, indent=2, ensure_ascii=False)
+        
+        log.info("Exported %d trades to JSON: %s", len(trades), filepath)
+    
+    def export_parquet(self, filepath: str | Path, filters: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Export trades to Parquet format for data science workflows.
+        
+        This method requires the 'pyarrow' library to be installed.
+        
+        Parameters
+        ----------
+        filepath : str or Path
+            Path to the output Parquet file.
+        filters : dict, optional
+            Filter criteria to apply before export (same as load_trades()).
+        
+        Raises
+        ------
+        ImportError
+            If pyarrow is not installed.
+        
+        Example
+        -------
+        >>> db.export_parquet("trades.parquet")
+        >>> db.export_parquet("btc_trades.parquet", filters={"asset": "BTC"})
+        """
+        try:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+        except ImportError as e:
+            raise ImportError(
+                "pyarrow is required for Parquet export. "
+                "Install it with: pip install pyarrow"
+            ) from e
+        
+        filepath = Path(filepath)
+        trades = self.load_trades(filters=filters)
+        
+        if not trades:
+            log.warning("No trades to export to Parquet")
+            return
+        
+        # Convert trades to list of dictionaries
+        data = [trade.to_dict() for trade in trades]
+        
+        # Create PyArrow table
+        table = pa.Table.from_pylist(data)
+        
+        # Write to Parquet
+        pq.write_table(table, filepath)
+        
+        log.info("Exported %d trades to Parquet: %s", len(trades), filepath)
+    
+    def export_excel(self, filepath: str | Path, filters: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Export trades to Excel format for business users.
+        
+        This method requires the 'openpyxl' library to be installed.
+        
+        Parameters
+        ----------
+        filepath : str or Path
+            Path to the output Excel file (.xlsx).
+        filters : dict, optional
+            Filter criteria to apply before export (same as load_trades()).
+        
+        Raises
+        ------
+        ImportError
+            If openpyxl is not installed.
+        
+        Example
+        -------
+        >>> db.export_excel("trades.xlsx")
+        >>> db.export_excel("btc_trades.xlsx", filters={"asset": "BTC"})
+        """
+        try:
+            from openpyxl import Workbook
+        except ImportError as e:
+            raise ImportError(
+                "openpyxl is required for Excel export. "
+                "Install it with: pip install openpyxl"
+            ) from e
+        
+        filepath = Path(filepath)
+        trades = self.load_trades(filters=filters)
+        
+        if not trades:
+            log.warning("No trades to export to Excel")
+            return
+        
+        # Create workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Trades"
+        
+        # Define headers
+        headers = [
+            "ID", "Market Slug", "Market ID", "Side", "Entry Price",
+            "Exit Price", "Amount", "Shares", "Fee", "Outcome", "P&L", "Timestamp"
+        ]
+        
+        # Write headers
+        for col_num, header in enumerate(headers, 1):
+            ws.cell(row=1, column=col_num, value=header)
+        
+        # Write trade data
+        for row_num, trade in enumerate(trades, 2):
+            ws.cell(row=row_num, column=1, value=trade.id)
+            ws.cell(row=row_num, column=2, value=trade.market_slug)
+            ws.cell(row=row_num, column=3, value=trade.market_id)
+            ws.cell(row=row_num, column=4, value=trade.side)
+            ws.cell(row=row_num, column=5, value=trade.entry_price)
+            ws.cell(row=row_num, column=6, value=trade.exit_price)
+            ws.cell(row=row_num, column=7, value=trade.amount)
+            ws.cell(row=row_num, column=8, value=trade.shares)
+            ws.cell(row=row_num, column=9, value=trade.fee)
+            ws.cell(row=row_num, column=10, value=trade.outcome)
+            ws.cell(row=row_num, column=11, value=trade.pnl)
+            ws.cell(row=row_num, column=12, value=trade.timestamp.isoformat())
+        
+        # Save workbook
+        wb.save(filepath)
+        
+        log.info("Exported %d trades to Excel: %s", len(trades), filepath)
     
     def delete_trade(self, trade_id: int) -> bool:
         """
