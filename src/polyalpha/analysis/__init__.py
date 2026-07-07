@@ -3,7 +3,7 @@ Technical analysis module for polyalpha.
 
 This module provides comprehensive technical analysis capabilities including:
 - Data feed management (Binance, Chainlink, custom sources)
-- Technical indicator calculations (using ta-lib)
+- Technical indicator calculations (using pandas-ta)
 - Signal generation for trading strategies
 - Integration with Sniper and paper trading
 

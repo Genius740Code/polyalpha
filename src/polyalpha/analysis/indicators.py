@@ -1,11 +1,12 @@
 """
-Technical indicator calculations using ta-lib.
+Technical indicator calculations using pandas-ta.
 
-Provides a clean interface to ta-lib indicators including:
+Provides a clean interface to pandas-ta indicators including:
 - Trend indicators: SMA, EMA, MACD, ADX
 - Momentum indicators: RSI, Stochastic, Williams %R, CCI
 - Volatility indicators: Bollinger Bands, ATR, Keltner Channels
 - Volume indicators: OBV, Volume SMA, Volume ROC
+- Additional: VWAP, Fair Value Gap, Pivot Points
 
 Usage
 -----
@@ -27,15 +28,15 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-# Try to import ta-lib
+# Try to import pandas-ta
 try:
-    import talib
-    TALIB_AVAILABLE = True
+    import pandas_ta as ta
+    PANDAS_TA_AVAILABLE = True
 except ImportError:
-    TALIB_AVAILABLE = False
+    PANDAS_TA_AVAILABLE = False
     log.warning(
-        "ta-lib not installed. Install with: "
-        "pip install TA-Lib (requires C compilation) or use pandas-ta as fallback"
+        "pandas-ta not installed. Install with: "
+        "pip install pandas-ta"
     )
 
 
@@ -43,7 +44,7 @@ except ImportError:
 
 class IndicatorCalculator:
     """
-    Calculate technical indicators using ta-lib.
+    Calculate technical indicators using pandas-ta.
 
     Parameters
     ----------
@@ -62,10 +63,10 @@ class IndicatorCalculator:
         self.data = data.copy()
         self._validate_data()
 
-        if not TALIB_AVAILABLE:
+        if not PANDAS_TA_AVAILABLE:
             raise ImportError(
-                "ta-lib is required for technical analysis. "
-                "Install with: pip install TA-Lib"
+                "pandas-ta is required for technical analysis. "
+                "Install with: pip install pandas-ta"
             )
 
         self._log = logging.getLogger(__name__)
@@ -122,16 +123,12 @@ class IndicatorCalculator:
             return self._cache[cache_key]
 
         try:
-            result = talib.SMA(self.data[price].values, timeperiod=period)
+            result = ta.sma(self.data[price], length=period)
         except Exception as exc:
-            self._log.error("ta-lib SMA calculation failed: %s", exc)
+            self._log.error("pandas-ta SMA calculation failed: %s", exc)
             raise RuntimeError(f"SMA calculation failed: {exc}") from exc
 
-        series = pd.Series(
-            result,
-            index=self.data.index,
-            name=f"SMA{period}"
-        )
+        series = result.rename(f"SMA{period}")
         self._cache[cache_key] = series
         return series
 
@@ -159,16 +156,12 @@ class IndicatorCalculator:
             return self._cache[cache_key]
 
         try:
-            result = talib.EMA(self.data[price].values, timeperiod=period)
+            result = ta.ema(self.data[price], length=period)
         except Exception as exc:
-            self._log.error("ta-lib EMA calculation failed: %s", exc)
+            self._log.error("pandas-ta EMA calculation failed: %s", exc)
             raise RuntimeError(f"EMA calculation failed: {exc}") from exc
 
-        series = pd.Series(
-            result,
-            index=self.data.index,
-            name=f"EMA{period}"
-        )
+        series = result.rename(f"EMA{period}")
         self._cache[cache_key] = series
         return series
 
@@ -202,20 +195,15 @@ class IndicatorCalculator:
             raise ValueError("periods must be positive")
 
         try:
-            macd, signal_line, histogram = talib.MACD(
-                self.data[price].values,
-                fastperiod=fast,
-                slowperiod=slow,
-                signalperiod=signal
-            )
+            macd_result = ta.macd(self.data[price], fast=fast, slow=slow, signal=signal)
         except Exception as exc:
-            self._log.error("ta-lib MACD calculation failed: %s", exc)
+            self._log.error("pandas-ta MACD calculation failed: %s", exc)
             raise RuntimeError(f"MACD calculation failed: {exc}") from exc
 
         return {
-            "macd": pd.Series(macd, index=self.data.index, name="MACD"),
-            "signal": pd.Series(signal_line, index=self.data.index, name="MACD_Signal"),
-            "histogram": pd.Series(histogram, index=self.data.index, name="MACD_Hist"),
+            "macd": macd_result[f"MACD_{fast}_{slow}_{signal}"].rename("MACD"),
+            "signal": macd_result[f"MACDs_{fast}_{slow}_{signal}"].rename("MACD_Signal"),
+            "histogram": macd_result[f"MACDh_{fast}_{slow}_{signal}"].rename("MACD_Hist"),
         }
 
     def adx(self, period: int = 14) -> dict[str, pd.Series]:
@@ -236,20 +224,15 @@ class IndicatorCalculator:
             raise ValueError("period must be positive")
 
         try:
-            adx, plus_di, minus_di = talib.ADX(
-                self.data["high"].values,
-                self.data["low"].values,
-                self.data["close"].values,
-                timeperiod=period
-            )
+            adx_result = ta.adx(self.data["high"], self.data["low"], self.data["close"], length=period)
         except Exception as exc:
-            self._log.error("ta-lib ADX calculation failed: %s", exc)
+            self._log.error("pandas-ta ADX calculation failed: %s", exc)
             raise RuntimeError(f"ADX calculation failed: {exc}") from exc
 
         return {
-            "adx": pd.Series(adx, index=self.data.index, name="ADX"),
-            "plus_di": pd.Series(plus_di, index=self.data.index, name="+DI"),
-            "minus_di": pd.Series(minus_di, index=self.data.index, name="-DI"),
+            "adx": adx_result[f"ADX_{period}"].rename("ADX"),
+            "plus_di": adx_result[f"DMP_{period}"].rename("+DI"),
+            "minus_di": adx_result[f"DMN_{period}"].rename("-DI"),
         }
 
     # ── Momentum Indicators ───────────────────────────────────────────────────
@@ -278,16 +261,12 @@ class IndicatorCalculator:
             return self._cache[cache_key]
 
         try:
-            result = talib.RSI(self.data[price].values, timeperiod=period)
+            result = ta.rsi(self.data[price], length=period)
         except Exception as exc:
-            self._log.error("ta-lib RSI calculation failed: %s", exc)
+            self._log.error("pandas-ta RSI calculation failed: %s", exc)
             raise RuntimeError(f"RSI calculation failed: {exc}") from exc
 
-        series = pd.Series(
-            result,
-            index=self.data.index,
-            name=f"RSI{period}"
-        )
+        series = result.rename(f"RSI{period}")
         self._cache[cache_key] = series
         return series
 
@@ -318,23 +297,21 @@ class IndicatorCalculator:
             raise ValueError("periods must be positive")
 
         try:
-            slowk, slowd = talib.STOCH(
-                self.data["high"].values,
-                self.data["low"].values,
-                self.data["close"].values,
-                fastk_period=k_period,
-                slowk_period=smooth_k,
-                slowk_matype=0,
-                slowd_period=d_period,
-                slowd_matype=0
+            stoch_result = ta.stoch(
+                self.data["high"],
+                self.data["low"],
+                self.data["close"],
+                k=k_period,
+                d=d_period,
+                smooth_k=smooth_k
             )
         except Exception as exc:
-            self._log.error("ta-lib Stochastic calculation failed: %s", exc)
+            self._log.error("pandas-ta Stochastic calculation failed: %s", exc)
             raise RuntimeError(f"Stochastic calculation failed: {exc}") from exc
 
         return {
-            "k": pd.Series(slowk, index=self.data.index, name="Stoch_K"),
-            "d": pd.Series(slowd, index=self.data.index, name="Stoch_D"),
+            "k": stoch_result[f"STOCHk_{k_period}_{d_period}_{smooth_k}"].rename("Stoch_K"),
+            "d": stoch_result[f"STOCHd_{k_period}_{d_period}_{smooth_k}"].rename("Stoch_D"),
         }
 
     def williams_r(self, period: int = 14) -> pd.Series:
@@ -355,21 +332,12 @@ class IndicatorCalculator:
             raise ValueError("period must be positive")
 
         try:
-            result = talib.WILLR(
-                self.data["high"].values,
-                self.data["low"].values,
-                self.data["close"].values,
-                timeperiod=period
-            )
+            result = ta.willr(self.data["high"], self.data["low"], self.data["close"], length=period)
         except Exception as exc:
-            self._log.error("ta-lib Williams %R calculation failed: %s", exc)
+            self._log.error("pandas-ta Williams %R calculation failed: %s", exc)
             raise RuntimeError(f"Williams %R calculation failed: {exc}") from exc
 
-        return pd.Series(
-            result,
-            index=self.data.index,
-            name=f"WilliamsR{period}"
-        )
+        return result.rename(f"WilliamsR{period}")
 
     def cci(self, period: int = 20) -> pd.Series:
         """
@@ -389,21 +357,12 @@ class IndicatorCalculator:
             raise ValueError("period must be positive")
 
         try:
-            result = talib.CCI(
-                self.data["high"].values,
-                self.data["low"].values,
-                self.data["close"].values,
-                timeperiod=period
-            )
+            result = ta.cci(self.data["high"], self.data["low"], self.data["close"], length=period)
         except Exception as exc:
-            self._log.error("ta-lib CCI calculation failed: %s", exc)
+            self._log.error("pandas-ta CCI calculation failed: %s", exc)
             raise RuntimeError(f"CCI calculation failed: {exc}") from exc
 
-        return pd.Series(
-            result,
-            index=self.data.index,
-            name=f"CCI{period}"
-        )
+        return result.rename(f"CCI{period}")
 
     # ── Volatility Indicators ─────────────────────────────────────────────────
 
@@ -436,21 +395,15 @@ class IndicatorCalculator:
             raise ValueError("std_dev must be positive")
 
         try:
-            upper, middle, lower = talib.BBANDS(
-                self.data[price].values,
-                timeperiod=period,
-                nbdevup=std_dev,
-                nbdevdn=std_dev,
-                matype=0
-            )
+            bb_result = ta.bbands(self.data[price], length=period, std=std_dev)
         except Exception as exc:
-            self._log.error("ta-lib Bollinger Bands calculation failed: %s", exc)
+            self._log.error("pandas-ta Bollinger Bands calculation failed: %s", exc)
             raise RuntimeError(f"Bollinger Bands calculation failed: {exc}") from exc
 
         return {
-            "upper": pd.Series(upper, index=self.data.index, name="BB_Upper"),
-            "middle": pd.Series(middle, index=self.data.index, name="BB_Middle"),
-            "lower": pd.Series(lower, index=self.data.index, name="BB_Lower"),
+            "lower": bb_result[f"BBL_{period}_{std_dev}_{std_dev}"].rename("BB_Lower"),
+            "middle": bb_result[f"BBM_{period}_{std_dev}_{std_dev}"].rename("BB_Middle"),
+            "upper": bb_result[f"BBU_{period}_{std_dev}_{std_dev}"].rename("BB_Upper"),
         }
 
     def atr(self, period: int = 14) -> pd.Series:
@@ -475,21 +428,12 @@ class IndicatorCalculator:
             return self._cache[cache_key]
 
         try:
-            result = talib.ATR(
-                self.data["high"].values,
-                self.data["low"].values,
-                self.data["close"].values,
-                timeperiod=period
-            )
+            result = ta.atr(self.data["high"], self.data["low"], self.data["close"], length=period)
         except Exception as exc:
-            self._log.error("ta-lib ATR calculation failed: %s", exc)
+            self._log.error("pandas-ta ATR calculation failed: %s", exc)
             raise RuntimeError(f"ATR calculation failed: {exc}") from exc
 
-        series = pd.Series(
-            result,
-            index=self.data.index,
-            name=f"ATR{period}"
-        )
+        series = result.rename(f"ATR{period}")
         self._cache[cache_key] = series
         return series
 
@@ -542,16 +486,12 @@ class IndicatorCalculator:
             OBV values.
         """
         try:
-            result = talib.OBV(self.data["close"].values, self.data["volume"].values)
+            result = ta.obv(self.data["close"], self.data["volume"])
         except Exception as exc:
-            self._log.error("ta-lib OBV calculation failed: %s", exc)
+            self._log.error("pandas-ta OBV calculation failed: %s", exc)
             raise RuntimeError(f"OBV calculation failed: {exc}") from exc
 
-        return pd.Series(
-            result,
-            index=self.data.index,
-            name="OBV"
-        )
+        return result.rename("OBV")
 
     def volume_sma(self, period: int = 20) -> pd.Series:
         """
@@ -571,16 +511,12 @@ class IndicatorCalculator:
             raise ValueError("period must be positive")
 
         try:
-            result = talib.SMA(self.data["volume"].values, timeperiod=period)
+            result = ta.sma(self.data["volume"], length=period)
         except Exception as exc:
-            self._log.error("ta-lib Volume SMA calculation failed: %s", exc)
+            self._log.error("pandas-ta Volume SMA calculation failed: %s", exc)
             raise RuntimeError(f"Volume SMA calculation failed: {exc}") from exc
 
-        return pd.Series(
-            result,
-            index=self.data.index,
-            name=f"VolSMA{period}"
-        )
+        return result.rename(f"VolSMA{period}")
 
     def volume_roc(self, period: int = 12) -> pd.Series:
         """
@@ -600,16 +536,12 @@ class IndicatorCalculator:
             raise ValueError("period must be positive")
 
         try:
-            result = talib.ROC(self.data["volume"].values, timeperiod=period)
+            result = ta.roc(self.data["volume"], length=period)
         except Exception as exc:
-            self._log.error("ta-lib Volume ROC calculation failed: %s", exc)
+            self._log.error("pandas-ta Volume ROC calculation failed: %s", exc)
             raise RuntimeError(f"Volume ROC calculation failed: {exc}") from exc
 
-        return pd.Series(
-            result,
-            index=self.data.index,
-            name=f"VolROC{period}"
-        )
+        return result.rename(f"VolROC{period}")
 
     # ── Combined Calculations ────────────────────────────────────────────────
 
