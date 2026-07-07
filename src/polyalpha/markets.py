@@ -89,51 +89,57 @@ class RateLimiter:
         """
         self.max_requests = max_requests
         self.period = period_seconds
-        self.tokens = max_requests
+        self.tokens = float(max_requests)
         self.last_update = time.time()
         self._lock = Lock()
 
     def acquire(self) -> None:
         """Block until a token is available."""
+        wait_time = 0.0
         with self._lock:
             now = time.time()
             elapsed = now - self.last_update
             
             # Refill tokens based on elapsed time
             self.tokens = min(
-                self.max_requests,
+                float(self.max_requests),
                 self.tokens + elapsed * (self.max_requests / self.period)
             )
             self.last_update = now
             
             if self.tokens < 1:
-                # Wait until we have a token
+                # Queue request by allowing tokens to go negative, compute wait
                 wait_time = (1 - self.tokens) * (self.period / self.max_requests)
-                time.sleep(wait_time)
-                self.tokens = 0
+                self.tokens -= 1
             else:
                 self.tokens -= 1
+                
+        if wait_time > 0:
+            time.sleep(wait_time)
 
     async def acquire_async(self) -> None:
         """Async version - wait until a token is available."""
+        wait_time = 0.0
         with self._lock:
             now = time.time()
             elapsed = now - self.last_update
             
             # Refill tokens based on elapsed time
             self.tokens = min(
-                self.max_requests,
+                float(self.max_requests),
                 self.tokens + elapsed * (self.max_requests / self.period)
             )
             self.last_update = now
             
             if self.tokens < 1:
-                # Wait until we have a token
+                # Queue request by allowing tokens to go negative, compute wait
                 wait_time = (1 - self.tokens) * (self.period / self.max_requests)
-                await asyncio.sleep(wait_time)
-                self.tokens = 0
+                self.tokens -= 1
             else:
                 self.tokens -= 1
+                
+        if wait_time > 0:
+            await asyncio.sleep(wait_time)
 
 
 # ── MarketClient ───────────────────────────────────────────────────────────────
