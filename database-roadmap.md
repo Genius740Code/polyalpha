@@ -126,10 +126,44 @@ db.export_json("won_trades.json", filters={"outcome": "WON"})
 - All export methods support the same filter criteria as `load_trades()`
 - JSON export includes metadata (export timestamp, total trades, database path)
 
-#### 1.3 Data Validation
+#### 1.3 Data Validation ✅ (COMPLETED)
 - **Schema Validation**: Ensure data integrity
 - **Duplicate Detection**: Prevent duplicate trade entries
 - **Data Migration**: Versioned schema migrations
+
+```python
+# Validation is automatic on save_trade()
+db.save_trade(
+    market_slug="btc-updown-5m-1751234700",
+    market_id="abc123",
+    side="UP",
+    entry_price=0.92,
+    exit_price=None,
+    amount=10.0,
+    shares=10.5,
+    fee=0.2,
+    outcome="WON",
+    pnl=5.3,
+    timestamp=datetime.now(timezone.utc)
+)
+
+# Disable duplicate checking if needed
+db.save_trade(..., check_duplicates=False)
+
+# Check for duplicates manually
+is_dup = db.is_duplicate_trade(market_id="abc123", side="UP", timestamp=ts)
+
+# Get and run schema migrations
+version = db.get_schema_version()
+db.run_migrations()
+```
+
+**Implementation Notes:**
+- Schema validation checks: non-empty strings, valid side (UP/DOWN), non-negative numeric values, valid outcomes (WON/LOST/CLOSED/None), timezone-aware timestamps
+- Duplicate detection based on market_id + side + timestamp (with configurable tolerance)
+- Schema version tracking via `schema_version` table
+- Migration system with rollback support
+- Composite index on (market_id, side, timestamp) for efficient duplicate detection
 
 #### 1.4 Performance Optimization
 - **Connection Pooling**: Reuse database connections

@@ -126,6 +126,14 @@ class TradeDatabase:
         conn = self._get_connection()
         cursor = conn.cursor()
         
+        # Create schema version table for migrations
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -166,8 +174,72 @@ class TradeDatabase:
             ON trades(timestamp)
         """)
         
+        # Create composite index for duplicate detection
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_duplicate_check 
+            ON trades(market_id, side, timestamp)
+        """)
+        
+        # Initialize schema version if not exists
+        cursor.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (1)")
+        
         conn.commit()
         log.info("Database initialized at %s", self.db_path)
+    
+    def _validate_trade_data(
+        self,
+        market_slug: str,
+        market_id: str,
+        side: str,
+        entry_price: float,
+        exit_price: Optional[float],
+        amount: float,
+        shares: float,
+        fee: float,
+        outcome: Optional[str],
+        pnl: float,
+        timestamp: datetime,
+    ) -> None:
+        """
+        Validate trade data before saving.
+        
+        Raises
+        ------
+        ValueError
+            If any validation fails.
+        """
+        # Validate required string fields
+        if not market_slug or not isinstance(market_slug, str):
+            raise ValueError("market_slug must be a non-empty string")
+        if not market_id or not isinstance(market_id, str):
+            raise ValueError("market_id must be a non-empty string")
+        
+        # Validate side
+        if side not in ("UP", "DOWN"):
+            raise ValueError(f"side must be 'UP' or 'DOWN', got '{side}'")
+        
+        # Validate numeric fields
+        if entry_price < 0:
+            raise ValueError(f"entry_price must be non-negative, got {entry_price}")
+        if exit_price is not None and exit_price < 0:
+            raise ValueError(f"exit_price must be non-negative, got {exit_price}")
+        if amount < 0:
+            raise ValueError(f"amount must be non-negative, got {amount}")
+        if shares < 0:
+            raise ValueError(f"shares must be non-negative, got {shares}")
+        if fee < 0:
+            raise ValueError(f"fee must be non-negative, got {fee}")
+        
+        # Validate outcome
+        valid_outcomes = {"WON", "LOST", "CLOSED", None}
+        if outcome not in valid_outcomes:
+            raise ValueError(f"outcome must be one of {valid_outcomes}, got '{outcome}'")
+        
+        # Validate timestamp
+        if not isinstance(timestamp, datetime):
+            raise ValueError(f"timestamp must be a datetime object, got {type(timestamp)}")
+        if timestamp.tzinfo is None:
+            raise ValueError("timestamp must be timezone-aware")
     
     def save_trade(
         self,
@@ -182,6 +254,7 @@ class TradeDatabase:
         outcome: Optional[str],
         pnl: float,
         timestamp: datetime,
+        check_duplicates: bool = True,
     ) -> int:
         """
         Save a trade to the database.
@@ -210,12 +283,33 @@ class TradeDatabase:
             Profit or loss in USDC.
         timestamp : datetime
             Trade timestamp (UTC).
+        check_duplicates : bool, optional
+            Whether to check for duplicate trades (default: True).
         
         Returns
         -------
         int
             The ID of the inserted trade.
+        
+        Raises
+        ------
+        ValueError
+            If validation fails or duplicate detected.
         """
+        # Validate data
+        self._validate_trade_data(
+            market_slug, market_id, side, entry_price, exit_price,
+            amount, shares, fee, outcome, pnl, timestamp
+        )
+        
+        # Check for duplicates if enabled
+        if check_duplicates:
+            if self.is_duplicate_trade(market_id, side, timestamp):
+                raise ValueError(
+                    f"Duplicate trade detected: market_id={market_id}, "
+                    f"side={side}, timestamp={timestamp.isoformat()}"
+                )
+        
         conn = self._get_connection()
         cursor = conn.cursor()
         
@@ -236,6 +330,155 @@ class TradeDatabase:
         log.debug("Trade saved: ID=%d, market=%s, side=%s, pnl=%.2f",
                   trade_id, market_slug, side, pnl)
         return trade_id
+    
+    def is_duplicate_trade(
+        self,
+        market_id: str,
+        side: str,
+        timestamp: datetime,
+        tolerance_seconds: int = 1,
+    ) -> bool:
+        """
+        Check if a trade already exists in the database.
+        
+        A trade is considered a duplicate if it has the same market_id, side,
+        and timestamp (within a tolerance window).
+        
+        Parameters
+        ----------
+        market_id : str
+            Market ID to check.
+        side : str
+            Side to check ("UP" or "DOWN").
+        timestamp : datetime
+            Timestamp to check.
+        tolerance_seconds : int, optional
+            Time tolerance in seconds for timestamp matching (default: 1).
+        
+        Returns
+        -------
+        bool
+            True if a duplicate exists, False otherwise.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        timestamp_str = timestamp.isoformat()
+        
+        # Check for exact match first
+        cursor.execute("""
+            SELECT COUNT(*) FROM trades
+            WHERE market_id = ? AND side = ? AND timestamp = ?
+        """, (market_id, side.upper(), timestamp_str))
+        
+        count = cursor.fetchone()[0]
+        if count > 0:
+            return True
+        
+        # If no exact match, check within tolerance window
+        # This handles cases where timestamps might differ slightly
+        cursor.execute("""
+            SELECT COUNT(*) FROM trades
+            WHERE market_id = ? AND side = ?
+        """, (market_id, side.upper()))
+        
+        rows = cursor.fetchall()
+        for row in rows:
+            # Parse stored timestamps and check tolerance
+            cursor.execute("""
+                SELECT timestamp FROM trades
+                WHERE market_id = ? AND side = ?
+            """, (market_id, side.upper()))
+            
+            for ts_row in cursor.fetchall():
+                stored_ts = datetime.fromisoformat(ts_row[0])
+                if stored_ts.tzinfo is None:
+                    stored_ts = stored_ts.replace(tzinfo=timezone.utc)
+                
+                time_diff = abs((timestamp - stored_ts).total_seconds())
+                if time_diff <= tolerance_seconds:
+                    return True
+        
+        return False
+    
+    def get_schema_version(self) -> int:
+        """
+        Get the current schema version.
+        
+        Returns
+        -------
+        int
+            The current schema version.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT MAX(version) FROM schema_version")
+        result = cursor.fetchone()
+        return result[0] if result[0] is not None else 0
+    
+    def _apply_migration(self, version: int, migration_sql: str) -> None:
+        """
+        Apply a migration to the database.
+        
+        Parameters
+        ----------
+        version : int
+            The migration version number.
+        migration_sql : str
+            SQL statements to execute for the migration.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        current_version = self.get_schema_version()
+        
+        if current_version >= version:
+            log.debug("Migration %d already applied (current version: %d)", version, current_version)
+            return
+        
+        log.info("Applying migration %d", version)
+        
+        try:
+            # Execute migration SQL
+            cursor.executescript(migration_sql)
+            
+            # Update schema version
+            cursor.execute(
+                "INSERT INTO schema_version (version) VALUES (?)",
+                (version,)
+            )
+            
+            conn.commit()
+            log.info("Migration %d applied successfully", version)
+        except Exception as e:
+            conn.rollback()
+            log.error("Migration %d failed: %s", version, e)
+            raise
+    
+    def run_migrations(self) -> None:
+        """
+        Run all pending migrations.
+        
+        This method checks the current schema version and applies any
+        pending migrations in order.
+        """
+        current_version = self.get_schema_version()
+        log.info("Current schema version: %d", current_version)
+        
+        # Define migrations
+        migrations = {
+            # Future migrations can be added here
+            # Example:
+            # 2: """
+            # ALTER TABLE trades ADD COLUMN notes TEXT;
+            # """,
+        }
+        
+        # Apply migrations in order
+        for version, migration_sql in sorted(migrations.items()):
+            if version > current_version:
+                self._apply_migration(version, migration_sql)
     
     def load_all_trades(self) -> List[TradeRecord]:
         """
