@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+from functools import lru_cache
+import hashlib
 
 log = logging.getLogger(__name__)
 
@@ -101,7 +103,7 @@ class TradeDatabase:
     >>> trades = db.load_all_trades()
     """
     
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, enable_wal: bool = True, enable_cache: bool = True):
         """
         Initialize the database.
         
@@ -109,9 +111,17 @@ class TradeDatabase:
         ----------
         db_path : str or Path
             Path to the SQLite database file.
+        enable_wal : bool, optional
+            Enable WAL (Write-Ahead Logging) mode for better concurrency (default: True).
+        enable_cache : bool, optional
+            Enable query result caching (default: True).
         """
         self.db_path = Path(db_path)
         self._conn: Optional[sqlite3.Connection] = None
+        self._enable_wal = enable_wal
+        self._cache_enabled = enable_cache
+        self._query_cache: Dict[str, List[TradeRecord]] = {}
+        self._cache_max_size = 100
         self._initialize_db()
     
     def _get_connection(self) -> sqlite3.Connection:
@@ -119,6 +129,17 @@ class TradeDatabase:
         if self._conn is None:
             self._conn = sqlite3.connect(self.db_path)
             self._conn.row_factory = sqlite3.Row
+            
+            # Enable WAL mode for better concurrency
+            if self._enable_wal:
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA synchronous=NORMAL")
+            
+            # Set performance optimizations
+            self._conn.execute("PRAGMA busy_timeout=5000")  # 5 second timeout
+            self._conn.execute("PRAGMA temp_store=MEMORY")  # Store temp tables in memory
+            self._conn.execute("PRAGMA mmap_size=268435456")  # 256MB memory-mapped I/O
+            
         return self._conn
     
     def _initialize_db(self) -> None:
@@ -331,6 +352,211 @@ class TradeDatabase:
                   trade_id, market_slug, side, pnl)
         return trade_id
     
+    def save_trades_bulk(
+        self,
+        trades: List[Dict[str, Any]],
+        check_duplicates: bool = True,
+    ) -> List[int]:
+        """
+        Save multiple trades in a single transaction for better performance.
+        
+        Parameters
+        ----------
+        trades : list of dict
+            List of trade dictionaries with keys: market_slug, market_id, side,
+            entry_price, exit_price, amount, shares, fee, outcome, pnl, timestamp.
+        check_duplicates : bool, optional
+            Whether to check for duplicate trades (default: True).
+        
+        Returns
+        -------
+        list of int
+            List of inserted trade IDs.
+        
+        Raises
+        ------
+        ValueError
+            If validation fails or duplicate detected.
+        """
+        if not trades:
+            return []
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Validate all trades first
+        for trade in trades:
+            self._validate_trade_data(
+                market_slug=trade["market_slug"],
+                market_id=trade["market_id"],
+                side=trade["side"],
+                entry_price=trade["entry_price"],
+                exit_price=trade.get("exit_price"),
+                amount=trade["amount"],
+                shares=trade["shares"],
+                fee=trade["fee"],
+                outcome=trade.get("outcome"),
+                pnl=trade["pnl"],
+                timestamp=trade["timestamp"],
+            )
+        
+        # Check for duplicates if enabled
+        if check_duplicates:
+            for trade in trades:
+                if self.is_duplicate_trade(
+                    trade["market_id"],
+                    trade["side"],
+                    trade["timestamp"]
+                ):
+                    raise ValueError(
+                        f"Duplicate trade detected: market_id={trade['market_id']}, "
+                        f"side={trade['side']}, timestamp={trade['timestamp'].isoformat()}"
+                    )
+        
+        # Prepare data for bulk insert
+        trade_data = []
+        for trade in trades:
+            trade_data.append((
+                trade["market_slug"],
+                trade["market_id"],
+                trade["side"],
+                trade["entry_price"],
+                trade.get("exit_price"),
+                trade["amount"],
+                trade["shares"],
+                trade["fee"],
+                trade.get("outcome"),
+                trade["pnl"],
+                trade["timestamp"].isoformat(),
+            ))
+        
+        # Begin transaction
+        cursor.execute("BEGIN TRANSACTION")
+        
+        try:
+            # Bulk insert
+            cursor.executemany("""
+                INSERT INTO trades (
+                    market_slug, market_id, side, entry_price, exit_price,
+                    amount, shares, fee, outcome, pnl, timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, trade_data)
+            
+            conn.commit()
+            
+            # Get the inserted IDs by querying the last inserted rows
+            # Get the last row ID
+            last_id = cursor.lastrowid
+            first_id = last_id - len(trades) + 1
+            
+            # Generate the list of IDs
+            trade_ids = list(range(first_id, last_id + 1))
+            
+            # Invalidate cache on write
+            self._invalidate_cache()
+            
+            log.info("Bulk saved %d trades", len(trades))
+            return trade_ids
+            
+        except Exception as e:
+            conn.rollback()
+            log.error("Bulk insert failed: %s", e)
+            raise
+    
+    def save_trade(
+        self,
+        market_slug: str,
+        market_id: str,
+        side: str,
+        entry_price: float,
+        exit_price: Optional[float],
+        amount: float,
+        shares: float,
+        fee: float,
+        outcome: Optional[str],
+        pnl: float,
+        timestamp: datetime,
+        check_duplicates: bool = True,
+    ) -> int:
+        """
+        Save a trade to the database.
+        
+        Parameters
+        ----------
+        market_slug : str
+            Market slug identifier.
+        market_id : str
+            Market ID from Polymarket.
+        side : str
+            "UP" or "DOWN".
+        entry_price : float
+            Entry price per share.
+        exit_price : float or None
+            Exit price if position was closed.
+        amount : float
+            USDC amount spent.
+        shares : float
+            Number of shares received.
+        fee : float
+            Fee paid in USDC.
+        outcome : str or None
+            "WON", "LOST", "CLOSED", or None if pending.
+        pnl : float
+            Profit or loss in USDC.
+        timestamp : datetime
+            Trade timestamp (UTC).
+        check_duplicates : bool, optional
+            Whether to check for duplicate trades (default: True).
+        
+        Returns
+        -------
+        int
+            The ID of the inserted trade.
+        
+        Raises
+        ------
+        ValueError
+            If validation fails or duplicate detected.
+        """
+        # Validate data
+        self._validate_trade_data(
+            market_slug, market_id, side, entry_price, exit_price,
+            amount, shares, fee, outcome, pnl, timestamp
+        )
+        
+        # Check for duplicates if enabled
+        if check_duplicates:
+            if self.is_duplicate_trade(market_id, side, timestamp):
+                raise ValueError(
+                    f"Duplicate trade detected: market_id={market_id}, "
+                    f"side={side}, timestamp={timestamp.isoformat()}"
+                )
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        timestamp_str = timestamp.isoformat()
+        
+        cursor.execute("""
+            INSERT INTO trades (
+                market_slug, market_id, side, entry_price, exit_price,
+                amount, shares, fee, outcome, pnl, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            market_slug, market_id, side, entry_price, exit_price,
+            amount, shares, fee, outcome, pnl, timestamp_str
+        ))
+        
+        conn.commit()
+        trade_id = cursor.lastrowid
+        
+        # Invalidate cache on write
+        self._invalidate_cache()
+        
+        log.debug("Trade saved: ID=%d, market=%s, side=%s, pnl=%.2f",
+                  trade_id, market_slug, side, pnl)
+        return trade_id
+    
     def is_duplicate_trade(
         self,
         market_id: str,
@@ -479,6 +705,150 @@ class TradeDatabase:
         for version, migration_sql in sorted(migrations.items()):
             if version > current_version:
                 self._apply_migration(version, migration_sql)
+    
+    def _generate_cache_key(
+        self,
+        filters: Optional[Dict[str, Any]] = None,
+        sort_by: str = "timestamp",
+        sort_order: str = "desc",
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> str:
+        """Generate a cache key for query parameters."""
+        key_data = {
+            "filters": filters,
+            "sort_by": sort_by,
+            "sort_order": sort_order,
+            "limit": limit,
+            "offset": offset,
+        }
+        key_str = json.dumps(key_data, sort_keys=True)
+        return hashlib.md5(key_str.encode()).hexdigest()
+    
+    def _invalidate_cache(self) -> None:
+        """Invalidate the query cache."""
+        self._query_cache.clear()
+        log.debug("Query cache invalidated")
+    
+    def enable_cache(self) -> None:
+        """Enable query result caching."""
+        self._cache_enabled = True
+        log.debug("Query cache enabled")
+    
+    def disable_cache(self) -> None:
+        """Disable query result caching and clear existing cache."""
+        self._cache_enabled = False
+        self._invalidate_cache()
+        log.debug("Query cache disabled")
+    
+    def clear_cache(self) -> None:
+        """Clear the query cache."""
+        self._invalidate_cache()
+    
+    def analyze_indexes(self) -> None:
+        """
+        Analyze database indexes to optimize query planning.
+        
+        This runs SQLite's ANALYZE command to update statistics
+        that help the query planner choose optimal execution plans.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("ANALYZE")
+        conn.commit()
+        
+        log.info("Database indexes analyzed")
+    
+    def optimize_database(self) -> None:
+        """
+        Optimize the database for better performance.
+        
+        This runs SQLite's OPTIMIZE command which can:
+        - Rebuild the database file
+        - Update statistics
+        - Defragment the database
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("PRAGMA optimize")
+        conn.commit()
+        
+        log.info("Database optimized")
+    
+    def get_index_info(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get information about database indexes.
+        
+        Returns
+        -------
+        dict
+            Dictionary with index names as keys and index details as values.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT name, tbl_name, sql 
+            FROM sqlite_master 
+            WHERE type='index' AND name NOT LIKE 'sqlite_%'
+        """)
+        
+        indexes = {}
+        for row in cursor.fetchall():
+            indexes[row["name"]] = {
+                "table": row["tbl_name"],
+                "sql": row["sql"],
+            }
+        
+        return indexes
+    
+    def rebuild_index(self, index_name: str) -> None:
+        """
+        Rebuild a specific index to optimize performance.
+        
+        Parameters
+        ----------
+        index_name : str
+            Name of the index to rebuild.
+        
+        Raises
+        ------
+        ValueError
+            If the index doesn't exist.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Check if index exists
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='index' AND name=?
+        """, (index_name,))
+        
+        if not cursor.fetchone():
+            raise ValueError(f"Index '{index_name}' does not exist")
+        
+        # Rebuild by dropping and recreating
+        cursor.execute(f"DROP INDEX IF EXISTS {index_name}")
+        
+        # Recreate based on the index type
+        if index_name == "idx_market_slug":
+            cursor.execute("CREATE INDEX idx_market_slug ON trades(market_slug)")
+        elif index_name == "idx_market_id":
+            cursor.execute("CREATE INDEX idx_market_id ON trades(market_id)")
+        elif index_name == "idx_side":
+            cursor.execute("CREATE INDEX idx_side ON trades(side)")
+        elif index_name == "idx_outcome":
+            cursor.execute("CREATE INDEX idx_outcome ON trades(outcome)")
+        elif index_name == "idx_timestamp":
+            cursor.execute("CREATE INDEX idx_timestamp ON trades(timestamp)")
+        elif index_name == "idx_duplicate_check":
+            cursor.execute("CREATE INDEX idx_duplicate_check ON trades(market_id, side, timestamp)")
+        
+        conn.commit()
+        log.info("Index '%s' rebuilt", index_name)
     
     def load_all_trades(self) -> List[TradeRecord]:
         """
@@ -717,6 +1087,13 @@ class TradeDatabase:
         ...     limit=10
         ... )
         """
+        # Check cache if enabled
+        if self._cache_enabled:
+            cache_key = self._generate_cache_key(filters, sort_by, sort_order, limit, offset)
+            if cache_key in self._query_cache:
+                log.debug("Cache hit for key: %s", cache_key)
+                return self._query_cache[cache_key]
+        
         conn = self._get_connection()
         cursor = conn.cursor()
         
@@ -821,6 +1198,17 @@ class TradeDatabase:
             "Loaded %d trades with filters=%s, sort_by=%s, limit=%s, offset=%d",
             len(trades), filters, sort_by, limit, offset
         )
+        
+        # Store in cache if enabled
+        if self._cache_enabled:
+            cache_key = self._generate_cache_key(filters, sort_by, sort_order, limit, offset)
+            # Implement LRU eviction if cache is full
+            if len(self._query_cache) >= self._cache_max_size:
+                # Remove oldest entry (first in dict)
+                self._query_cache.pop(next(iter(self._query_cache)))
+            self._query_cache[cache_key] = trades
+            log.debug("Cached %d trades with key: %s", len(trades), cache_key)
+        
         return trades
     
     def aggregate_trades(

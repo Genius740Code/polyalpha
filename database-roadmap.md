@@ -165,11 +165,43 @@ db.run_migrations()
 - Migration system with rollback support
 - Composite index on (market_id, side, timestamp) for efficient duplicate detection
 
-#### 1.4 Performance Optimization
+#### 1.4 Performance Optimization ✅ (COMPLETED)
 - **Connection Pooling**: Reuse database connections
 - **Bulk Operations**: Batch insert/update operations
 - **Query Caching**: Cache frequently accessed data
 - **Index Optimization**: Automatic index management
+
+```python
+# Initialize with performance options
+db = TradeDatabase("trades.db", enable_wal=True, enable_cache=True)
+
+# Bulk insert for better performance
+trades = [
+    {"market_slug": "...", "market_id": "...", "side": "UP", ...},
+    {"market_slug": "...", "market_id": "...", "side": "DOWN", ...},
+]
+trade_ids = db.save_trades_bulk(trades, check_duplicates=False)
+
+# Cache management
+db.enable_cache()
+db.disable_cache()
+db.clear_cache()
+
+# Index optimization
+db.analyze_indexes()
+db.optimize_database()
+db.get_index_info()
+db.rebuild_index("idx_market_slug")
+```
+
+**Implementation Notes:**
+- WAL mode enabled by default for better concurrency (configurable)
+- Connection reuse with performance PRAGMAs (busy_timeout, temp_store, mmap_size)
+- Bulk insert using `executemany()` with transaction support
+- Query result caching with LRU eviction (max 100 entries by default)
+- Automatic cache invalidation on write operations
+- Index analysis and optimization methods
+- Index information retrieval and rebuild capabilities
 
 ---
 
