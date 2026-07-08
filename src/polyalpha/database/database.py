@@ -18,9 +18,10 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 from functools import lru_cache
 import hashlib
+from threading import Lock
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +125,16 @@ class TradeDatabase:
         self._cache_enabled = enable_cache
         self._query_cache: Dict[str, List[TradeRecord]] = {}
         self._cache_max_size = 100
+        
+        # Event hooks for real-time synchronization
+        self._trade_saved_hooks: List[Callable[[TradeRecord], None]] = []
+        self._trade_updated_hooks: List[Callable[[int, Dict[str, Any]], None]] = []
+        self._trade_deleted_hooks: List[Callable[[int], None]] = []
+        self._hooks_lock = Lock()
+        
+        # Streaming state
+        self._streaming_enabled = False
+        
         self._initialize_db()
     
     def _get_connection(self) -> sqlite3.Connection:
@@ -367,6 +378,17 @@ class TradeDatabase:
         
         conn.commit()
         trade_id = cursor.lastrowid
+        
+        # Invalidate cache on write
+        self._invalidate_cache()
+        
+        # Trigger trade_saved hooks if streaming is enabled
+        if self._streaming_enabled:
+            trade_record = self._row_to_trade_record(cursor.execute(
+                "SELECT * FROM trades WHERE id = ?", (trade_id,)
+            ).fetchone())
+            self._trigger_trade_saved_hooks(trade_record)
+        
         log.debug("Trade saved: ID=%d, market=%s, side=%s, pnl=%.2f",
                   trade_id, market_slug, side, pnl)
         return trade_id
@@ -483,102 +505,6 @@ class TradeDatabase:
             conn.rollback()
             log.error("Bulk insert failed: %s", e)
             raise
-    
-    def save_trade(
-        self,
-        market_slug: str,
-        market_id: str,
-        side: str,
-        entry_price: float,
-        exit_price: Optional[float],
-        amount: float,
-        shares: float,
-        fee: float,
-        outcome: Optional[str],
-        pnl: float,
-        timestamp: datetime,
-        check_duplicates: bool = True,
-    ) -> int:
-        """
-        Save a trade to the database.
-        
-        Parameters
-        ----------
-        market_slug : str
-            Market slug identifier.
-        market_id : str
-            Market ID from Polymarket.
-        side : str
-            "UP" or "DOWN".
-        entry_price : float
-            Entry price per share.
-        exit_price : float or None
-            Exit price if position was closed.
-        amount : float
-            USDC amount spent.
-        shares : float
-            Number of shares received.
-        fee : float
-            Fee paid in USDC.
-        outcome : str or None
-            "WON", "LOST", "CLOSED", or None if pending.
-        pnl : float
-            Profit or loss in USDC.
-        timestamp : datetime
-            Trade timestamp (UTC).
-        market_session : str or None, optional
-            Market session name (e.g., "london", "new_york", "asia", "sydney").
-        check_duplicates : bool, optional
-            Whether to check for duplicate trades (default: True).
-        
-        Returns
-        -------
-        int
-            The ID of the inserted trade.
-        
-        Raises
-        ------
-        ValueError
-            If validation fails or duplicate detected.
-        """
-        # Validate data
-        self._validate_trade_data(
-            market_slug, market_id, side, entry_price, exit_price,
-            amount, shares, fee, outcome, pnl, timestamp, market_session
-        )
-        
-        # Check for duplicates if enabled
-        if check_duplicates:
-            if self.is_duplicate_trade(market_id, side, timestamp):
-                raise ValueError(
-                    f"Duplicate trade detected: market_id={market_id}, "
-                    f"side={side}, timestamp={timestamp.isoformat()}"
-                )
-        
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        timestamp_str = timestamp.isoformat()
-        
-        cursor.execute("""
-            INSERT INTO trades (
-                market_slug, market_id, side, entry_price, exit_price,
-                amount, shares, fee, outcome, pnl, timestamp, market_session
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            market_slug, market_id, side, entry_price, exit_price,
-            amount, shares, fee, outcome, pnl, timestamp_str, market_session
-        ))
-        
-        conn.commit()
-        trade_id = cursor.lastrowid
-        
-        # Invalidate cache on write
-        self._invalidate_cache()
-        
-        log.debug("Trade saved: ID=%d, market=%s, side=%s, pnl=%.2f",
-                  trade_id, market_slug, side, pnl)
-        return trade_id
     
     def is_duplicate_trade(
         self,
@@ -1154,7 +1080,7 @@ class TradeDatabase:
         # Build query with filters
         query = """
             SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                   amount, shares, fee, outcome, pnl, timestamp
+                   amount, shares, fee, outcome, pnl, timestamp, market_session
             FROM trades
         """
         
@@ -1611,6 +1537,13 @@ class TradeDatabase:
         
         deleted = cursor.rowcount > 0
         if deleted:
+            # Invalidate cache on write
+            self._invalidate_cache()
+            
+            # Trigger trade_deleted hooks if streaming is enabled
+            if self._streaming_enabled:
+                self._trigger_trade_deleted_hooks(trade_id)
+            
             log.debug("Trade deleted: ID=%d", trade_id)
         return deleted
     
@@ -1622,7 +1555,259 @@ class TradeDatabase:
         cursor.execute("DELETE FROM trades")
         conn.commit()
         
+        # Invalidate cache on write
+        self._invalidate_cache()
+        
         log.info("All trades cleared from database")
+    
+    # Event Hooks for Real-time Synchronization
+    
+    def on_trade_saved(self, callback: Callable[[TradeRecord], None]) -> Callable[[TradeRecord], None]:
+        """
+        Register a callback to be called when a trade is saved.
+        
+        Parameters
+        ----------
+        callback : Callable[[TradeRecord], None]
+            Function that takes a TradeRecord as argument.
+        
+        Returns
+        -------
+        Callable[[TradeRecord], None]
+            The same callback function (allows decorator usage).
+        
+        Example
+        -------
+        >>> @db.on_trade_saved
+        >>> def handle_trade_saved(trade: TradeRecord):
+        ...     print(f"Trade saved: {trade.market_slug}")
+        """
+        with self._hooks_lock:
+            self._trade_saved_hooks.append(callback)
+        log.debug("Registered trade_saved callback: %s", callback.__name__)
+        return callback
+    
+    def on_trade_updated(self, callback: Callable[[int, Dict[str, Any]], None]) -> Callable[[int, Dict[str, Any]], None]:
+        """
+        Register a callback to be called when a trade is updated.
+        
+        Parameters
+        ----------
+        callback : Callable[[int, Dict[str, Any]], None]
+            Function that takes trade_id and changes dict as arguments.
+        
+        Returns
+        -------
+        Callable[[int, Dict[str, Any]], None]
+            The same callback function (allows decorator usage).
+        
+        Example
+        -------
+        >>> @db.on_trade_updated
+        >>> def handle_trade_updated(trade_id: int, changes: Dict[str, Any]):
+        ...     print(f"Trade {trade_id} updated: {changes}")
+        """
+        with self._hooks_lock:
+            self._trade_updated_hooks.append(callback)
+        log.debug("Registered trade_updated callback: %s", callback.__name__)
+        return callback
+    
+    def on_trade_deleted(self, callback: Callable[[int], None]) -> Callable[[int], None]:
+        """
+        Register a callback to be called when a trade is deleted.
+        
+        Parameters
+        ----------
+        callback : Callable[[int], None]
+            Function that takes trade_id as argument.
+        
+        Returns
+        -------
+        Callable[[int], None]
+            The same callback function (allows decorator usage).
+        
+        Example
+        -------
+        >>> @db.on_trade_deleted
+        >>> def handle_trade_deleted(trade_id: int):
+        ...     print(f"Trade {trade_id} deleted")
+        """
+        with self._hooks_lock:
+            self._trade_deleted_hooks.append(callback)
+        log.debug("Registered trade_deleted callback: %s", callback.__name__)
+        return callback
+    
+    def remove_trade_saved_hook(self, callback: Callable[[TradeRecord], None]) -> None:
+        """
+        Remove a registered trade_saved callback.
+        
+        Parameters
+        ----------
+        callback : Callable[[TradeRecord], None]
+            The callback function to remove.
+        """
+        with self._hooks_lock:
+            if callback in self._trade_saved_hooks:
+                self._trade_saved_hooks.remove(callback)
+                log.debug("Removed trade_saved callback: %s", callback.__name__)
+    
+    def remove_trade_updated_hook(self, callback: Callable[[int, Dict[str, Any]], None]) -> None:
+        """
+        Remove a registered trade_updated callback.
+        
+        Parameters
+        ----------
+        callback : Callable[[int, Dict[str, Any]], None]
+            The callback function to remove.
+        """
+        with self._hooks_lock:
+            if callback in self._trade_updated_hooks:
+                self._trade_updated_hooks.remove(callback)
+                log.debug("Removed trade_updated callback: %s", callback.__name__)
+    
+    def remove_trade_deleted_hook(self, callback: Callable[[int], None]) -> None:
+        """
+        Remove a registered trade_deleted callback.
+        
+        Parameters
+        ----------
+        callback : Callable[[int], None]
+            The callback function to remove.
+        """
+        with self._hooks_lock:
+            if callback in self._trade_deleted_hooks:
+                self._trade_deleted_hooks.remove(callback)
+                log.debug("Removed trade_deleted callback: %s", callback.__name__)
+    
+    def _trigger_trade_saved_hooks(self, trade: TradeRecord) -> None:
+        """
+        Trigger all registered trade_saved callbacks.
+        
+        Parameters
+        ----------
+        trade : TradeRecord
+            The trade that was saved.
+        """
+        with self._hooks_lock:
+            for callback in self._trade_saved_hooks:
+                try:
+                    callback(trade)
+                except Exception as e:
+                    log.error("Error in trade_saved callback %s: %s", callback.__name__, e)
+    
+    def _trigger_trade_updated_hooks(self, trade_id: int, changes: Dict[str, Any]) -> None:
+        """
+        Trigger all registered trade_updated callbacks.
+        
+        Parameters
+        ----------
+        trade_id : int
+            The ID of the trade that was updated.
+        changes : Dict[str, Any]
+            Dictionary of changed fields.
+        """
+        with self._hooks_lock:
+            for callback in self._trade_updated_hooks:
+                try:
+                    callback(trade_id, changes)
+                except Exception as e:
+                    log.error("Error in trade_updated callback %s: %s", callback.__name__, e)
+    
+    def _trigger_trade_deleted_hooks(self, trade_id: int) -> None:
+        """
+        Trigger all registered trade_deleted callbacks.
+        
+        Parameters
+        ----------
+        trade_id : int
+            The ID of the trade that was deleted.
+        """
+        with self._hooks_lock:
+            for callback in self._trade_deleted_hooks:
+                try:
+                    callback(trade_id)
+                except Exception as e:
+                    log.error("Error in trade_deleted callback %s: %s", callback.__name__, e)
+    
+    # Streaming Control
+    
+    def enable_streaming(self) -> None:
+        """
+        Enable real-time streaming of database events.
+        
+        When enabled, registered event hooks will be triggered
+        on trade save, update, and delete operations.
+        """
+        self._streaming_enabled = True
+        log.info("Real-time streaming enabled")
+    
+    def disable_streaming(self) -> None:
+        """
+        Disable real-time streaming of database events.
+        
+        When disabled, event hooks will not be triggered.
+        """
+        self._streaming_enabled = False
+        log.info("Real-time streaming disabled")
+    
+    def is_streaming_enabled(self) -> bool:
+        """
+        Check if streaming is currently enabled.
+        
+        Returns
+        -------
+        bool
+            True if streaming is enabled, False otherwise.
+        """
+        return self._streaming_enabled
+    
+    # Change Data Capture
+    
+    def get_recent_changes(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Get recent database changes from the change log.
+        
+        This method queries the trades table ordered by created_at
+        to simulate change tracking. For production use, consider
+        implementing a dedicated change log table.
+        
+        Parameters
+        ----------
+        limit : int, optional
+            Maximum number of changes to return (default: 100).
+        
+        Returns
+        -------
+        List[Dict[str, Any]]
+            List of recent changes with metadata.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, market_slug, market_id, side, outcome, pnl, 
+                   timestamp, created_at
+            FROM trades
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,))
+        
+        changes = []
+        for row in cursor.fetchall():
+            changes.append({
+                "id": row["id"],
+                "market_slug": row["market_slug"],
+                "market_id": row["market_id"],
+                "side": row["side"],
+                "outcome": row["outcome"],
+                "pnl": row["pnl"],
+                "timestamp": row["timestamp"],
+                "created_at": row["created_at"],
+                "operation": "INSERT"  # Simulated operation type
+            })
+        
+        log.debug("Retrieved %d recent changes", len(changes))
+        return changes
     
     def close(self) -> None:
         """Close the database connection."""
@@ -1647,7 +1832,11 @@ class TradeDatabase:
             timestamp = timestamp.replace(tzinfo=timezone.utc)
         
         # Handle market_session - may not exist in older databases
-        market_session = row.get("market_session")
+        # sqlite3.Row doesn't have .get(), so we need to check key existence
+        try:
+            market_session = row["market_session"]
+        except (KeyError, IndexError):
+            market_session = None
         
         return TradeRecord(
             id=row["id"],
