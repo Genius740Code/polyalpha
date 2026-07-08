@@ -33,6 +33,9 @@ parser.add_argument("--delay", type=int, default=0, help="Execution delay in mil
 parser.add_argument("--slippage", type=float, default=0.0, help="Slippage percentage (default: 0.0)")
 parser.add_argument("--fill-prob", type=float, default=1.0, help="Fill probability for limit orders (default: 1.0)")
 parser.add_argument("--check-mode", default="continuous", help="Condition check mode: continuous, once, or integer N (default: continuous)")
+parser.add_argument("--enable-rebates", action="store_true", help="Enable fee rebate tracking (default: enabled)")
+parser.add_argument("--disable-rebates", action="store_true", help="Disable fee rebate tracking")
+parser.add_argument("--custom-rebate-tiers", type=str, help="Custom rebate tiers as JSON string (e.g., '{\"0\":0.0,\"1000\":0.15,\"5000\":0.20}')")
 args = parser.parse_args()
 
 # Create paper trading configuration
@@ -46,6 +49,20 @@ if check_mode not in ("continuous", "once"):
     except ValueError:
         check_mode = "continuous"
 
+# Parse custom rebate tiers if provided
+rebate_tiers = None
+if args.custom_rebate_tiers:
+    import json
+    try:
+        rebate_tiers = json.loads(args.custom_rebate_tiers)
+    except json.JSONDecodeError:
+        print(f"Invalid JSON for custom-rebate-tiers: {args.custom_rebate_tiers}")
+        print("Using default rebate tiers")
+        rebate_tiers = None
+
+# Determine if rebates are enabled
+enable_rebates = not args.disable_rebates
+
 config = PaperConfig(
     fee_mode=args.fee_mode,
     market_category=args.category,
@@ -54,6 +71,8 @@ config = PaperConfig(
     slippage_pct=args.slippage,
     fill_probability=args.fill_prob,
     check_mode=check_mode,
+    enable_rebates=enable_rebates,
+    rebate_tiers=rebate_tiers,
 )
 
 client = polyalpha.Client(balance=args.balance, log_level="INFO", rate_limit=args.rate_limit, paper_config=config)
@@ -63,7 +82,7 @@ print(f"Fee mode: {config.fee_mode}")
 if config.fee_mode == "polymarket":
     print(f"Market category: {config.market_category}")
 elif config.fee_mode == "custom":
-    print(f"Custom fee率: {config.custom_fee_rate:.2%}")
+    print(f"Custom fee rate: {config.custom_fee_rate:.2%}")
 if config.execution_delay_ms > 0:
     print(f"Execution delay: {config.execution_delay_ms}ms")
 if config.slippage_pct > 0:
@@ -72,6 +91,11 @@ if config.fill_probability < 1.0:
     print(f"Fill probability: {config.fill_probability:.0%}")
 if config.check_mode != "continuous":
     print(f"Check mode: {config.check_mode}")
+if config.enable_rebates:
+    print(f"Fee rebates: enabled")
+    print(f"Maker rebate bonus: {config.maker_rebate_pct:.1%}")
+else:
+    print(f"Fee rebates: disabled")
 print()
 
 # ── 1. Discover market ─────────────────────────────────────────────────────────
@@ -116,6 +140,9 @@ def on_close():
         client.paper.resolve(market, outcome)
     print()
     client.paper.summary()
+    if config.enable_rebates:
+        print()
+        client.paper.fee_summary()
     sys.exit(0)
 
 @stream.on("error")
@@ -128,3 +155,6 @@ try:
 except KeyboardInterrupt:
     print()
     client.paper.summary()
+    if config.enable_rebates:
+        print()
+        client.paper.fee_summary()

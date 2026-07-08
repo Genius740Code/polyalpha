@@ -75,6 +75,17 @@ class PaperConfig:
     market_category: str = "crypto"  # For polymarket mode: "crypto", "sports", "geopolitical", etc.
     maker_fee_rate: float = 0.0  # Separate maker fee (optional)
     
+    # Fee rebate configuration
+    enable_rebates: bool = True  # Enable fee rebate tracking
+    rebate_tiers: dict = field(default_factory=lambda: {
+        0: 0.00,    # $0 - $1000: 0% rebate
+        1000: 0.10,  # $1000 - $5000: 10% rebate
+        5000: 0.15,  # $5000 - $10000: 15% rebate
+        10000: 0.20, # $10000 - $50000: 20% rebate
+        50000: 0.25, # $50000+: 25% rebate
+    })  # Volume-based rebate tiers (volume_threshold: rebate_rate)
+    maker_rebate_pct: float = 0.25  # Additional rebate for maker orders (on top of tier)
+    
     # Execution delay
     execution_delay_ms: int = 0  # Delay in milliseconds (0 = no delay)
     delay_randomness: float = 0.0  # Random variation as percentage (0-1)
@@ -115,6 +126,15 @@ class PaperConfig:
             raise ValueError(f"check_mode must be 'continuous', 'once', or a positive integer, got '{self.check_mode}'")
         if isinstance(self.check_mode, int) and self.check_mode < 1:
             raise ValueError(f"check_mode as integer must be >= 1, got {self.check_mode}")
+        # Validate rebate configuration
+        if not 0 <= self.maker_rebate_pct <= 1:
+            raise ValueError(f"maker_rebate_pct must be between 0 and 1, got {self.maker_rebate_pct}")
+        # Validate rebate tiers are sorted and have valid values
+        if self.rebate_tiers:
+            thresholds = sorted(self.rebate_tiers.keys())
+            rates = [self.rebate_tiers[t] for t in thresholds]
+            if any(not 0 <= r <= 1 for r in rates):
+                raise ValueError(f"Rebate rates must be between 0 and 1")
 
 
 # ── Dataclasses ────────────────────────────────────────────────────────────────
@@ -134,6 +154,11 @@ class PaperOrder:
     status:    str           # "open" | "filled" | "cancelled"
     is_limit:  bool
     filled_at: Optional[datetime] = None
+    
+    # Fee rebate tracking
+    fee_type: str = "taker"  # "taker" or "maker"
+    rebate_amount: float = 0.0  # USDC rebate earned on this order
+    rebate_rate: float = 0.0  # Rebate rate applied (as decimal)
     
     # Advanced order management
     stop_loss: Optional[float] = None           # SL price trigger
@@ -164,6 +189,9 @@ class PaperOrder:
             "status":    self.status,
             "is_limit":  self.is_limit,
             "filled_at": self.filled_at.isoformat() if self.filled_at else None,
+            "fee_type":  self.fee_type,
+            "rebate_amount": self.rebate_amount,
+            "rebate_rate": self.rebate_rate,
             "stop_loss": self.stop_loss,
             "take_profit": self.take_profit,
             "trail_sl": self.trail_sl,
@@ -269,6 +297,14 @@ class PaperEngine:
         self._db_enabled: bool = False
         if db_path:
             self.enable_database(db_path)
+        # Fee rebate tracking
+        self._total_fees_paid: float = 0.0
+        self._total_rebates_earned: float = 0.0
+        self._total_volume: float = 0.0  # Total trading volume
+        self._taker_fees: float = 0.0
+        self._maker_fees: float = 0.0
+        self._taker_rebates: float = 0.0
+        self._maker_rebates: float = 0.0
 
     @property
     def report(self) -> "ReportEngine":
@@ -383,7 +419,7 @@ class PaperEngine:
 
     # ── Fee Calculation ───────────────────────────────────────────────────────────
 
-    def _calculate_fee(self, amount: float, price: float, shares: float, is_maker: bool = False) -> float:
+    def _calculate_fee(self, amount: float, price: float, shares: float, is_maker: bool = False) -> tuple[float, float, float, str]:
         """
         Calculate fee based on configuration mode.
         
@@ -400,21 +436,26 @@ class PaperEngine:
         
         Returns
         -------
-        float
-            Fee amount in USDC
+        tuple[float, float, float, str]
+            (fee_amount, rebate_amount, rebate_rate, fee_type)
         """
         if self._config.fee_mode == "zero":
-            return 0.0
+            return 0.0, 0.0, 0.0, "taker"
         elif self._config.fee_mode == "custom":
             fee_rate = self._config.maker_fee_rate if is_maker else self._config.custom_fee_rate
-            return round(amount * fee_rate, FEE_ROUNDING)
+            fee = round(amount * fee_rate, FEE_ROUNDING)
+            fee_type = "maker" if is_maker else "taker"
+            rebate_amount, rebate_rate = self._calculate_rebate(fee, fee_type)
+            return fee, rebate_amount, rebate_rate, fee_type
         elif self._config.fee_mode == "polymarket":
             return self._polymarket_fee(amount, price, shares, is_maker)
         else:
             # Fallback to default taker fee
-            return round(amount * TAKER_FEE_RATE, FEE_ROUNDING)
+            fee = round(amount * TAKER_FEE_RATE, FEE_ROUNDING)
+            rebate_amount, rebate_rate = self._calculate_rebate(fee, "taker")
+            return fee, rebate_amount, rebate_rate, "taker"
 
-    def _polymarket_fee(self, amount: float, price: float, shares: float, is_maker: bool = False) -> float:
+    def _polymarket_fee(self, amount: float, price: float, shares: float, is_maker: bool = False) -> tuple[float, float, float, str]:
         """
         Calculate Polymarket-style fee based on their formula.
         
@@ -427,10 +468,15 @@ class PaperEngine:
         - exponent: 1
         
         Geopolitical markets have 0% fee.
+        
+        Returns
+        -------
+        tuple[float, float, float, str]
+            (fee_amount, rebate_amount, rebate_rate, fee_type)
         """
         # Geopolitical markets are fee-free
         if self._config.market_category.lower() == "geopolitical":
-            return 0.0
+            return 0.0, 0.0, 0.0, "taker"
         
         # Determine fee rate based on market category
         category = self._config.market_category.lower()
@@ -454,11 +500,103 @@ class PaperEngine:
         if fee < MINIMUM_FEE:
             fee = 0.0
         
+        fee_type = "maker" if is_maker else "taker"
+        
         # For maker orders, apply maker fee rate (typically lower)
         if is_maker:
             fee = fee * MAKER_REBATE_PCT  # 25% maker rebate
         
-        return fee
+        # Calculate additional rebate if enabled
+        rebate_amount, rebate_rate = self._calculate_rebate(fee, fee_type)
+        
+        return fee, rebate_amount, rebate_rate, fee_type
+
+    def _calculate_rebate(self, fee: float, fee_type: str) -> tuple[float, float]:
+        """
+        Calculate rebate amount based on fee and rebate configuration.
+        
+        Parameters
+        ----------
+        fee : float
+            Fee amount before rebate
+        fee_type : str
+            "taker" or "maker"
+        
+        Returns
+        -------
+        tuple[float, float]
+            (rebate_amount, rebate_rate)
+        """
+        if not self._config.enable_rebates or fee == 0:
+            return 0.0, 0.0
+        
+        # Start with volume-based rebate
+        rebate_rate = self._get_volume_rebate_rate()
+        
+        # Add additional maker rebate if applicable
+        if fee_type == "maker":
+            rebate_rate += self._config.maker_rebate_pct
+        
+        # Cap rebate at 100%
+        rebate_rate = min(rebate_rate, 1.0)
+        
+        # Calculate rebate amount
+        rebate_amount = round(fee * rebate_rate, FEE_ROUNDING)
+        
+        return rebate_amount, rebate_rate
+
+    def _get_volume_rebate_rate(self) -> float:
+        """
+        Get volume-based rebate rate based on current trading volume.
+        
+        Returns
+        -------
+        float
+            Rebate rate as decimal (e.g., 0.15 for 15%)
+        """
+        if not self._config.rebate_tiers:
+            return 0.0
+        
+        # Sort thresholds in descending order
+        thresholds = sorted(self._config.rebate_tiers.keys(), reverse=True)
+        
+        # Find the highest threshold we've exceeded
+        for threshold in thresholds:
+            if self._total_volume >= threshold:
+                return self._config.rebate_tiers[threshold]
+        
+        return 0.0  # Below lowest threshold
+
+    def _track_fee_and_rebate(self, fee: float, rebate: float, fee_type: str, amount: float) -> None:
+        """
+        Track fee and rebate statistics.
+        
+        Parameters
+        ----------
+        fee : float
+            Fee amount paid
+        rebate : float
+            Rebate amount earned
+        fee_type : str
+            "taker" or "maker"
+        amount : float
+            Trade amount (for volume tracking)
+        """
+        self._total_fees_paid += fee
+        self._total_rebates_earned += rebate
+        self._total_volume += amount
+        
+        if fee_type == "taker":
+            self._taker_fees += fee
+            self._taker_rebates += rebate
+        else:
+            self._maker_fees += fee
+            self._maker_rebates += rebate
+        
+        log.debug(
+            "Paper: fee tracked - total_fees=$%.4f, total_rebates=$%.4f, total_volume=$%.2f",
+            self._total_fees_paid, self._total_rebates_earned, self._total_volume
+        )
 
     # ── Slippage Calculation ───────────────────────────────────────────────────────
 
@@ -1343,6 +1481,59 @@ class PaperEngine:
 
         log.info("Paper: stream attached for %s", market.slug)
 
+    # ── Fee Rebate Reporting ─────────────────────────────────────────────────────
+
+    def fee_summary(self) -> None:
+        """Print a detailed fee and rebate summary."""
+        div = "─" * SUMMARY_DIV_WIDTH
+        print(div)
+        print("  POLYALPHA — FEE & REBATE SUMMARY")
+        print(div)
+        print(f"  {'Total volume':<22} ${self._total_volume:>10.2f}")
+        print(f"  {'Total fees paid':<22} ${self._total_fees_paid:>10.4f}")
+        print(f"  {'Total rebates earned':<22} ${self._total_rebates_earned:>10.4f}")
+        print(f"  {'Net fees (after rebates)':<22} ${self._total_fees_paid - self._total_rebates_earned:>10.4f}")
+        print(f"  {'Effective fee rate':<22} {(self._total_fees_paid - self._total_rebates_earned) / self._total_volume * 100 if self._total_volume > 0 else 0:.2f}%")
+        print(div)
+        print(f"  {'Taker fees':<22} ${self._taker_fees:>10.4f}")
+        print(f"  {'Taker rebates':<22} ${self._taker_rebates:>10.4f}")
+        print(f"  {'Maker fees':<22} ${self._maker_fees:>10.4f}")
+        print(f"  {'Maker rebates':<22} ${self._maker_rebates:>10.4f}")
+        print(div)
+        
+        # Show current rebate tier
+        current_rate = self._get_volume_rebate_rate()
+        print(f"  Current volume rebate tier: {current_rate * 100:.1f}%")
+        if self._config.rebate_tiers:
+            print(f"  Volume thresholds:")
+            thresholds = sorted(self._config.rebate_tiers.items())
+            for threshold, rate in thresholds:
+                marker = " ← current" if rate == current_rate else ""
+                print(f"    ${threshold:>8.0f}+: {rate * 100:>5.1f}%{marker}")
+        print(div)
+
+    def get_rebate_stats(self) -> dict:
+        """
+        Get rebate statistics as a dictionary.
+        
+        Returns
+        -------
+        dict
+            Dictionary containing all rebate statistics
+        """
+        return {
+            "total_volume": self._total_volume,
+            "total_fees_paid": self._total_fees_paid,
+            "total_rebates_earned": self._total_rebates_earned,
+            "net_fees": self._total_fees_paid - self._total_rebates_earned,
+            "effective_fee_rate": (self._total_fees_paid - self._total_rebates_earned) / self._total_volume if self._total_volume > 0 else 0,
+            "taker_fees": self._taker_fees,
+            "taker_rebates": self._taker_rebates,
+            "maker_fees": self._maker_fees,
+            "maker_rebates": self._maker_rebates,
+            "current_rebate_rate": self._get_volume_rebate_rate(),
+        }
+
     # ── Reporting ──────────────────────────────────────────────────────────────
 
     def summary(self) -> None:
@@ -1356,6 +1547,7 @@ class PaperEngine:
 
         total_invested = sum(o.amount for o in filled)
         total_fees     = sum(o.fee    for o in filled)
+        total_rebates   = sum(o.rebate_amount for o in filled)
         wins           = [p for p in resolved if p.outcome == "WON"]
         losses         = [p for p in resolved if p.outcome == "LOST"]
         realised_pnl   = sum(p.pnl for p in resolved)
@@ -1368,6 +1560,8 @@ class PaperEngine:
         print(f"  {'Balance':<22} ${self._balance:>10.2f}")
         print(f"  {'Total invested':<22} ${total_invested:>10.2f}")
         print(f"  {'Total fees paid':<22} ${total_fees:>10.4f}")
+        print(f"  {'Total rebates earned':<22} ${total_rebates:>10.4f}")
+        print(f"  {'Net fees (after rebates)':<22} ${total_fees - total_rebates:>10.4f}")
         print(f"  {'Unrealised P&L':<22} ${unrealised_pnl:>+10.2f}")
         print(f"  {'Realised P&L':<22} ${realised_pnl:>+10.2f}")
 
@@ -1422,12 +1616,15 @@ class PaperEngine:
         net = amount  # Will subtract fee after calculation
         shares = round(net / price, SHARE_ROUNDING) if price > 0 else 0.0
 
-        # Calculate fee using new method
-        fee = self._calculate_fee(amount, price, shares, is_maker=is_limit)
-        net = amount - fee
+        # Calculate fee and rebate
+        fee, rebate_amount, rebate_rate, fee_type = self._calculate_fee(amount, price, shares, is_maker=is_limit)
+        net = amount - fee + rebate_amount  # Net cost after fee and rebate
         shares = round(net / price, SHARE_ROUNDING) if price > 0 else 0.0
 
         self._balance -= amount
+        
+        # Track fee and rebate statistics
+        self._track_fee_and_rebate(fee, rebate_amount, fee_type, amount)
 
         order = PaperOrder(
             id        = _new_id(),
@@ -1441,13 +1638,16 @@ class PaperEngine:
             status    = "filled",
             is_limit  = is_limit,
             filled_at = _now(),
+            fee_type  = fee_type,
+            rebate_amount = rebate_amount,
+            rebate_rate = rebate_rate,
         )
         self._orders[order.id] = order
 
         self._upsert_position(market.id, market.slug, market.question, side, shares, price, order.id)
         log.info(
-            "Paper: filled %s %.4f shares @ %.3f  fee=$%.4f  balance=$%.2f",
-            side, shares, price, fee, self._balance,
+            "Paper: filled %s %.4f shares @ %.3f  fee=$%.4f  rebate=$%.4f  balance=$%.2f",
+            side, shares, price, fee, rebate_amount, self._balance,
         )
         return order
 
@@ -1474,17 +1674,23 @@ class PaperEngine:
             self._balance += order.amount  # refund
             return
 
-        # Calculate fee using new method
+        # Calculate fee and rebate
         shares = round(order.amount / actual_price, SHARE_ROUNDING) if actual_price > 0 else 0.0
-        fee = self._calculate_fee(order.amount, actual_price, shares, is_maker=True)
-        net = order.amount - fee
+        fee, rebate_amount, rebate_rate, fee_type = self._calculate_fee(order.amount, actual_price, shares, is_maker=True)
+        net = order.amount - fee + rebate_amount
         shares = round(net / actual_price, SHARE_ROUNDING) if actual_price > 0 else 0.0
+        
+        # Track fee and rebate statistics
+        self._track_fee_and_rebate(fee, rebate_amount, fee_type, order.amount)
 
         order.price     = actual_price
         order.shares    = shares
         order.fee       = fee
         order.status    = "filled"
         order.filled_at = _now()
+        order.fee_type  = fee_type
+        order.rebate_amount = rebate_amount
+        order.rebate_rate = rebate_rate
 
         # Resolve the question string from any existing position in this market
         question = next(
@@ -1495,8 +1701,8 @@ class PaperEngine:
             order.market_id, order.slug, question, order.side, shares, actual_price, order.id,
         )
         log.info(
-            "Paper: limit filled %s %.4f shares @ %.3f  fee=$%.4f",
-            order.side, shares, actual_price, fee,
+            "Paper: limit filled %s %.4f shares @ %.3f  fee=$%.4f  rebate=$%.4f",
+            order.side, shares, actual_price, fee, rebate_amount,
         )
 
     def _upsert_position(

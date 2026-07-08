@@ -36,11 +36,109 @@ config = PaperConfig(
     execution_delay_ms=2000,  # 2 second execution delay
     slippage_pct=0.05,  # 5% slippage
     fill_probability=0.8,  # 80% fill probability for limit orders
+    enable_rebates=True,  # Enable fee rebate tracking
+    rebate_tiers={  # Volume-based rebate tiers
+        0: 0.00,    # $0 - $1000: 0% rebate
+        1000: 0.10,  # $1000 - $5000: 10% rebate
+        5000: 0.15,  # $5000 - $10000: 15% rebate
+        10000: 0.20, # $10000+: 20% rebate
+    },
+    maker_rebate_pct=0.25,  # Additional 25% rebate for maker orders
 )
 
 # Use with client
 client = polyalpha.Client(balance=500.0, paper_config=config)
 ```
+
+---
+
+## Fee Rebate System
+
+The paper trading engine includes a comprehensive fee rebate system that tracks and rewards trading volume. Rebates reduce your effective trading costs based on your cumulative trading volume and order type.
+
+### How Rebates Work
+
+1. **Volume-Based Tiers**: As your total trading volume increases, you qualify for higher rebate percentages
+2. **Maker Bonus**: Limit orders (maker orders) receive an additional rebate percentage on top of volume tiers
+3. **Automatic Tracking**: All fees and rebates are tracked automatically and displayed in summaries
+
+### Configuration
+
+```python
+from polyalpha.trading.paper import PaperConfig
+
+config = PaperConfig(
+    enable_rebates=True,  # Enable/disable rebate tracking
+    rebate_tiers={
+        0: 0.00,    # $0 - $1000: 0% rebate
+        1000: 0.10,  # $1000 - $5000: 10% rebate
+        5000: 0.15,  # $5000 - $10000: 15% rebate
+        10000: 0.20, # $10000+: 20% rebate
+    },
+    maker_rebate_pct=0.25,  # Additional 25% for maker orders
+)
+```
+
+### Viewing Rebate Statistics
+
+```python
+# Get detailed fee and rebate summary
+client.paper.fee_summary()
+
+# Get rebate statistics as a dictionary
+stats = client.paper.get_rebate_stats()
+print(f"Total volume: ${stats['total_volume']:.2f}")
+print(f"Total fees paid: ${stats['total_fees_paid']:.4f}")
+print(f"Total rebates earned: ${stats['total_rebates_earned']:.4f}")
+print(f"Net fees: ${stats['net_fees']:.4f}")
+print(f"Effective fee rate: {stats['effective_fee_rate']:.2%}")
+print(f"Current rebate tier: {stats['current_rebate_rate']:.1%}")
+```
+
+### Order-Level Rebate Information
+
+Each order tracks its individual rebate:
+
+```python
+order = client.paper.buy(market, side="UP", amount=25.0)
+print(f"Fee type: {order.fee_type}")  # "taker" or "maker"
+print(f"Rebate amount: ${order.rebate_amount:.4f}")
+print(f"Rebate rate: {order.rebate_rate:.1%}")
+print(f"Net fee: ${order.fee - order.rebate_amount:.4f}")
+```
+
+### Example Output
+
+```
+──────────────────────────────────────────────────────────────────
+  POLYALPHA — FEE & REBATE SUMMARY
+──────────────────────────────────────────────────────────────────
+  Total volume              $   1250.00
+  Total fees paid           $      25.0000
+  Total rebates earned      $       2.5000
+  Net fees (after rebates)  $      22.5000
+  Effective fee rate       1.80%
+──────────────────────────────────────────────────────────────────
+  Taker fees                $      15.0000
+  Taker rebates             $       1.5000
+  Maker fees                $      10.0000
+  Maker rebates             $       1.0000
+──────────────────────────────────────────────────────────────────
+  Current volume rebate tier: 10.0%
+  Volume thresholds:
+      $     0+:  0.0%
+      $  1000+: 10.0% ← current
+      $  5000+: 15.0%
+      $ 10000+: 20.0%
+──────────────────────────────────────────────────────────────────
+```
+
+### Benefits
+
+- **Cost Reduction**: High-volume traders can significantly reduce their effective fee rates
+- **Maker Incentive**: Limit orders provide liquidity and earn additional rebates
+- **Transparency**: Full visibility into fee breakdown and rebate calculations
+- **Configurability**: Customize rebate tiers to match your trading strategy
 
 ---
 

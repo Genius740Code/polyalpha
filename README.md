@@ -35,9 +35,6 @@ market = client.markets.latest("SOL",  "1h")
 # Direct slug lookup
 market = client.markets.get("btc-updown-5m-1751234700")
 
-# Latest tweet market (e.g. Elon Musk, White House, Zelensky)
-market = client.markets.latest_tweet("elon-musk", "7d")
-
 # Keyword search
 markets = client.markets.search("ETH 15m")   # → list[Market]
 
@@ -45,7 +42,7 @@ markets = client.markets.search("ETH 15m")   # → list[Market]
 markets = client.markets.available("5m")     # → list[Market]
 ```
 
-**Supported assets:** BTC, ETH, SOL, XRP, DOGE, HYPE, BNB
+**Supported assets:** BTC, ETH, SOL, XRP, DOGE  
 **Supported timeframes:** 5m, 15m, 1h, 4h, 24h
 
 ### Market object
@@ -150,175 +147,6 @@ client.paper.resolve(market, outcome="UP")
 client.paper.summary()
 ```
 
-### Database persistence
-
-Paper trading trades can be automatically saved to a SQLite database for analysis and backtesting:
-
-```python
-# Enable database persistence when creating the client
-client = polyalpha.Client(balance=500.0, db_path="trades.db")
-
-# Or enable it later
-client.paper.enable_database("trades.db")
-
-# Trades are automatically saved when positions are resolved
-client.paper.resolve(market, outcome="UP")  # Trade saved to database
-
-# Access the database directly
-db = client.paper.database
-trades = db.load_all_trades()
-btc_trades = db.load_trades_by_asset("BTC")
-stats = db.get_statistics()
-
-# Disable database
-client.paper.disable_database()
-```
-
-**Direct database access:**
-
-```python
-from polyalpha.database import TradeDatabase
-
-# Create a database instance
-db = TradeDatabase("trades.db")
-
-# Save a trade manually
-db.save_trade(
-    market_slug="btc-updown-5m-1751234700",
-    market_id="abc123",
-    side="UP",
-    entry_price=0.92,
-    exit_price=None,
-    amount=10.0,
-    shares=10.5,
-    fee=0.2,
-    outcome="WON",
-    pnl=5.3,
-    timestamp=datetime.now(timezone.utc)
-)
-
-# Load trades with filters
-all_trades = db.load_all_trades()
-market_trades = db.load_trades_by_market("btc-updown-5m-1751234700")
-asset_trades = db.load_trades_by_asset("BTC")
-side_trades = db.load_trades_by_side("UP")
-outcome_trades = db.load_trades_by_outcome("WON")
-
-# Get statistics
-stats = db.get_statistics()
-print(f"Total trades: {stats.total_trades}")
-print(f"Win rate: {stats.win_rate:.1f}%")
-print(f"Total P&L: ${stats.total_pnl:.2f}")
-```
-
-**Database features:**
-- Automatic trade saving when positions are resolved
-- Filter trades by market, asset, side, outcome, or date range
-- Calculate statistics (win rate, P&L, fees, etc.)
-- No additional dependencies (SQLite is in Python's standard library)
-- Easy to export data for analysis in other tools
-
-### Advanced order management
-
-The paper trading engine supports advanced order types for professional risk management:
-
-**Stop-loss & Take-profit:**
-
-```python
-# Buy with stop-loss and/or take-profit
-order = client.paper.buy_with_tp_sl(
-    market, 
-    side="UP", 
-    amount=100.0,
-    stop_loss=0.45,      # Auto-sell if price drops to 0.45
-    take_profit=0.55,    # Auto-sell if price rises to 0.55
-)
-
-# Set trailing stop-loss (moves with favorable price movement)
-order = client.paper.buy_with_tp_sl(
-    market, 
-    side="UP", 
-    amount=100.0,
-    trail_sl=0.05,       # 5% trailing stop-loss
-)
-
-# Set trailing take-profit (allows more profit potential)
-order = client.paper.buy_with_tp_sl(
-    market, 
-    side="UP", 
-    amount=100.0,
-    trail_tp=0.10,       # 10% trailing take-profit
-)
-
-# Add trailing SL to existing order
-order = client.paper.buy(market, side="UP", amount=100.0)
-client.paper.set_trailing_sl(order.id, 0.05)
-client.paper.set_trailing_tp(order.id, 0.10)
-```
-
-**One-Cancels-Other (OCO) orders:**
-
-```python
-# Place SL and TP where one cancels the other
-main_order, oco_order = client.paper.oco_order(
-    market, 
-    side="UP", 
-    amount=100.0,
-    stop_loss=0.45,
-    take_profit=0.55,
-)
-# When SL triggers, TP is automatically cancelled (and vice versa)
-```
-
-**Selling/closing positions:**
-
-```python
-# Sell full position
-sell_order = client.paper.sell_position(market, side="UP")
-
-# Sell partial position
-sell_order = client.paper.sell_position(market, side="UP", amount=50.0)
-```
-
-**Automatic TP/SL triggering:**
-
-When a stream is attached, TP/SL orders are automatically checked on every price update:
-
-```python
-stream = client.stream(market)
-client.paper.attach_stream(stream, market)
-stream.start(background=True)
-# TP/SL will trigger automatically when price crosses thresholds
-```
-
-**Time window execution:**
-
-Control when orders are allowed to execute using time windows. This is useful for strategies that only want to trade during specific periods, such as the final minute before market close:
-
-```python
-from datetime import datetime, timedelta
-
-# Only allow execution within 1 minute of market close
-end_time = datetime.fromisoformat(market.end_time)
-order = client.paper.buy(
-    market,
-    side="UP",
-    amount=25.0,
-    time_window_start=end_time - timedelta(minutes=1),
-    time_window_end=end_time
-)
-
-# Limit orders with time windows
-order = client.paper.limit(
-    market,
-    side="UP",
-    price=0.92,
-    amount=25.0,
-    time_window_start=end_time - timedelta(minutes=1),
-    time_window_end=end_time
-)
-```
-
 ### PaperOrder
 
 ```python
@@ -331,17 +159,6 @@ order.fee         # USDC fee paid
 order.status      # "open" | "filled" | "cancelled"
 order.is_limit    # bool
 order.filled_at   # datetime (UTC) or None
-
-# Advanced order fields
-order.stop_loss          # SL price trigger (optional)
-order.take_profit        # TP price trigger (optional)
-order.trail_sl           # Trailing SL distance as percentage (optional)
-order.trail_tp           # Trailing TP distance as percentage (optional)
-order.trail_sl_price     # Current trailing SL price (optional)
-order.trail_tp_price     # Current trailing TP price (optional)
-order.oco_order_id       # OCO linked order ID (optional)
-order.tp_sl_triggered_by # Which order triggered: "tp" | "sl" | None
-
 order.dump()      # → dict
 ```
 
@@ -379,49 +196,6 @@ client = polyalpha.Client(
 
 ---
 
-## Weather bot configuration
-
-For weather trading bots, pre-configured city templates are available for easy setup:
-
-```python
-from polyalpha.bots import CITIES, print_config, list_configs
-
-# List all available cities
-print(list_configs())
-# ['Seoul', 'Shanghai', 'Chengdu', 'Shenzhen', 'Hong Kong', 'Tokyo', 'Singapore', 'Bangkok', 'Manila', 'Jakarta']
-
-# Use a pre-configured city
-config = CITIES["Seoul"]
-# {
-#     "station": "RKSI",
-#     "source": "iem",
-#     "lat": 37.469,
-#     "lon": 126.451,
-#     "tz": "Asia/Seoul",
-#     "bucket_mode": "round",
-# }
-
-# Print configuration for copy-paste
-print_config("Seoul")
-# "Seoul": {
-#     "station": "RKSI",
-#     "source": "iem",
-#     "lat": 37.469,
-#     "lon": 126.451,
-#     "tz": "Asia/Seoul",
-#     "bucket_mode": "round",
-# },
-```
-
-**Configuration fields:**
-- `station`: Weather station identifier (ICAO airport code or regional code)
-- `source`: Data provider (e.g., "iem" for Iowa Environmental Mesonet, "hko" for Hong Kong Observatory)
-- `lat`/`lon`: Geographic coordinates
-- `tz`: Timezone identifier for proper time handling
-- `bucket_mode`: Time aggregation method ("round" or "floor")
-
----
-
 ## Error handling
 
 ```python
@@ -448,9 +222,6 @@ python examples/market.py --asset BTC --timeframe 5m
 python examples/market.py --rate-limit 10
 python examples/stream.py --asset ETH --timeframe 15m --log DEBUG
 python examples/paper.py  --side UP   --amount 25 --limit 0.92
-python examples/advanced_orders.py  # Demonstrates TP/SL, trailing stops, OCO orders
-python examples/weather_config_example.py  # Weather bot configuration usage
-python examples/database_example.py  # Database persistence for paper trading
 ```
 
 ---
