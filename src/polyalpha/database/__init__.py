@@ -38,14 +38,36 @@ Usage
 
 from .database import (
     TradeDatabase,
+    TradeRecord,
+    TradeStatistics,
     DatabaseMetrics,
     LogEntry,
     AlertRule,
 )
+from .security import (
+    DatabaseEncryption,
+    AuthenticationManager,
+    AuthorizationManager,
+    DataMasker,
+    AuthMethod,
+    Role,
+    User,
+    MaskingRule,
+)
 
 __all__ = [
     "TradeDatabase",
+    "TradeRecord",
+    "TradeStatistics",
     "DatabaseMetrics",
     "LogEntry",
     "AlertRule",
+    "DatabaseEncryption",
+    "AuthenticationManager",
+    "AuthorizationManager",
+    "DataMasker",
+    "AuthMethod",
+    "Role",
+    "User",
+    "MaskingRule",
 ]

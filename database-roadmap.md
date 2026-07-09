@@ -439,19 +439,40 @@ db.set_user("user_id")
 logs = db.get_audit_logs(user_id="user_id", start_date, end_date)
 ```
 
-#### 4.2 Security
+#### 4.2 Security ✅ (COMPLETED)
 - **Encryption**: At-rest and in-transit encryption
 - **Authentication**: Multiple auth methods (API keys, OAuth, JWT)
 - **Authorization**: Role-based access control
 - **Data Masking**: Sensitive data masking
 
 ```python
-# Proposed API
+# Implemented API
 db.enable_encryption(key="encryption_key")
-db.set_auth_method("oauth2")
+db.enable_encryption(password="my_password", fields=["market_id"])
+db.set_auth_method("api_key")
+db.set_auth_method("jwt")
+db.add_user("user1", "trader", ["trader"])
 db.add_role("analyst", permissions=["read"])
 db.add_role("trader", permissions=["read", "write"])
+db.authenticate("api_key_or_jwt_token")
+db.check_permission("write")
+db.require_permission("delete")
+db.add_masking_rule("market_id", show_first=4, show_last=4)
+db.mask_trade_record(trade)
 ```
+
+**Implementation Notes:**
+- Encryption using Fernet symmetric encryption (cryptography library)
+- Key derivation from password using PBKDF2 with SHA256
+- Field-level encryption for sensitive data
+- API key authentication with SHA256 hashing
+- JWT authentication with HS256 algorithm (PyJWT library)
+- Default roles: admin, trader, analyst, viewer
+- Role-based permission checking
+- Configurable data masking rules (show first/last characters, mask all)
+- Default masking rules for market_id, api_key, secret, password
+- Thread-safe authentication and authorization managers
+- Optional dependencies: cryptography (for encryption), pyjwt (for JWT)
 
 #### 4.3 Monitoring and Observability ✅ (COMPLETED)
 - **Metrics**: Database performance metrics

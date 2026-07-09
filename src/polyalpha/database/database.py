@@ -21,11 +21,22 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Callable
+from typing import Optional, List, Dict, Any, Callable, Set
 from functools import lru_cache
 import hashlib
 from threading import Lock
 from contextlib import contextmanager
+
+from .security import (
+    DatabaseEncryption,
+    AuthenticationManager,
+    AuthorizationManager,
+    DataMasker,
+    AuthMethod,
+    Role,
+    User,
+    MaskingRule,
+)
 
 log = logging.getLogger(__name__)
 
@@ -223,6 +234,15 @@ class TradeDatabase:
         self._last_optimization: Optional[datetime] = None
         self._cache_hits = 0
         self._cache_misses = 0
+        
+        # Security features
+        self._encryption: Optional[DatabaseEncryption] = None
+        self._auth_manager = AuthenticationManager()
+        self._authz_manager = AuthorizationManager()
+        self._data_masker = DataMasker()
+        self._current_user_id: Optional[str] = None
+        self._current_roles: Set[str] = set()
+        self._encryption_fields: List[str] = []  # Fields to encrypt
         
         self._initialize_db()
     
@@ -2629,6 +2649,323 @@ class TradeDatabase:
             raise
         finally:
             self._current_correlation_id = old_correlation_id
+    
+    # Security Features
+    
+    def enable_encryption(self, key: Optional[bytes] = None, password: Optional[str] = None, fields: Optional[List[str]] = None) -> None:
+        """
+        Enable at-rest encryption for the database.
+        
+        Parameters
+        ----------
+        key : bytes, optional
+            32-byte URL-safe base64-encoded encryption key.
+        password : str, optional
+            Password to derive encryption key from.
+        fields : list of str, optional
+            List of field names to encrypt (default: ["market_id"]).
+        
+        Raises
+        ------
+        ImportError
+            If cryptography library is not installed.
+        
+        Example
+        -------
+        >>> db.enable_encryption(password="my_secure_password")
+        >>> db.enable_encryption(key=DatabaseEncryption.generate_key(), fields=["market_id"])
+        """
+        self._encryption = DatabaseEncryption(key=key, password=password)
+        self._encryption_fields = fields or ["market_id"]
+        log.info("Encryption enabled for fields: %s", self._encryption_fields)
+    
+    def disable_encryption(self) -> None:
+        """Disable encryption (data will be stored in plaintext)."""
+        if self._encryption:
+            self._encryption.disable()
+        log.info("Encryption disabled")
+    
+    def is_encryption_enabled(self) -> bool:
+        """Check if encryption is enabled."""
+        return self._encryption is not None and self._encryption.is_enabled()
+    
+    def set_auth_method(self, method: str) -> None:
+        """
+        Set authentication method.
+        
+        Parameters
+        ----------
+        method : str
+            Authentication method: "none", "api_key", or "jwt".
+        
+        Example
+        -------
+        >>> db.set_auth_method("api_key")
+        >>> db.set_auth_method("jwt")
+        """
+        auth_method = AuthMethod(method.lower())
+        self._auth_manager.set_method(auth_method)
+        log.info("Authentication method set to: %s", method)
+    
+    def get_auth_method(self) -> str:
+        """Get current authentication method."""
+        return self._auth_manager.get_method().value
+    
+    def add_user(
+        self,
+        user_id: str,
+        username: str,
+        roles: List[str],
+        api_key: Optional[str] = None,
+        jwt_secret: Optional[str] = None,
+    ) -> None:
+        """
+        Add a user to the authentication system.
+        
+        Parameters
+        ----------
+        user_id : str
+            Unique user identifier.
+        username : str
+            Username.
+        roles : list of str
+            List of role names for the user.
+        api_key : str, optional
+            API key for the user (auto-generated if not provided).
+        jwt_secret : str, optional
+            JWT secret for the user.
+        
+        Example
+        -------
+        >>> db.add_user("user1", "trader", ["trader"])
+        >>> db.add_user("user2", "analyst", ["analyst"], api_key="pk_...")
+        """
+        if api_key is None and self._auth_manager.get_method() == AuthMethod.API_KEY:
+            api_key = self._auth_manager.generate_api_key()
+        
+        self._auth_manager.add_user(user_id, username, roles, api_key, jwt_secret)
+    
+    def remove_user(self, user_id: str) -> None:
+        """
+        Remove a user from the authentication system.
+        
+        Parameters
+        ----------
+        user_id : str
+            User identifier to remove.
+        """
+        self._auth_manager.remove_user(user_id)
+    
+    def authenticate(self, credential: str, user_id: Optional[str] = None) -> bool:
+        """
+        Authenticate a user using the configured authentication method.
+        
+        Parameters
+        ----------
+        credential : str
+            Authentication credential (API key or JWT token).
+        user_id : str, optional
+            User ID (required for JWT authentication).
+        
+        Returns
+        -------
+        bool
+            True if authentication successful, False otherwise.
+        
+        Example
+        -------
+        >>> if db.authenticate("pk_abc123"):
+        ...     print("Authenticated!")
+        >>> if db.authenticate("jwt_token", user_id="user1"):
+        ...     print("Authenticated!")
+        """
+        method = self._auth_manager.get_method()
+        
+        if method == AuthMethod.API_KEY:
+            authenticated_user_id = self._auth_manager.validate_api_key(credential)
+            if authenticated_user_id:
+                self._current_user_id = authenticated_user_id
+                user = self._auth_manager.get_user(authenticated_user_id)
+                if user:
+                    self._current_roles = user.roles
+                return True
+            return False
+        
+        elif method == AuthMethod.JWT:
+            if user_id is None:
+                raise ValueError("user_id is required for JWT authentication")
+            if self._auth_manager.validate_jwt_token(credential, user_id):
+                self._current_user_id = user_id
+                user = self._auth_manager.get_user(user_id)
+                if user:
+                    self._current_roles = user.roles
+                return True
+            return False
+        
+        elif method == AuthMethod.NONE:
+            return True
+        
+        return False
+    
+    def get_current_user(self) -> Optional[str]:
+        """Get the currently authenticated user ID."""
+        return self._current_user_id
+    
+    def get_current_roles(self) -> Set[str]:
+        """Get the roles of the currently authenticated user."""
+        return self._current_roles.copy()
+    
+    def add_role(self, name: str, permissions: List[str], description: Optional[str] = None) -> None:
+        """
+        Add a custom role.
+        
+        Parameters
+        ----------
+        name : str
+            Role name.
+        permissions : list of str
+            List of permissions for the role.
+        description : str, optional
+            Role description.
+        
+        Example
+        -------
+        >>> db.add_role("manager", ["read", "write", "export"], "Can read, write, and export")
+        """
+        role = Role(name=name, permissions=set(permissions), description=description)
+        self._authz_manager.add_role(role)
+    
+    def remove_role(self, role_name: str) -> None:
+        """
+        Remove a role.
+        
+        Parameters
+        ----------
+        role_name : str
+            Role name to remove.
+        """
+        self._authz_manager.remove_role(role_name)
+    
+    def check_permission(self, permission: str) -> bool:
+        """
+        Check if the current user has a specific permission.
+        
+        Parameters
+        ----------
+        permission : str
+            Permission to check (e.g., "read", "write", "delete").
+        
+        Returns
+        -------
+        bool
+            True if user has permission, False otherwise.
+        
+        Example
+        -------
+        >>> if db.check_permission("write"):
+        ...     db.save_trade(...)
+        """
+        if not self._auth_manager.is_enabled():
+            return True
+        return self._authz_manager.check_permission(self._current_roles, permission)
+    
+    def require_permission(self, permission: str) -> None:
+        """
+        Require a specific permission for the current operation.
+        
+        Raises PermissionError if the current user doesn't have the permission.
+        
+        Parameters
+        ----------
+        permission : str
+            Required permission.
+        
+        Raises
+        ------
+        PermissionError
+            If user doesn't have the required permission.
+        
+        Example
+        -------
+        >>> db.require_permission("delete")
+        >>> db.delete_trade(trade_id)
+        """
+        if not self.check_permission(permission):
+            raise PermissionError(
+                f"User '{self._current_user_id}' with roles {self._current_roles} "
+                f"does not have permission '{permission}'"
+            )
+    
+    def add_masking_rule(self, field_name: str, mask_char: str = "*", show_first: int = 0, show_last: int = 0, mask_all: bool = False) -> None:
+        """
+        Add a data masking rule for a field.
+        
+        Parameters
+        ----------
+        field_name : str
+            Field name to mask.
+        mask_char : str, optional
+            Character to use for masking (default: "*").
+        show_first : int, optional
+            Number of characters to show at the beginning (default: 0).
+        show_last : int, optional
+            Number of characters to show at the end (default: 0).
+        mask_all : bool, optional
+            Mask the entire field (default: False).
+        
+        Example
+        -------
+        >>> db.add_masking_rule("market_id", show_first=4, show_last=4)
+        >>> db.add_masking_rule("secret", mask_all=True)
+        """
+        rule = MaskingRule(
+            field_name=field_name,
+            mask_char=mask_char,
+            show_first=show_first,
+            show_last=show_last,
+            mask_all=mask_all,
+        )
+        self._data_masker.add_rule(rule)
+    
+    def remove_masking_rule(self, field_name: str) -> None:
+        """
+        Remove a masking rule.
+        
+        Parameters
+        ----------
+        field_name : str
+            Field name to remove rule for.
+        """
+        self._data_masker.remove_rule(field_name)
+    
+    def enable_masking(self) -> None:
+        """Enable data masking."""
+        self._data_masker.enable()
+    
+    def disable_masking(self) -> None:
+        """Disable data masking."""
+        self._data_masker.disable()
+    
+    def is_masking_enabled(self) -> bool:
+        """Check if data masking is enabled."""
+        return self._data_masker.is_enabled()
+    
+    def mask_trade_record(self, trade: TradeRecord) -> Dict[str, Any]:
+        """
+        Apply masking to a trade record.
+        
+        Parameters
+        ----------
+        trade : TradeRecord
+            Trade record to mask.
+        
+        Returns
+        -------
+        dict
+            Masked trade record as dictionary.
+        """
+        record_dict = trade.to_dict()
+        return self._data_masker.mask_record(record_dict)
     
     def close(self) -> None:
         """Close the database connection."""
