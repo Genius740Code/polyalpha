@@ -15,6 +15,7 @@ import csv
 import json
 import logging
 import sqlite3
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1514,6 +1515,321 @@ class TradeDatabase:
         wb.save(filepath)
         
         log.info("Exported %d trades to Excel: %s", len(trades), filepath)
+    
+    # Backup and Restore
+    
+    def backup(self, backup_path: str | Path) -> None:
+        """
+        Create a backup of the database to a local file.
+        
+        This method creates a full backup of the SQLite database by copying
+        the database file to the specified backup location. The backup includes
+        all tables, indexes, and data.
+        
+        Parameters
+        ----------
+        backup_path : str or Path
+            Path where the backup file should be saved. The parent directory
+            will be created if it doesn't exist.
+        
+        Raises
+        ------
+        FileNotFoundError
+            If the source database file doesn't exist.
+        IOError
+            If the backup cannot be created due to permission or disk space issues.
+        
+        Example
+        -------
+        >>> db.backup("backups/trades_backup_2024_01_01.db")
+        >>> db.backup("backups/trades_backup.db")
+        """
+        backup_path = Path(backup_path)
+        
+        # Ensure source database exists
+        if not self.db_path.exists():
+            raise FileNotFoundError(f"Source database not found: {self.db_path}")
+        
+        # Create parent directory if it doesn't exist
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Close connection before copying to ensure data integrity
+        was_open = self._conn is not None
+        if was_open:
+            self.close()
+        
+        try:
+            # Copy the database file
+            shutil.copy2(self.db_path, backup_path)
+            log.info("Database backup created: %s -> %s", self.db_path, backup_path)
+        finally:
+            # Reopen connection if it was open
+            if was_open:
+                self._get_connection()
+    
+    def restore(self, backup_path: str | Path, overwrite: bool = False) -> None:
+        """
+        Restore the database from a local backup file.
+        
+        This method restores the database from a previously created backup file.
+        By default, this will not overwrite an existing database unless overwrite=True.
+        
+        Parameters
+        ----------
+        backup_path : str or Path
+            Path to the backup file to restore from.
+        overwrite : bool, optional
+            If True, overwrite the existing database file. If False (default),
+            raise an error if the database file already exists.
+        
+        Raises
+        ------
+        FileNotFoundError
+            If the backup file doesn't exist.
+        FileExistsError
+            If the target database exists and overwrite=False.
+        IOError
+            If the restore cannot be completed due to permission or disk issues.
+        
+        Example
+        -------
+        >>> db.restore("backups/trades_backup_2024_01_01.db")
+        >>> db.restore("backups/trades_backup.db", overwrite=True)
+        """
+        backup_path = Path(backup_path)
+        
+        # Ensure backup file exists
+        if not backup_path.exists():
+            raise FileNotFoundError(f"Backup file not found: {backup_path}")
+        
+        # Check if target exists and overwrite is False
+        if self.db_path.exists() and not overwrite:
+            raise FileExistsError(
+                f"Database file already exists: {self.db_path}. "
+                f"Use overwrite=True to replace it."
+            )
+        
+        # Close connection before restoring
+        was_open = self._conn is not None
+        if was_open:
+            self.close()
+        
+        try:
+            # Copy the backup file to the database location
+            shutil.copy2(backup_path, self.db_path)
+            
+            # Invalidate cache since database has changed
+            self._invalidate_cache()
+            
+            log.info("Database restored: %s -> %s", backup_path, self.db_path)
+        finally:
+            # Reopen connection
+            self._get_connection()
+    
+    def backup_to_s3(
+        self,
+        s3_uri: str,
+        aws_access_key_id: Optional[str] = None,
+        aws_secret_access_key: Optional[str] = None,
+        region_name: Optional[str] = None,
+        bucket_name: Optional[str] = None,
+        key: Optional[str] = None,
+    ) -> None:
+        """
+        Backup the database to Amazon S3.
+        
+        This method uploads the database file to Amazon S3. You can provide
+        credentials directly or rely on environment variables/AWS credentials chain.
+        
+        Parameters
+        ----------
+        s3_uri : str
+            S3 URI in format s3://bucket-name/key or just the full S3 path.
+        aws_access_key_id : str, optional
+            AWS access key ID. If not provided, uses default credential chain.
+        aws_secret_access_key : str, optional
+            AWS secret access key. If not provided, uses default credential chain.
+        region_name : str, optional
+            AWS region name (e.g., "us-east-1").
+        bucket_name : str, optional
+            S3 bucket name (alternative to s3_uri).
+        key : str, optional
+            S3 object key (alternative to s3_uri).
+        
+        Raises
+        ------
+        ImportError
+            If boto3 is not installed.
+        FileNotFoundError
+            If the database file doesn't exist.
+        Exception
+            If the upload fails.
+        
+        Example
+        -------
+        >>> db.backup_to_s3("s3://my-bucket/backups/trades.db")
+        >>> db.backup_to_s3("s3://my-bucket/backups/trades_2024_01_01.db",
+        ...                  region_name="us-east-1")
+        """
+        # Ensure source database exists
+        if not self.db_path.exists():
+            raise FileNotFoundError(f"Source database not found: {self.db_path}")
+        
+        # Parse S3 URI
+        if s3_uri.startswith("s3://"):
+            # Parse s3://bucket/key format
+            uri_parts = s3_uri[5:].split("/", 1)
+            bucket = uri_parts[0]
+            object_key = uri_parts[1] if len(uri_parts) > 1 else Path(self.db_path).name
+        else:
+            # Use provided bucket_name and key
+            bucket = bucket_name
+            object_key = key or Path(self.db_path).name
+        
+        if not bucket:
+            raise ValueError("Bucket name must be provided via s3_uri or bucket_name parameter")
+        
+        try:
+            import boto3
+            from botocore.exceptions import ClientError
+        except ImportError as e:
+            raise ImportError(
+                "boto3 is required for S3 backup. "
+                "Install it with: pip install boto3"
+            ) from e
+        
+        # Close connection before uploading to ensure data integrity
+        was_open = self._conn is not None
+        if was_open:
+            self.close()
+        
+        try:
+            # Create S3 client
+            session_kwargs = {}
+            if aws_access_key_id and aws_secret_access_key:
+                session_kwargs["aws_access_key_id"] = aws_access_key_id
+                session_kwargs["aws_secret_access_key"] = aws_secret_access_key
+            if region_name:
+                session_kwargs["region_name"] = region_name
+            
+            s3_client = boto3.client("s3", **session_kwargs)
+            
+            # Upload file
+            s3_client.upload_file(str(self.db_path), bucket, object_key)
+            
+            log.info("Database backup uploaded to S3: s3://%s/%s", bucket, object_key)
+        except ClientError as e:
+            log.error("S3 backup failed: %s", e)
+            raise
+        finally:
+            # Reopen connection if it was open
+            if was_open:
+                self._get_connection()
+    
+    def backup_to_gcs(
+        self,
+        gcs_uri: str,
+        credentials_path: Optional[str] = None,
+        project_id: Optional[str] = None,
+        bucket_name: Optional[str] = None,
+        blob_name: Optional[str] = None,
+    ) -> None:
+        """
+        Backup the database to Google Cloud Storage.
+        
+        This method uploads the database file to Google Cloud Storage. You can provide
+        credentials via a service account JSON file or rely on Application Default Credentials.
+        
+        Parameters
+        ----------
+        gcs_uri : str
+            GCS URI in format gs://bucket-name/blob-name or just the full GCS path.
+        credentials_path : str, optional
+            Path to service account JSON credentials file.
+        project_id : str, optional
+            GCP project ID.
+        bucket_name : str, optional
+            GCS bucket name (alternative to gcs_uri).
+        blob_name : str, optional
+            GCS blob name (alternative to gcs_uri).
+        
+        Raises
+        ------
+        ImportError
+            If google-cloud-storage is not installed.
+        FileNotFoundError
+            If the database file or credentials file doesn't exist.
+        Exception
+            If the upload fails.
+        
+        Example
+        -------
+        >>> db.backup_to_gcs("gs://my-bucket/backups/trades.db")
+        >>> db.backup_to_gcs("gs://my-bucket/backups/trades_2024_01_01.db",
+        ...                  credentials_path="service_account.json",
+        ...                  project_id="my-project")
+        """
+        # Ensure source database exists
+        if not self.db_path.exists():
+            raise FileNotFoundError(f"Source database not found: {self.db_path}")
+        
+        # Parse GCS URI
+        if gcs_uri.startswith("gs://"):
+            # Parse gs://bucket/blob format
+            uri_parts = gcs_uri[5:].split("/", 1)
+            bucket = uri_parts[0]
+            blob = uri_parts[1] if len(uri_parts) > 1 else Path(self.db_path).name
+        else:
+            # Use provided bucket_name and blob_name
+            bucket = bucket_name
+            blob = blob_name or Path(self.db_path).name
+        
+        if not bucket:
+            raise ValueError("Bucket name must be provided via gcs_uri or bucket_name parameter")
+        
+        try:
+            from google.cloud import storage
+        except ImportError as e:
+            raise ImportError(
+                "google-cloud-storage is required for GCS backup. "
+                "Install it with: pip install google-cloud-storage"
+            ) from e
+        
+        # Close connection before uploading to ensure data integrity
+        was_open = self._conn is not None
+        if was_open:
+            self.close()
+        
+        try:
+            # Create GCS client
+            client_kwargs = {}
+            if credentials_path:
+                credentials_path_obj = Path(credentials_path)
+                if not credentials_path_obj.exists():
+                    raise FileNotFoundError(f"Credentials file not found: {credentials_path}")
+                from google.oauth2 import service_account
+                credentials = service_account.Credentials.from_service_account_file(
+                    str(credentials_path_obj)
+                )
+                client_kwargs["credentials"] = credentials
+            if project_id:
+                client_kwargs["project"] = project_id
+            
+            client = storage.Client(**client_kwargs)
+            
+            # Get bucket and upload
+            bucket_obj = client.bucket(bucket)
+            blob_obj = bucket_obj.blob(blob)
+            blob_obj.upload_from_filename(str(self.db_path))
+            
+            log.info("Database backup uploaded to GCS: gs://%s/%s", bucket, blob)
+        except Exception as e:
+            log.error("GCS backup failed: %s", e)
+            raise
+        finally:
+            # Reopen connection if it was open
+            if was_open:
+                self._get_connection()
     
     def delete_trade(self, trade_id: int) -> bool:
         """

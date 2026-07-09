@@ -358,14 +358,14 @@ changes = db.get_recent_changes(limit=100)
 - Exception handling in callbacks to prevent breaking database operations
 - Callbacks only triggered when streaming is enabled
 
-#### 3.2 Backup and Restore
+#### 3.2 Backup and Restore ✅ (COMPLETED)
 - **Automatic Backups**: Scheduled database backups
 - **Export/Import**: Full database export and import
 - **Point-in-Time Recovery**: Restore to specific timestamps
 - **Cloud Storage**: Backup to S3, GCS, Azure Blob
 
 ```python
-# Proposed API
+# Implemented API
 db.backup("backup_2024_01_01.db")
 db.restore("backup_2024_01_01.db")
 
@@ -373,6 +373,17 @@ db.restore("backup_2024_01_01.db")
 db.backup_to_s3("s3://bucket/backups/trades.db")
 db.backup_to_gcs("gs://bucket/backups/trades.db")
 ```
+
+**Implementation Notes:**
+- Local backup using shutil.copy2() for full database file copying
+- Automatic parent directory creation for backup paths
+- Connection management (close before backup/restore, reopen after)
+- Cache invalidation on restore to ensure data consistency
+- S3 backup with optional credentials and region support (requires boto3)
+- GCS backup with service account credentials support (requires google-cloud-storage)
+- URI parsing for both s3:// and gs:// formats
+- Overwrite protection for restore operations (requires explicit overwrite=True)
+- Comprehensive error handling for missing files, permissions, and cloud service errors
 
 #### 3.3 Data Analysis Tools
 - **Pandas Integration**: Direct DataFrame conversion
