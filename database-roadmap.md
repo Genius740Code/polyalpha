@@ -453,18 +453,41 @@ db.add_role("analyst", permissions=["read"])
 db.add_role("trader", permissions=["read", "write"])
 ```
 
-#### 4.3 Monitoring and Observability
+#### 4.3 Monitoring and Observability ✅ (COMPLETED)
 - **Metrics**: Database performance metrics
 - **Logging**: Structured logging with correlation IDs
 - **Tracing**: Distributed tracing support
 - **Alerting**: Custom alert rules
 
 ```python
-# Proposed API
+# Implemented API
 metrics = db.get_metrics()
 logs = db.get_logs(level="ERROR", start_date, end_date)
 db.set_alert("slow_query", threshold_ms=1000)
+
+# Correlation ID tracking
+db.set_correlation_id("req-12345")
+with db.operation_context("batch_import"):
+    db.save_trades_bulk(trades)
+
+# Alert management
+db.check_alerts()
+alerts = db.get_alerts()
+db.remove_alert("slow_query")
 ```
+
+**Implementation Notes:**
+- DatabaseMetrics dataclass with: total_trades, database_size_bytes, cache_hit_rate, cache_size, query_count, slow_query_count, avg_query_time_ms, connection_pool_size, wal_enabled, last_optimization
+- LogEntry dataclass with: correlation_id, timestamp, level, message, operation, duration_ms, metadata
+- AlertRule dataclass with: name, metric, threshold, comparison (gt/lt/eq/gte/lte), enabled, callback, last_triggered, trigger_count
+- Structured logging with automatic correlation ID generation (UUID-based)
+- Operation context manager for tracking complex operations with start/completion/error logging
+- Configurable slow query threshold (default: 1000ms)
+- Log rotation (max 10,000 entries by default)
+- Query performance tracking with moving average (last 1000 queries)
+- Cache hit/miss tracking for performance monitoring
+- Thread-safe logging and alert management with Lock
+- Alert callbacks with exception handling to prevent breaking database operations
 
 #### 4.4 Scalability
 - **Sharding**: Horizontal scaling via sharding

@@ -36,6 +36,16 @@ Usage
     stats = db.get_statistics()
 """
 
-from .database import TradeDatabase
+from .database import (
+    TradeDatabase,
+    DatabaseMetrics,
+    LogEntry,
+    AlertRule,
+)
 
-__all__ = ["TradeDatabase"]
+__all__ = [
+    "TradeDatabase",
+    "DatabaseMetrics",
+    "LogEntry",
+    "AlertRule",
+]

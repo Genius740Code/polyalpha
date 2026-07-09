@@ -16,6 +16,8 @@ import json
 import logging
 import sqlite3
 import shutil
+import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +25,7 @@ from typing import Optional, List, Dict, Any, Callable
 from functools import lru_cache
 import hashlib
 from threading import Lock
+from contextlib import contextmanager
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +77,74 @@ class TradeStatistics:
     total_fees: float
     avg_entry_price: float
     avg_pnl_per_trade: float
+
+
+@dataclass
+class DatabaseMetrics:
+    """Database performance and health metrics."""
+    total_trades: int
+    database_size_bytes: int
+    cache_hit_rate: float
+    cache_size: int
+    query_count: int
+    slow_query_count: int
+    avg_query_time_ms: float
+    connection_pool_size: int
+    wal_enabled: bool
+    last_optimization: Optional[datetime]
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "total_trades": self.total_trades,
+            "database_size_bytes": self.database_size_bytes,
+            "database_size_mb": round(self.database_size_bytes / (1024 * 1024), 2),
+            "cache_hit_rate": round(self.cache_hit_rate * 100, 2),
+            "cache_size": self.cache_size,
+            "query_count": self.query_count,
+            "slow_query_count": self.slow_query_count,
+            "avg_query_time_ms": round(self.avg_query_time_ms, 2),
+            "connection_pool_size": self.connection_pool_size,
+            "wal_enabled": self.wal_enabled,
+            "last_optimization": self.last_optimization.isoformat() if self.last_optimization else None,
+        }
+
+
+@dataclass
+class LogEntry:
+    """Structured log entry with correlation ID."""
+    correlation_id: str
+    timestamp: datetime
+    level: str
+    message: str
+    operation: Optional[str]
+    duration_ms: Optional[float]
+    metadata: Dict[str, Any]
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "correlation_id": self.correlation_id,
+            "timestamp": self.timestamp.isoformat(),
+            "level": self.level,
+            "message": self.message,
+            "operation": self.operation,
+            "duration_ms": self.duration_ms,
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
+class AlertRule:
+    """Alert rule definition."""
+    name: str
+    metric: str
+    threshold: float
+    comparison: str  # "gt", "lt", "eq", "gte", "lte"
+    enabled: bool
+    callback: Optional[Callable[[str, float, float], None]]
+    last_triggered: Optional[datetime]
+    trigger_count: int
 
 
 class TradeDatabase:
@@ -135,6 +206,23 @@ class TradeDatabase:
         
         # Streaming state
         self._streaming_enabled = False
+        
+        # Monitoring and observability
+        self._query_count = 0
+        self._slow_query_count = 0
+        self._query_times: List[float] = []
+        self._max_query_times = 1000  # Keep last 1000 query times
+        self._slow_query_threshold_ms = 1000.0  # 1 second
+        self._log_entries: List[LogEntry] = []
+        self._max_log_entries = 10000  # Keep last 10000 log entries
+        self._log_lock = Lock()
+        self._alert_rules: Dict[str, AlertRule] = {}
+        self._alert_lock = Lock()
+        self._current_correlation_id: Optional[str] = None
+        self._correlation_lock = Lock()
+        self._last_optimization: Optional[datetime] = None
+        self._cache_hits = 0
+        self._cache_misses = 0
         
         self._initialize_db()
     
@@ -725,6 +813,7 @@ class TradeDatabase:
         cursor.execute("PRAGMA optimize")
         conn.commit()
         
+        self._last_optimization = datetime.now(timezone.utc)
         log.info("Database optimized")
     
     def get_index_info(self) -> Dict[str, Dict[str, Any]]:
@@ -1072,8 +1161,11 @@ class TradeDatabase:
         if self._cache_enabled:
             cache_key = self._generate_cache_key(filters, sort_by, sort_order, limit, offset)
             if cache_key in self._query_cache:
+                self._cache_hits += 1
                 log.debug("Cache hit for key: %s", cache_key)
                 return self._query_cache[cache_key]
+            else:
+                self._cache_misses += 1
         
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -2124,6 +2216,419 @@ class TradeDatabase:
         
         log.debug("Retrieved %d recent changes", len(changes))
         return changes
+    
+    # Monitoring and Observability
+    
+    def get_metrics(self) -> DatabaseMetrics:
+        """
+        Get database performance and health metrics.
+        
+        Returns
+        -------
+        DatabaseMetrics
+            Current database metrics including size, cache performance,
+            query statistics, and configuration.
+        
+        Example
+        -------
+        >>> metrics = db.get_metrics()
+        >>> print(f"Database size: {metrics.database_size_mb} MB")
+        >>> print(f"Cache hit rate: {metrics.cache_hit_rate}%")
+        """
+        # Get total trades count
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM trades")
+        total_trades = cursor.fetchone()[0]
+        
+        # Get database size
+        database_size_bytes = self.db_path.stat().st_size if self.db_path.exists() else 0
+        
+        # Calculate cache hit rate
+        total_cache_requests = self._cache_hits + self._cache_misses
+        cache_hit_rate = (self._cache_hits / total_cache_requests) if total_cache_requests > 0 else 0.0
+        
+        # Calculate average query time
+        avg_query_time_ms = (sum(self._query_times) / len(self._query_times)) if self._query_times else 0.0
+        
+        # Get WAL status
+        cursor.execute("PRAGMA journal_mode")
+        wal_mode = cursor.fetchone()[0]
+        wal_enabled = wal_mode.upper() == "WAL"
+        
+        return DatabaseMetrics(
+            total_trades=total_trades,
+            database_size_bytes=database_size_bytes,
+            cache_hit_rate=cache_hit_rate,
+            cache_size=len(self._query_cache),
+            query_count=self._query_count,
+            slow_query_count=self._slow_query_count,
+            avg_query_time_ms=avg_query_time_ms,
+            connection_pool_size=1 if self._conn else 0,
+            wal_enabled=wal_enabled,
+            last_optimization=self._last_optimization,
+        )
+    
+    def get_logs(
+        self,
+        level: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        operation: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[LogEntry]:
+        """
+        Get structured logs with correlation IDs.
+        
+        Parameters
+        ----------
+        level : str, optional
+            Filter by log level (e.g., "DEBUG", "INFO", "WARNING", "ERROR").
+        start_date : datetime, optional
+            Filter logs after this timestamp.
+        end_date : datetime, optional
+            Filter logs before this timestamp.
+        operation : str, optional
+            Filter by operation type (e.g., "save_trade", "load_trades").
+        limit : int, optional
+            Maximum number of log entries to return (default: 100).
+        
+        Returns
+        -------
+        List[LogEntry]
+            Filtered log entries.
+        
+        Example
+        -------
+        >>> logs = db.get_logs(level="ERROR", limit=50)
+        >>> for entry in logs:
+        ...     print(f"{entry.timestamp}: {entry.message}")
+        """
+        with self._log_lock:
+            filtered_logs = self._log_entries.copy()
+        
+        # Apply filters
+        if level:
+            filtered_logs = [log for log in filtered_logs if log.level == level.upper()]
+        
+        if start_date:
+            filtered_logs = [log for log in filtered_logs if log.timestamp >= start_date]
+        
+        if end_date:
+            filtered_logs = [log for log in filtered_logs if log.timestamp <= end_date]
+        
+        if operation:
+            filtered_logs = [log for log in filtered_logs if log.operation == operation]
+        
+        # Sort by timestamp descending and limit
+        filtered_logs.sort(key=lambda x: x.timestamp, reverse=True)
+        return filtered_logs[:limit]
+    
+    def set_alert(
+        self,
+        name: str,
+        metric: str,
+        threshold: float,
+        comparison: str = "gt",
+        callback: Optional[Callable[[str, float, float], None]] = None,
+    ) -> None:
+        """
+        Set up an alert rule for monitoring database metrics.
+        
+        Parameters
+        ----------
+        name : str
+            Unique name for the alert rule.
+        metric : str
+            Metric to monitor (e.g., "slow_query_count", "avg_query_time_ms", "cache_hit_rate").
+        threshold : float
+            Threshold value for triggering the alert.
+        comparison : str, optional
+            Comparison operator: "gt" (greater than), "lt" (less than),
+            "eq" (equal), "gte" (greater or equal), "lte" (less or equal) (default: "gt").
+        callback : callable, optional
+            Function to call when alert is triggered. Receives (name, metric_value, threshold).
+        
+        Raises
+        ------
+        ValueError
+            If comparison is invalid.
+        
+        Example
+        -------
+        >>> def on_slow_query(name, value, threshold):
+        ...     print(f"Alert {name}: Query time {value}ms exceeds threshold {threshold}ms")
+        >>> db.set_alert("slow_query", "avg_query_time_ms", 1000.0, callback=on_slow_query)
+        """
+        valid_comparisons = {"gt", "lt", "eq", "gte", "lte"}
+        if comparison not in valid_comparisons:
+            raise ValueError(
+                f"Invalid comparison '{comparison}'. Valid options: {valid_comparisons}"
+            )
+        
+        with self._alert_lock:
+            self._alert_rules[name] = AlertRule(
+                name=name,
+                metric=metric,
+                threshold=threshold,
+                comparison=comparison,
+                enabled=True,
+                callback=callback,
+                last_triggered=None,
+                trigger_count=0,
+            )
+        
+        log.info("Alert rule set: %s on %s %s %s", name, metric, comparison, threshold)
+    
+    def remove_alert(self, name: str) -> None:
+        """
+        Remove an alert rule.
+        
+        Parameters
+        ----------
+        name : str
+            Name of the alert rule to remove.
+        """
+        with self._alert_lock:
+            if name in self._alert_rules:
+                del self._alert_rules[name]
+                log.info("Alert rule removed: %s", name)
+    
+    def get_alerts(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get all configured alert rules.
+        
+        Returns
+        -------
+        dict
+            Dictionary of alert rules with their status.
+        """
+        with self._alert_lock:
+            return {
+                name: {
+                    "metric": rule.metric,
+                    "threshold": rule.threshold,
+                    "comparison": rule.comparison,
+                    "enabled": rule.enabled,
+                    "last_triggered": rule.last_triggered.isoformat() if rule.last_triggered else None,
+                    "trigger_count": rule.trigger_count,
+                }
+                for name, rule in self._alert_rules.items()
+            }
+    
+    def check_alerts(self) -> None:
+        """
+        Check all alert rules and trigger callbacks if thresholds are exceeded.
+        
+        This method should be called periodically to evaluate alert conditions.
+        """
+        metrics = self.get_metrics()
+        metric_values = metrics.to_dict()
+        
+        with self._alert_lock:
+            for name, rule in self._alert_rules.items():
+                if not rule.enabled:
+                    continue
+                
+                # Get current metric value
+                metric_value = metric_values.get(rule.metric)
+                if metric_value is None:
+                    continue
+                
+                # Check if threshold is exceeded
+                triggered = False
+                if rule.comparison == "gt" and metric_value > rule.threshold:
+                    triggered = True
+                elif rule.comparison == "lt" and metric_value < rule.threshold:
+                    triggered = True
+                elif rule.comparison == "eq" and metric_value == rule.threshold:
+                    triggered = True
+                elif rule.comparison == "gte" and metric_value >= rule.threshold:
+                    triggered = True
+                elif rule.comparison == "lte" and metric_value <= rule.threshold:
+                    triggered = True
+                
+                if triggered:
+                    rule.last_triggered = datetime.now(timezone.utc)
+                    rule.trigger_count += 1
+                    
+                    # Call callback if provided
+                    if rule.callback:
+                        try:
+                            rule.callback(name, metric_value, rule.threshold)
+                        except Exception as e:
+                            log.error("Error in alert callback for %s: %s", name, e)
+                    
+                    log.warning(
+                        "Alert triggered: %s - %s = %s (threshold: %s)",
+                        name, rule.metric, metric_value, rule.threshold
+                    )
+    
+    @contextmanager
+    def _track_query(self, operation: str):
+        """
+        Context manager for tracking query performance.
+        
+        Parameters
+        ----------
+        operation : str
+            Name of the operation being tracked.
+        """
+        correlation_id = self._get_correlation_id()
+        start_time = time.perf_counter()
+        
+        try:
+            yield
+        finally:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            self._query_count += 1
+            
+            # Track query time
+            self._query_times.append(duration_ms)
+            if len(self._query_times) > self._max_query_times:
+                self._query_times.pop(0)
+            
+            # Track slow queries
+            if duration_ms > self._slow_query_threshold_ms:
+                self._slow_query_count += 1
+                self._add_log_entry(
+                    level="WARNING",
+                    message=f"Slow query detected: {operation}",
+                    operation=operation,
+                    duration_ms=duration_ms,
+                )
+            
+            # Log query completion
+            self._add_log_entry(
+                level="DEBUG",
+                message=f"Query completed: {operation}",
+                operation=operation,
+                duration_ms=duration_ms,
+            )
+    
+    def _add_log_entry(
+        self,
+        level: str,
+        message: str,
+        operation: Optional[str] = None,
+        duration_ms: Optional[float] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Add a structured log entry.
+        
+        Parameters
+        ----------
+        level : str
+            Log level (DEBUG, INFO, WARNING, ERROR).
+        message : str
+            Log message.
+        operation : str, optional
+            Operation being performed.
+        duration_ms : float, optional
+            Operation duration in milliseconds.
+        metadata : dict, optional
+            Additional metadata.
+        """
+        correlation_id = self._get_correlation_id()
+        entry = LogEntry(
+            correlation_id=correlation_id,
+            timestamp=datetime.now(timezone.utc),
+            level=level.upper(),
+            message=message,
+            operation=operation,
+            duration_ms=duration_ms,
+            metadata=metadata or {},
+        )
+        
+        with self._log_lock:
+            self._log_entries.append(entry)
+            if len(self._log_entries) > self._max_log_entries:
+                self._log_entries.pop(0)
+    
+    def set_correlation_id(self, correlation_id: str) -> None:
+        """
+        Set a correlation ID for the current operation context.
+        
+        Parameters
+        ----------
+        correlation_id : str
+            Correlation ID to use for logging.
+        
+        Example
+        -------
+        >>> db.set_correlation_id("req-12345")
+        >>> db.save_trade(...)  # All logs will use this correlation ID
+        """
+        with self._correlation_lock:
+            self._current_correlation_id = correlation_id
+    
+    def clear_correlation_id(self) -> None:
+        """Clear the current correlation ID."""
+        with self._correlation_lock:
+            self._current_correlation_id = None
+    
+    def _get_correlation_id(self) -> str:
+        """
+        Get the current correlation ID, generating one if not set.
+        
+        Returns
+        -------
+        str
+            Current correlation ID.
+        """
+        with self._correlation_lock:
+            if self._current_correlation_id is None:
+                self._current_correlation_id = str(uuid.uuid4())
+            return self._current_correlation_id
+    
+    @contextmanager
+    def operation_context(self, operation_name: str):
+        """
+        Context manager for tracking operations with correlation IDs.
+        
+        Parameters
+        ----------
+        operation_name : str
+            Name of the operation.
+        
+        Example
+        -------
+        >>> with db.operation_context("batch_import"):
+        ...     db.save_trades_bulk(trades)
+        """
+        old_correlation_id = self._current_correlation_id
+        self.set_correlation_id(str(uuid.uuid4()))
+        
+        self._add_log_entry(
+            level="INFO",
+            message=f"Operation started: {operation_name}",
+            operation=operation_name,
+        )
+        
+        start_time = time.perf_counter()
+        
+        try:
+            yield
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            self._add_log_entry(
+                level="INFO",
+                message=f"Operation completed: {operation_name}",
+                operation=operation_name,
+                duration_ms=duration_ms,
+            )
+        except Exception as e:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            self._add_log_entry(
+                level="ERROR",
+                message=f"Operation failed: {operation_name} - {str(e)}",
+                operation=operation_name,
+                duration_ms=duration_ms,
+                metadata={"error": str(e), "error_type": type(e).__name__},
+            )
+            raise
+        finally:
+            self._current_correlation_id = old_correlation_id
     
     def close(self) -> None:
         """Close the database connection."""
