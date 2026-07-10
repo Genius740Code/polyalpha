@@ -13,29 +13,24 @@ import polyalpha
 
 def basic_real_trading():
     """Basic real trading setup with default configuration."""
-    
+
     # Initialize client with real trading credentials
     client = polyalpha.Client(
         private_key="your-private-key-here",  # Your wallet private key
         rpc_url="https://polygon-rpc.com",  # Polygon RPC URL
         polymarket_api_key="your-polymarket-api-key",  # Polymarket API key
         real_config=polyalpha.RealTradingConfig(
-            # Authentication (required)
-            private_key="your-private-key-here",
-            rpc_url="https://polygon-rpc.com",
-            polymarket_api_key="your-polymarket-api-key",
-            
             # Safety settings
             require_confirmation=True,  # Always confirm orders
             max_order_size=100.0,  # Maximum $100 per order
             max_daily_loss=50.0,  # Stop if daily loss exceeds $50
             max_position_size=200.0,  # Maximum position size
             max_open_positions=5,  # Maximum concurrent positions
-            
+
             # Position sizing
             position_sizing="fixed",  # Use fixed amount sizing
             fixed_amount=10.0,  # $10 per trade
-            
+
             # Risk management
             enable_stop_loss=True,
             default_stop_loss_pct=0.20,  # 20% stop loss
@@ -75,10 +70,6 @@ def percentage_position_sizing():
         rpc_url="https://polygon-rpc.com",
         polymarket_api_key="your-polymarket-api-key",
         real_config=polyalpha.RealTradingConfig(
-            private_key="your-private-key-here",
-            rpc_url="https://polygon-rpc.com",
-            polymarket_api_key="your-polymarket-api-key",
-            
             # Use percentage-based sizing
             position_sizing="percentage",
             percentage_of_balance=0.05,  # 5% of balance per trade
@@ -112,10 +103,6 @@ def kelly_position_sizing():
         rpc_url="https://polygon-rpc.com",
         polymarket_api_key="your-polymarket-api-key",
         real_config=polyalpha.RealTradingConfig(
-            private_key="your-private-key-here",
-            rpc_url="https://polygon-rpc.com",
-            polymarket_api_key="your-polymarket-api-key",
-            
             # Use Kelly criterion sizing
             position_sizing="kelly",
             kelly_fraction=0.25,  # Quarter Kelly for safety
@@ -150,9 +137,6 @@ def limit_order_example():
         rpc_url="https://polygon-rpc.com",
         polymarket_api_key="your-polymarket-api-key",
         real_config=polyalpha.RealTradingConfig(
-            private_key="your-private-key-here",
-            rpc_url="https://polygon-rpc.com",
-            polymarket_api_key="your-polymarket-api-key",
             position_sizing="fixed",
             fixed_amount=10.0,
         ),
@@ -187,9 +171,6 @@ def stop_loss_example():
         rpc_url="https://polygon-rpc.com",
         polymarket_api_key="your-polymarket-api-key",
         real_config=polyalpha.RealTradingConfig(
-            private_key="your-private-key-here",
-            rpc_url="https://polygon-rpc.com",
-            polymarket_api_key="your-polymarket-api-key",
             position_sizing="fixed",
             fixed_amount=10.0,
             enable_stop_loss=True,
@@ -219,11 +200,7 @@ def position_management():
         private_key="your-private-key-here",
         rpc_url="https://polygon-rpc.com",
         polymarket_api_key="your-polymarket-api-key",
-        real_config=polyalpha.RealTradingConfig(
-            private_key="your-private-key-here",
-            rpc_url="https://polygon-rpc.com",
-            polymarket_api_key="your-polymarket-api-key",
-        ),
+        real_config=polyalpha.RealTradingConfig(),
     )
     
     # View all open positions
@@ -250,11 +227,7 @@ def emergency_stop_example():
         private_key="your-private-key-here",
         rpc_url="https://polygon-rpc.com",
         polymarket_api_key="your-polymarket-api-key",
-        real_config=polyalpha.RealTradingConfig(
-            private_key="your-private-key-here",
-            rpc_url="https://polygon-rpc.com",
-            polymarket_api_key="your-polymarket-api-key",
-        ),
+        real_config=polyalpha.RealTradingConfig(),
     )
     
     # Emergency stop - cancels all open orders and halts trading
@@ -278,11 +251,7 @@ def database_integration():
         private_key="your-private-key-here",
         rpc_url="https://polygon-rpc.com",
         polymarket_api_key="your-polymarket-api-key",
-        real_config=polyalpha.RealTradingConfig(
-            private_key="your-private-key-here",
-            rpc_url="https://polygon-rpc.com",
-            polymarket_api_key="your-polymarket-api-key",
-        ),
+        real_config=polyalpha.RealTradingConfig(),
         db_path="real_trades.db",  # SQLite database for trade persistence
     )
     
@@ -308,11 +277,7 @@ def wallet_management():
         private_key="your-private-key-here",
         rpc_url="https://polygon-rpc.com",
         polymarket_api_key="your-polymarket-api-key",
-        real_config=polyalpha.RealTradingConfig(
-            private_key="your-private-key-here",
-            rpc_url="https://polygon-rpc.com",
-            polymarket_api_key="your-polymarket-api-key",
-        ),
+        real_config=polyalpha.RealTradingConfig(),
     )
     
     # Refresh balance from blockchain
@@ -335,11 +300,6 @@ def advanced_configuration():
     """Advanced real trading configuration."""
     
     config = polyalpha.RealTradingConfig(
-        # Authentication
-        private_key="your-private-key-here",
-        rpc_url="https://polygon-rpc.com",
-        polymarket_api_key="your-polymarket-api-key",
-        
         # Safety
         require_confirmation=True,
         max_order_size=500.0,

@@ -23,8 +23,9 @@ from .ai import OpenRouterClient
 from .core import Market
 from .markets import MarketClient
 from .stream import Stream
-from .trading import PaperEngine
+from .trading import PaperEngine, RealTradingEngine
 from .trading.paper import PaperConfig
+from .trading.real import RealTradingConfig
 from .orderbook import ClobBookClient, OrderBookFeed
 
 
@@ -42,12 +43,17 @@ class Client:
     paper_config       : PaperConfig for paper trading realism options (default None).
     db_path            : Path to SQLite database file for trade persistence (default None).
     openrouter_api_key : OpenRouter API key for AI features (default None = disabled).
+    private_key        : Private key for real trading wallet (default None = disabled).
+    rpc_url            : Polygon RPC URL for real trading (default None = disabled).
+    polymarket_api_key : Polymarket API key for CLOB access (default None = disabled).
+    real_config        : RealTradingConfig for real trading (default None = disabled).
 
     Attributes
     ----------
     markets : MarketClient  — discover and fetch markets.
     paper   : PaperEngine   — simulate orders and track P&L.
     ai      : OpenRouterClient | None — AI-powered analysis (if API key provided).
+    real    : RealTradingEngine | None — real trading with actual funds (if credentials provided).
 
     Example
     -------
@@ -67,6 +73,10 @@ class Client:
         paper_config: PaperConfig | None = None,
         db_path: str | None = None,
         openrouter_api_key: str | None = None,
+        private_key: str | None = None,
+        rpc_url: str | None = None,
+        polymarket_api_key: str | None = None,
+        real_config: RealTradingConfig | None = None,
     ):
         # Configure library-specific logger without affecting global logging
         self._log = logging.getLogger("polyalpha")
@@ -76,6 +86,23 @@ class Client:
         self.paper   = PaperEngine(balance=balance, config=paper_config, db_path=db_path)
         self.ai      = OpenRouterClient(api_key=openrouter_api_key) if openrouter_api_key else None
         self._clob   = ClobBookClient(timeout=timeout, retries=retries, rate_limit=rate_limit)
+
+        # Real trading (optional - requires all credentials)
+        self.real: RealTradingEngine | None = None
+        if private_key and rpc_url and polymarket_api_key:
+            if real_config is None:
+                real_config = RealTradingConfig(
+                    private_key=private_key,
+                    rpc_url=rpc_url,
+                    polymarket_api_key=polymarket_api_key,
+                )
+            self.real = RealTradingEngine(
+                private_key=private_key,
+                rpc_url=rpc_url,
+                polymarket_api_key=polymarket_api_key,
+                config=real_config,
+                db_path=db_path,
+            )
 
         self._timeout = timeout
         self._retries = retries

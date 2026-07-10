@@ -262,7 +262,7 @@ class WalletManager:
     Handles USDC balance, CLOB allowances, and transaction signing.
     """
 
-    def __init__(self, private_key: str, rpc_url: str):
+    def __init__(self, private_key: str, rpc_url: str, log_balance_updates: bool = False):
         """
         Initialize wallet manager.
 
@@ -272,12 +272,15 @@ class WalletManager:
             Private key for wallet operations
         rpc_url : str
             Polygon RPC URL for blockchain interaction
+        log_balance_updates : bool
+            Whether to log balance updates
         """
         self._private_key = private_key
         self._rpc_url = rpc_url
         self._address: Optional[str] = None
         self._balance: float = 0.0
         self._allowance: float = 0.0
+        self._log_balance_updates = log_balance_updates
 
         # Web3.py and contract setup (lazy initialization)
         self._web3 = None
@@ -296,8 +299,43 @@ class WalletManager:
             account = Account.from_key(self._private_key)
             self._address = account.address
 
-            # USDC contract on Polygon
-            usdc_abi = [...]  # USDC contract ABI
+            # USDC contract on Polygon (minimal ABI for balance and allowance)
+            usdc_abi = [
+                {
+                    "constant": True,
+                    "inputs": [{"name": "_owner", "type": "address"}],
+                    "name": "balanceOf",
+                    "outputs": [{"name": "balance", "type": "uint256"}],
+                    "type": "function",
+                },
+                {
+                    "constant": True,
+                    "inputs": [
+                        {"name": "_owner", "type": "address"},
+                        {"name": "_spender", "type": "address"},
+                    ],
+                    "name": "allowance",
+                    "outputs": [{"name": "", "type": "uint256"}],
+                    "type": "function",
+                },
+                {
+                    "constant": False,
+                    "inputs": [
+                        {"name": "_spender", "type": "address"},
+                        {"name": "_value", "type": "uint256"},
+                    ],
+                    "name": "approve",
+                    "outputs": [{"name": "", "type": "bool"}],
+                    "type": "function",
+                },
+                {
+                    "constant": True,
+                    "inputs": [],
+                    "name": "decimals",
+                    "outputs": [{"name": "", "type": "uint8"}],
+                    "type": "function",
+                },
+            ]
             usdc_address = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # Polygon USDC
             self._usdc_contract = self._web3.eth.contract(
                 address=usdc_address,
@@ -412,7 +450,7 @@ class WalletManager:
     def refresh_balance(self) -> None:
         """Refresh balance from blockchain."""
         self._balance = self.get_balance()
-        if self._config.log_balance_updates:
+        if self._log_balance_updates:
             log.info("Balance refreshed: $%.2f", self._balance)
 
     def wait_for_transaction(self, tx_hash: str, timeout: int = 60) -> dict:
@@ -498,7 +536,7 @@ class RealTradingEngine:
         )
 
         # Wallet setup
-        self._wallet = WalletManager(private_key, rpc_url)
+        self._wallet = WalletManager(private_key, rpc_url, log_balance_updates=config.log_balance_updates)
         self._balance: float = 0.0
         self._allowance: float = 0.0
 

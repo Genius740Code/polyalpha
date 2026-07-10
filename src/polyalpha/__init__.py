@@ -28,8 +28,9 @@ Quick start
 from .client import Client
 from .core import Market
 from .stream import Stream
-from .trading import PaperEngine
+from .trading import PaperEngine, RealTradingEngine
 from .trading.paper import PaperConfig
+from .trading.real import RealTradingConfig, RealOrder, RealPosition, WalletManager
 from .report import ReportPreset
 from .bots import Sniper, Tracker
 from .analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator
@@ -62,6 +63,14 @@ from .core.errors import (
     OrderBookNotFound,
     PolyalphaError,
     StreamDisconnected,
+    InsufficientAllowance,
+    OrderRejected,
+    OrderTimeout,
+    NetworkError,
+    TransientError,
+    PositionNotFound,
+    RiskLimitExceeded,
+    OrderCancelled,
 )
 from .ai import (
     OpenRouterClient,
@@ -87,6 +96,13 @@ __all__ = [
     # Paper trading
     "PaperEngine",
     "PaperConfig",
+    # Real trading
+    "RealTradingEngine",
+    "RealTradingConfig",
+    "RealOrder",
+    "RealPosition",
+    "WalletManager",
+    # Report
     "ReportPreset",
     # Database
     "TradeDatabase",
@@ -126,9 +142,17 @@ __all__ = [
     "MarketClosed",
     "StreamDisconnected",
     "InsufficientBalance",
+    "InsufficientAllowance",
     "OrderNotFound",
     "OrderBookError",
     "OrderBookNotFound",
+    "OrderRejected",
+    "OrderTimeout",
+    "NetworkError",
+    "TransientError",
+    "PositionNotFound",
+    "RiskLimitExceeded",
+    "OrderCancelled",
     "AIError",
     "AIAuthenticationError",
     "AIModelNotFoundError",
