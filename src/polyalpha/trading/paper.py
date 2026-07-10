@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from ..report.engine import ReportEngine
     from ..database.database import TradeDatabase
+    from .auto_redeem import AutoRedeemEngine, AutoRedeemConfig
 
 from ..core import (
     InsufficientBalance,
@@ -305,6 +306,9 @@ class PaperEngine:
         self._maker_fees: float = 0.0
         self._taker_rebates: float = 0.0
         self._maker_rebates: float = 0.0
+        
+        # Auto-redeem engine (lazy-initialized)
+        self._auto_redeem: Optional[AutoRedeemEngine] = None
 
     @property
     def report(self) -> "ReportEngine":
@@ -313,6 +317,19 @@ class PaperEngine:
             from ..report.engine import ReportEngine
             self._report = ReportEngine(self)
         return self._report
+
+    @property
+    def auto_redeem(self) -> "AutoRedeemEngine":
+        """Auto-redeem engine for automatic position redemption. Access via ``client.paper.auto_redeem``."""
+        if self._auto_redeem is None:
+            from .auto_redeem import AutoRedeemEngine, AutoRedeemConfig
+            self._auto_redeem = AutoRedeemEngine(self, AutoRedeemConfig())
+        return self._auto_redeem
+
+    def set_auto_redeem_config(self, config: "AutoRedeemConfig") -> None:
+        """Set a custom auto-redeem configuration."""
+        from .auto_redeem import AutoRedeemEngine
+        self._auto_redeem = AutoRedeemEngine(self, config)
 
     # ── Balance ────────────────────────────────────────────────────────────────
 

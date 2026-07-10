@@ -180,6 +180,72 @@ pos.dump()         # → dict
 
 ---
 
+## Auto-Redeem
+
+Automatically redeem resolved positions based on configurable triggers (time intervals, market count, or value thresholds).
+
+```python
+import polyalpha
+from polyalpha import AutoRedeemConfig
+
+client = polyalpha.Client(balance=1000.0)
+
+# Simple daily auto-redeem
+config = AutoRedeemConfig(
+    time_interval="1d",  # Redeem daily
+    min_value_usd=100.0,  # Only when value >= $100
+)
+
+client.paper.set_auto_redeem_config(config)
+client.paper.auto_redeem.start_scheduler()
+```
+
+### Configuration Options
+
+```python
+AutoRedeemConfig(
+    # Trigger modes
+    trigger_on_time=True,   # Enable time-based triggers
+    trigger_on_count=True,  # Enable count-based triggers
+    trigger_on_value=False, # Enable value-based triggers
+    
+    # Time-based
+    time_interval="1d",    # "1h", "6h", "1d", "1w"
+    redeem_at_time=None,   # Specific time "14:00" UTC
+    
+    # Count-based
+    min_markets=10,         # Redeem after N markets
+    max_markets=100,        # Force redeem at N (safety)
+    
+    # Value-based
+    min_value_usd=100.0,    # Redeem when value >= $100
+    max_value_usd=10000.0, # Force redeem at $10k (safety)
+    
+    # Safety
+    require_confirmation=False,  # Confirm before redeeming
+    dry_run=False,               # Simulate without executing
+    only_winning=False,          # Only redeem winning positions
+    min_age_hours=1,             # Wait N hours after resolution
+)
+```
+
+### Manual Redemption
+
+```python
+# Check for redeemable positions
+positions = client.paper.auto_redeem.check_positions()
+print(f"Found {len(positions)} positions to redeem")
+
+# Manually redeem
+result = client.paper.auto_redeem.redeem(positions)
+print(f"Redeemed {result.redeemed_count} positions")
+
+# View history
+history = client.paper.auto_redeem.get_redeem_history()
+```
+
+---
+
 ## Configuration
 
 ```python
@@ -222,6 +288,7 @@ python examples/market.py --asset BTC --timeframe 5m
 python examples/market.py --rate-limit 10
 python examples/stream.py --asset ETH --timeframe 15m --log DEBUG
 python examples/paper.py  --side UP   --amount 25 --limit 0.92
+python examples/auto_redeem.py
 ```
 
 ---

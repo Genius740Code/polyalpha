@@ -1049,6 +1049,175 @@ client.real.emergency_stop("Manual intervention")
 
 ---
 
+## Phase 9: Auto-Redeem System
+
+### 9.1 AutoRedeemConfig
+
+```python
+@dataclass
+class AutoRedeemConfig:
+    """Configuration for automatic token redemption."""
+    
+    # Enable/disable
+    enabled: bool = True
+    
+    # Trigger modes
+    trigger_on_time: bool = True
+    trigger_on_count: bool = True
+    trigger_on_value: bool = False
+    
+    # Time-based triggers
+    time_interval: str = "1d"        # "1h", "6h", "1d", "1w"
+    redeem_at_time: str | None = None # Specific time "14:00" UTC
+    
+    # Count-based triggers
+    min_markets: int = 10            # Redeem after N resolved markets
+    max_markets: int = 100           # Force redeem after N (safety)
+    
+    # Value-based triggers
+    min_value_usd: float = 100.0     # Redeem when value >= $100
+    max_value_usd: float = 10000.0  # Force redeem at $10k (safety)
+    
+    # Safety settings
+    require_confirmation: bool = False  # Confirm before redeeming
+    max_gas_price: float = 50.0     # Max gas price in Gwei
+    dry_run: bool = False           # Simulate without executing
+    
+    # Filtering
+    only_winning: bool = False      # Only redeem winning positions
+    min_age_hours: int = 1          # Wait N hours after resolution
+```
+
+### 9.2 AutoRedeemEngine
+
+```python
+class AutoRedeemEngine:
+    """
+    Automatic redemption engine for resolved Polymarket positions.
+    
+    Features:
+    - Monitors positions for resolution status
+    - Executes redemption based on configured triggers
+    - Supports paper and real trading modes
+    - Provides detailed logging and history
+    """
+    
+    def __init__(
+        self,
+        trading_engine: PaperEngine | RealTradingEngine,
+        config: AutoRedeemConfig,
+    ):
+        self._trading = trading_engine
+        self._config = config
+        self._redeem_history: list[RedeemRecord] = []
+        self._resolved_queue: set[str] = set()
+        
+    def check_positions(self) -> list[RedeemablePosition]:
+        """Scan positions and return those ready for redemption."""
+        
+    def redeem(self, positions: list[RedeemablePosition] | None = None) -> RedeemResult:
+        """Execute redemption for specified positions."""
+        
+    def start_scheduler(self) -> None:
+        """Start background scheduler for time-based triggers."""
+        
+    def stop_scheduler(self) -> None:
+        """Stop background scheduler."""
+        
+    def get_redeem_history(self) -> list[RedeemRecord]:
+        """Get history of redemption operations."""
+        
+    def get_pending_count(self) -> int:
+        """Get count of positions awaiting redemption."""
+```
+
+### 9.3 Data Structures
+
+```python
+@dataclass
+class RedeemablePosition:
+    """A position that is ready for redemption."""
+    market_id: str
+    slug: str
+    side: str
+    shares: float
+    outcome: str  # "WON" or "LOST"
+    value_usd: float
+    resolved_at: datetime
+    token_id: str
+
+@dataclass
+class RedeemRecord:
+    """Record of a redemption operation."""
+    timestamp: datetime
+    positions_count: int
+    total_value_usd: float
+    trigger_reason: str  # "time", "count", "value", "manual"
+    success: bool
+    tx_hash: str | None = None
+    error: str | None = None
+
+@dataclass
+class RedeemResult:
+    """Result of a redemption operation."""
+    success: bool
+    redeemed_count: int
+    total_value_usd: float
+    failed_count: int
+    errors: list[str]
+    tx_hash: str | None = None
+```
+
+### 9.4 Integration
+
+```python
+# Paper trading
+client.paper.set_auto_redeem_config(AutoRedeemConfig(
+    time_interval="1d",
+    min_value_usd=100.0,
+))
+client.paper.auto_redeem.start_scheduler()
+
+# Real trading
+client.real.set_auto_redeem_config(AutoRedeemConfig(
+    time_interval="6h",
+    min_markets=5,
+    require_confirmation=True,
+))
+client.real.auto_redeem.start_scheduler()
+```
+
+### 9.5 Usage Examples
+
+```python
+# Simple daily auto-redeem
+config = AutoRedeemConfig(
+    time_interval="1d",
+    min_value_usd=100.0,
+)
+
+# Multi-trigger configuration
+config = AutoRedeemConfig(
+    trigger_on_time=True,
+    trigger_on_count=True,
+    trigger_on_value=True,
+    time_interval="6h",
+    min_markets=5,
+    max_markets=20,
+    min_value_usd=50.0,
+    max_value_usd=500.0,
+)
+
+# Manual check and redeem
+positions = client.paper.auto_redeem.check_positions()
+result = client.paper.auto_redeem.redeem(positions)
+
+# View history
+history = client.paper.auto_redeem.get_redeem_history()
+```
+
+---
+
 ## Implementation Priority
 
 ### Phase 1 (Week 1-2): Core Infrastructure

@@ -6,6 +6,13 @@ from .real import (
     RealPosition,
     WalletManager,
 )
+from .auto_redeem import (
+    AutoRedeemEngine,
+    AutoRedeemConfig,
+    RedeemablePosition,
+    RedeemRecord,
+    RedeemResult,
+)
 
 __all__ = [
     "PaperEngine",
@@ -16,4 +23,9 @@ __all__ = [
     "RealOrder",
     "RealPosition",
     "WalletManager",
+    "AutoRedeemEngine",
+    "AutoRedeemConfig",
+    "RedeemablePosition",
+    "RedeemRecord",
+    "RedeemResult",
 ]

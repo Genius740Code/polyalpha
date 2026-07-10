@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from ..database.database import TradeDatabase
+    from .auto_redeem import AutoRedeemEngine, AutoRedeemConfig
 
 from ..core import (
     InsufficientBalance,
@@ -556,6 +557,9 @@ class RealTradingEngine:
         # Emergency mode
         self._emergency_mode: bool = False
 
+        # Auto-redeem engine (lazy-initialized)
+        self._auto_redeem: Optional[AutoRedeemEngine] = None
+
         # Initialize balance
         self.refresh_balance()
 
@@ -565,6 +569,19 @@ class RealTradingEngine:
     def config(self) -> RealTradingConfig:
         """Get current configuration."""
         return self._config
+
+    @property
+    def auto_redeem(self) -> "AutoRedeemEngine":
+        """Auto-redeem engine for automatic position redemption. Access via ``client.real.auto_redeem``."""
+        if self._auto_redeem is None:
+            from .auto_redeem import AutoRedeemEngine, AutoRedeemConfig
+            self._auto_redeem = AutoRedeemEngine(self, AutoRedeemConfig())
+        return self._auto_redeem
+
+    def set_auto_redeem_config(self, config: "AutoRedeemConfig") -> None:
+        """Set a custom auto-redeem configuration."""
+        from .auto_redeem import AutoRedeemEngine
+        self._auto_redeem = AutoRedeemEngine(self, config)
 
     @property
     def balance(self) -> float:
