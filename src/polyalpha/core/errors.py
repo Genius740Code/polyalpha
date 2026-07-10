@@ -28,3 +28,35 @@ class OrderBookError(PolyalphaError):
 
 class OrderBookNotFound(OrderBookError):
     """No order book data available for the requested token."""
+
+
+class InsufficientAllowance(PolyalphaError):
+    """Insufficient CLOB allowance for trading."""
+
+
+class OrderRejected(PolyalphaError):
+    """Order rejected by CLOB."""
+
+
+class OrderTimeout(PolyalphaError):
+    """Order timed out."""
+
+
+class NetworkError(PolyalphaError):
+    """Network connectivity error."""
+
+
+class TransientError(PolyalphaError):
+    """Transient error that can be retried."""
+
+
+class PositionNotFound(PolyalphaError):
+    """Position not found."""
+
+
+class RiskLimitExceeded(PolyalphaError):
+    """Risk management limit exceeded."""
+
+
+class OrderCancelled(PolyalphaError):
+    """Order cancelled by user or system."""

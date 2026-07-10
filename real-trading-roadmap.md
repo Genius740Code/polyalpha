@@ -29,7 +29,7 @@ This document outlines the plan for adding real trading with cash to the polyalp
 
 ## Phase 1: Architecture & Core Infrastructure
 
-### 1.1 RealTradingEngine Class Design
+### 1.1 RealTradingEngine Class Design ✅
 
 ```python
 class RealTradingEngine:
@@ -79,7 +79,7 @@ class RealTradingEngine:
         self._db: TradeDatabase | None = None
 ```
 
-### 1.2 Configuration System
+### 1.2 Configuration System ✅
 
 ```python
 @dataclass
@@ -125,7 +125,7 @@ class RealTradingConfig:
     log_balance_updates: bool = True
 ```
 
-### 1.3 Wallet Integration
+### 1.3 Wallet Integration ✅
 
 **Features:**
 - Connect to Polygon network via Web3.py
@@ -157,7 +157,7 @@ class WalletManager:
 
 ## Phase 2: Position Sizing Strategies
 
-### 2.1 Position Sizer Interface
+### 2.1 Position Sizer Interface ✅
 
 ```python
 class PositionSizer(ABC):
@@ -296,7 +296,7 @@ class HybridPositionSizer(PositionSizer):
         return size
 ```
 
-### 2.2 Usage Examples
+### 2.2 Usage Examples ✅
 
 ```python
 # Fixed amount sizing

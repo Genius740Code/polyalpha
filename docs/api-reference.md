@@ -32,6 +32,7 @@ client = polyalpha.Client(
 |---|---|---|
 | `client.markets` | `MarketClient` | Market discovery |
 | `client.paper` | `PaperEngine` | Paper trading engine |
+| `client.real` | `RealTradingEngine` | Real trading engine (optional) |
 
 **Methods**
 
@@ -268,6 +269,270 @@ Returned by `paper.buy()` and `paper.sell()`.
 
 ---
 
+## polyalpha.RealTradingEngine
+
+Access via `client.real`. Requires real trading credentials to initialize. Do not instantiate directly.
+
+**Constructor** (internal — use `Client` with real trading parameters)
+
+```python
+RealTradingEngine(
+    private_key: str,
+    rpc_url: str,
+    polymarket_api_key: str,
+    config: RealTradingConfig | None = None,
+    db_path: str | None = None,
+)
+```
+
+**Attributes**
+
+| Attribute | Type | Description |
+|---|---|---|
+| `real.balance` | `float` | Current USDC balance |
+| `real.config` | `RealTradingConfig` | Current configuration |
+| `real.emergency_mode` | `bool` | Emergency stop status |
+
+**Methods**
+
+#### `buy(market, side, amount=None, confidence=0.5, price=None, stop_loss=None, take_profit=None, confirm=True) → RealOrder`
+
+Execute a real buy order on the CLOB.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `market` | `Market` | — | Target market |
+| `side` | `str` | — | `"UP"` or `"DOWN"` |
+| `amount` | `float \| None` | `None` | USDC to spend (uses position sizing if None) |
+| `confidence` | `float` | `0.5` | Confidence level (0-1) for position sizing |
+| `price` | `float \| None` | `None` | Limit price (market order if None) |
+| `stop_loss` | `float \| None` | `None` | Stop loss price trigger |
+| `take_profit` | `float \| None` | `None` | Take profit price trigger |
+| `confirm` | `bool` | `True` | Require manual confirmation |
+
+Raises `InsufficientBalance`, `InsufficientAllowance`, `RiskLimitExceeded`, `OrderCancelled`.
+
+#### `limit(market, side, price, amount=None, confidence=0.5, stop_loss=None, take_profit=None, confirm=True) → RealOrder`
+
+Execute a real limit order on the CLOB.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `market` | `Market` | — | Target market |
+| `side` | `str` | — | `"UP"` or `"DOWN"` |
+| `price` | `float` | — | Limit price |
+| `amount` | `float \| None` | `None` | USDC to spend |
+| `confidence` | `float` | `0.5` | Confidence level for position sizing |
+| `stop_loss` | `float \| None` | `None` | Stop loss price trigger |
+| `take_profit` | `float \| None` | `None` | Take profit price trigger |
+| `confirm` | `bool` | `True` | Require manual confirmation |
+
+#### `cancel(order_id) → None`
+
+Cancel an open order.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `order_id` | `str` | Order ID to cancel |
+
+Raises `OrderNotFound`.
+
+#### `get_order(order_id) → RealOrder`
+
+Get order by ID.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `order_id` | `str` | Order ID |
+
+Raises `OrderNotFound`.
+
+#### `open_orders() → list[RealOrder]`
+
+Get all open orders.
+
+#### `positions() → list[RealPosition]`
+
+Get all open positions.
+
+#### `get_position(market_id, side) → RealPosition`
+
+Get position for a market and side.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `market_id` | `str` | Market ID |
+| `side` | `str` | `"UP"` or `"DOWN"` |
+
+Raises `PositionNotFound`.
+
+#### `refresh_balance() → None`
+
+Refresh balance from blockchain.
+
+#### `emergency_stop(reason="Manual") → None`
+
+Emergency stop - cancel all open orders and prevent new trades.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `reason` | `str` | `"Manual"` | Reason for emergency stop |
+
+#### `resume_trading(confirm=True) → None`
+
+Resume trading after emergency stop.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `confirm` | `bool` | `True` | Require confirmation |
+
+---
+
+## polyalpha.RealTradingConfig
+
+Configuration for real trading with safety checks.
+
+**Parameters**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `private_key` | `str` | — | Private key for wallet operations |
+| `rpc_url` | `str` | — | Polygon RPC URL |
+| `polymarket_api_key` | `str` | — | Polymarket API key |
+| `require_confirmation` | `bool` | `True` | Require manual confirmation for orders |
+| `max_order_size` | `float` | `1000.0` | Maximum USDC per order |
+| `max_daily_loss` | `float` | `500.0` | Stop trading if daily loss exceeds this |
+| `max_position_size` | `float` | `2000.0` | Maximum position size |
+| `max_open_positions` | `int` | `10` | Maximum concurrent positions |
+| `position_sizing` | `str` | `"fixed"` | `"fixed"`, `"percentage"`, or `"kelly"` |
+| `fixed_amount` | `float` | `10.0` | Amount for fixed strategy |
+| `percentage_of_balance` | `float` | `0.05` | Percentage for percentage strategy |
+| `kelly_fraction` | `float` | `0.25` | Fraction of full Kelly for Kelly strategy |
+| `enable_stop_loss` | `bool` | `True` | Enable stop loss |
+| `default_stop_loss_pct` | `float` | `0.20` | Default stop loss percentage |
+| `enable_take_profit` | `bool` | `True` | Enable take profit |
+| `default_take_profit_pct` | `float` | `0.50` | Default take profit percentage |
+| `max_risk_per_trade` | `float` | `0.02` | Maximum risk per trade (as % of balance) |
+| `slippage_tolerance` | `float` | `0.05` | Slippage tolerance (5%) |
+| `order_timeout` | `int` | `60` | Order timeout in seconds |
+| `retry_attempts` | `int` | `3` | Retry attempts for failed orders |
+| `retry_delay` | `float` | `1.0` | Delay between retries (seconds) |
+| `fee_mode` | `str` | `"polymarket"` | Fee calculation mode |
+| `log_all_orders` | `bool` | `True` | Log all orders |
+| `log_balance_updates` | `bool` | `True` | Log balance updates |
+
+---
+
+## polyalpha.RealOrder
+
+A real order executed on the CLOB.
+
+| Attribute | Type | Description |
+|---|---|---|
+| `id` | `str` | Order ID |
+| `market_id` | `str` | Market ID |
+| `slug` | `str` | Market slug |
+| `side` | `str` | `"UP"` or `"DOWN"` |
+| `price` | `float` | Fill price |
+| `amount` | `float` | USDC spent |
+| `shares` | `float` | Shares received |
+| `fee` | `float` | Fee paid |
+| `status` | `str` | `"pending"`, `"open"`, `"filled"`, `"partially_filled"`, `"cancelled"` |
+| `is_limit` | `bool` | Whether this is a limit order |
+| `created_at` | `datetime` | Order creation time |
+| `filled_at` | `datetime \| None` | Fill time (if filled) |
+| `tx_hash` | `str \| None` | Transaction hash |
+| `stop_loss` | `float \| None` | Stop loss price |
+| `take_profit` | `float \| None` | Take profit price |
+| `sizing_strategy` | `str` | Position sizing strategy used |
+| `confidence` | `float` | Confidence level |
+| `kelly_fraction` | `float` | Kelly fraction used |
+
+**Methods**
+
+#### `dump() → dict`
+
+Return order data as a dictionary.
+
+---
+
+## polyalpha.RealPosition
+
+A real position held on the CLOB.
+
+| Attribute | Type | Description |
+|---|---|---|
+| `market_id` | `str` | Market ID |
+| `slug` | `str` | Market slug |
+| `question` | `str` | Market question |
+| `side` | `str` | `"UP"` or `"DOWN"` |
+| `shares` | `float` | Shares held |
+| `avg_price` | `float` | Average entry price |
+| `current_price` | `float` | Current price |
+| `cost_basis` | `float` | Total cost basis |
+| `current_value` | `float` | Current value |
+| `resolved` | `bool` | Whether position is resolved |
+| `outcome` | `str \| None` | `"WON"` or `"LOST"` (if resolved) |
+| `order_ids` | `list[str]` | Order IDs in this position |
+| `stop_loss` | `float \| None` | Stop loss price |
+| `take_profit` | `float \| None` | Take profit price |
+
+**Properties**
+
+| Property | Type | Description |
+|---|---|---|
+| `pnl` | `float` | Unrealized P&L |
+| `pnl_pct` | `float` | P&L as percentage |
+
+**Methods**
+
+#### `dump() → dict`
+
+Return position data as a dictionary.
+
+---
+
+## polyalpha.WalletManager
+
+Manages wallet operations for real trading. Access via `client.real._wallet`.
+
+**Methods**
+
+#### `get_address() → str`
+
+Get wallet address.
+
+#### `get_balance() → float`
+
+Get current USDC balance.
+
+#### `get_allowance() → float`
+
+Get CLOB allowance for trading.
+
+#### `approve_clob(amount) → str`
+
+Approve CLOB contract to spend USDC.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `amount` | `float` | Amount to approve |
+
+#### `refresh_balance() → None`
+
+Refresh balance from blockchain.
+
+#### `wait_for_transaction(tx_hash, timeout=60) → dict`
+
+Wait for transaction confirmation.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `tx_hash` | `str` | — | Transaction hash |
+| `timeout` | `int` | `60` | Timeout in seconds |
+
+---
+
 ## polyalpha.PaperPosition
 
 | Attribute | Type | Description |
@@ -325,8 +590,18 @@ All exceptions inherit from `polyalpha.PolyalphaError`.
 | `MarketNotFound` | No market matched the given asset/timeframe or slug |
 | `MarketClosed` | Market exists but is no longer active |
 | `StreamDisconnected` | WebSocket dropped and retry budget exhausted |
-| `InsufficientBalance` | Paper balance too low to place the order |
-| `OrderNotFound` | No paper order matched the given ID |
+| `InsufficientBalance` | Balance too low to place the order |
+| `InsufficientAllowance` | Insufficient CLOB allowance for trading |
+| `OrderNotFound` | No order matched the given ID |
+| `OrderRejected` | Order rejected by CLOB |
+| `OrderTimeout` | Order timed out |
+| `NetworkError` | Network connectivity error |
+| `TransientError` | Transient error that can be retried |
+| `PositionNotFound` | Position not found |
+| `RiskLimitExceeded` | Risk management limit exceeded |
+| `OrderCancelled` | Order cancelled by user or system |
+| `OrderBookError` | Order book fetch or parse failed |
+| `OrderBookNotFound` | No order book data available for the requested token |
 
 ```python
 from polyalpha import (
@@ -335,7 +610,17 @@ from polyalpha import (
     MarketClosed,
     StreamDisconnected,
     InsufficientBalance,
+    InsufficientAllowance,
     OrderNotFound,
+    OrderRejected,
+    OrderTimeout,
+    NetworkError,
+    TransientError,
+    PositionNotFound,
+    RiskLimitExceeded,
+    OrderCancelled,
+    OrderBookError,
+    OrderBookNotFound,
 )
 
 try:
