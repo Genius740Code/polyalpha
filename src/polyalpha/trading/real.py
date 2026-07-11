@@ -50,6 +50,7 @@ from ..core import (
     OrderRejected,
     OrderTimeout,
 )
+from .clob_client import ClobClient
 
 log = logging.getLogger(__name__)
 
@@ -545,8 +546,15 @@ class RealTradingEngine:
         self._orders: dict[str, RealOrder] = {}
         self._positions: dict[str, RealPosition] = {}  # key: "{market_id}:{side}"
 
-        # CLOB client (placeholder - to be implemented)
-        self._clob_client = None
+        # CLOB client
+        self._clob_client = ClobClient(
+            api_key=polymarket_api_key,
+            private_key=private_key,
+            rpc_url=rpc_url,
+            timeout=config.order_timeout,
+            retry_attempts=config.retry_attempts,
+            retry_delay=config.retry_delay,
+        )
 
         # Database
         self._db: Optional[TradeDatabase] = None
@@ -1020,18 +1028,18 @@ class RealTradingEngine:
         size: float,
         order_type: str,
     ) -> dict:
-        """Place order on CLOB (placeholder)."""
-        # This is a placeholder - actual CLOB integration to be implemented
-        import uuid
-        return {
-            "order_id": str(uuid.uuid4()),
-            "status": "pending",
-        }
+        """Place order on CLOB."""
+        return self._clob_client.place_order(
+            token_id=token_id,
+            side=side,
+            price=price,
+            size=size,
+            order_type=order_type,
+        )
 
     def _cancel_clob_order(self, order_id: str) -> None:
-        """Cancel order on CLOB (placeholder)."""
-        # This is a placeholder - actual CLOB integration to be implemented
-        pass
+        """Cancel order on CLOB."""
+        self._clob_client.cancel_order(order_id)
 
     def _update_position(self, market, side: str, order: RealOrder) -> None:
         """Update position after order fill."""
