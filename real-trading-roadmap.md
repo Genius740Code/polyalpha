@@ -447,7 +447,7 @@ class RealPosition:
         return (self.pnl / self.cost_basis) * 100
 ```
 
-### 3.4 Order Execution Flow
+### 3.4 Order Execution Flow ✅
 
 ```python
 def buy(

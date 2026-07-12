@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
@@ -253,6 +254,276 @@ class RealPosition:
             "take_profit": self.take_profit,
             "order_ids": self.order_ids,
         }
+
+
+# ── Position Sizers ────────────────────────────────────────────────────────────────
+
+class PositionSizer(ABC):
+    """Abstract base class for position sizing strategies."""
+
+    @abstractmethod
+    def calculate_size(
+        self,
+        balance: float,
+        market,
+        side: str,
+        confidence: float = 0.5,
+        price: Optional[float] = None,
+    ) -> float:
+        """Calculate position size in USDC."""
+        pass
+
+
+class FixedPositionSizer(PositionSizer):
+    """Fixed amount position sizing."""
+
+    def __init__(self, amount: float):
+        self.amount = amount
+
+    def calculate_size(
+        self,
+        balance: float,
+        market,
+        side: str,
+        confidence: float = 0.5,
+        price: Optional[float] = None,
+    ) -> float:
+        return min(self.amount, balance)
+
+
+class PercentagePositionSizer(PositionSizer):
+    """Percentage of balance position sizing."""
+
+    def __init__(self, percentage: float):
+        self.percentage = percentage
+
+    def calculate_size(
+        self,
+        balance: float,
+        market,
+        side: str,
+        confidence: float = 0.5,
+        price: Optional[float] = None,
+    ) -> float:
+        return balance * self.percentage
+
+
+class KellyPositionSizer(PositionSizer):
+    """
+    Kelly criterion position sizing.
+
+    Formula: f* = (bp - q) / b
+    Where:
+    - f* = fraction of bankroll to wager
+    - b = odds received on the wager (decimal odds)
+    - p = probability of winning
+    - q = probability of losing (1 - p)
+
+    For binary markets: f* = p - q/b = 2p - 1 (when odds are 1:1)
+    """
+
+    def __init__(self, kelly_fraction: float = 0.25, min_confidence: float = 0.55):
+        """
+        Parameters
+        ----------
+        kelly_fraction : float
+            Fraction of full Kelly to use (0.25 = quarter Kelly for safety)
+        min_confidence : float
+            Minimum confidence to place a trade (below this, return 0)
+        """
+        self.kelly_fraction = kelly_fraction
+        self.min_confidence = min_confidence
+
+    def calculate_size(
+        self,
+        balance: float,
+        market,
+        side: str,
+        confidence: float = 0.5,
+        price: Optional[float] = None,
+    ) -> float:
+        # Don't trade if confidence is too low
+        if confidence < self.min_confidence:
+            return 0.0
+
+        # Calculate Kelly fraction
+        # For binary markets with price p, implied probability = p
+        # If our confidence > implied probability, we have edge
+        implied_prob = price if price else (market.up_price if side == "UP" else market.down_price)
+
+        if confidence <= implied_prob:
+            return 0.0  # No edge
+
+        # Kelly formula for binary options
+        # f = (confidence * (1 + (1-implied_prob)/implied_prob) - 1) / ((1-implied_prob)/implied_prob)
+        # Simplified: f = (confidence - implied_prob) / (1 - implied_prob)
+        kelly_fraction = (confidence - implied_prob) / (1 - implied_prob)
+
+        # Apply safety fraction (quarter Kelly, etc.)
+        kelly_fraction *= self.kelly_fraction
+
+        # Cap at reasonable maximum (never bet more than 50% of bankroll)
+        kelly_fraction = min(kelly_fraction, 0.5)
+
+        return balance * kelly_fraction
+
+
+class HybridPositionSizer(PositionSizer):
+    """
+    Hybrid position sizing combining multiple strategies.
+
+    Strategies:
+    - Base size from fixed or percentage
+    - Adjust based on Kelly confidence
+    - Apply risk limits
+    """
+
+    def __init__(
+        self,
+        base_strategy: str = "percentage",
+        base_amount: float = 0.05,  # 5% for percentage
+        enable_kelly_adjustment: bool = True,
+        kelly_fraction: float = 0.25,
+        max_size: float = 1000.0,
+        min_size: float = 1.0,
+    ):
+        self.base_strategy = base_strategy
+        self.base_amount = base_amount
+        self.enable_kelly_adjustment = enable_kelly_adjustment
+        self.kelly_fraction = kelly_fraction
+        self.max_size = max_size
+        self.min_size = min_size
+
+    def calculate_size(
+        self,
+        balance: float,
+        market,
+        side: str,
+        confidence: float = 0.5,
+        price: Optional[float] = None,
+    ) -> float:
+        # Calculate base size
+        if self.base_strategy == "fixed":
+            size = min(self.base_amount, balance)
+        else:  # percentage
+            size = balance * self.base_amount
+
+        # Apply Kelly adjustment if enabled
+        if self.enable_kelly_adjustment and confidence > 0.5:
+            implied_prob = price if price else (market.up_price if side == "UP" else market.down_price)
+            if confidence > implied_prob:
+                kelly_adj = (confidence - implied_prob) / (1 - implied_prob) * self.kelly_fraction
+                size *= (1 + kelly_adj)
+
+        # Apply limits
+        size = max(self.min_size, min(size, self.max_size))
+        size = min(size, balance)
+
+        return size
+
+
+# ── Risk Manager ─────────────────────────────────────────────────────────────────
+
+class RiskManager:
+    """Risk management for real trading."""
+
+    def __init__(self, config: RealTradingConfig):
+        self.config = config
+        self.daily_pnl: float = 0.0
+        self.daily_trades: int = 0
+        self.daily_start_balance: float = 0.0
+
+    def validate_order(
+        self,
+        amount: float,
+        balance: float,
+        market,
+        positions: dict[str, RealPosition],
+    ) -> None:
+        """Validate order against risk limits."""
+
+        # Check max order size
+        if amount > self.config.max_order_size:
+            raise RiskLimitExceeded(
+                f"Order amount ${amount:.2f} exceeds maximum ${self.config.max_order_size:.2f}"
+            )
+
+        # Check max position size
+        current_exposure = self._get_market_exposure(market.id, positions)
+        if current_exposure + amount > self.config.max_position_size:
+            raise RiskLimitExceeded(
+                f"Position would exceed maximum size ${self.config.max_position_size:.2f}"
+            )
+
+        # Check max open positions
+        open_positions = [p for p in positions.values() if not p.resolved]
+        if len(open_positions) >= self.config.max_open_positions:
+            raise RiskLimitExceeded(
+                f"Maximum open positions ({self.config.max_open_positions}) reached"
+            )
+
+        # Check daily loss limit
+        if self.daily_pnl < -self.config.max_daily_loss:
+            raise RiskLimitExceeded(
+                f"Daily loss ${abs(self.daily_pnl):.2f} exceeds limit ${self.config.max_daily_loss:.2f}"
+            )
+
+        # Check max risk per trade
+        max_risk = balance * self.config.max_risk_per_trade
+        if amount > max_risk:
+            raise RiskLimitExceeded(
+                f"Order amount ${amount:.2f} exceeds max risk ${max_risk:.2f} "
+                f"({self.config.max_risk_per_trade:.1%})"
+            )
+
+    def check_stop_loss(self, position: RealPosition, current_price: float) -> bool:
+        """Check if stop loss should be triggered."""
+        if position.stop_loss is None:
+            return False
+
+        if position.side == "UP":
+            return current_price <= position.stop_loss
+        else:
+            return current_price >= position.stop_loss
+
+    def check_take_profit(self, position: RealPosition, current_price: float) -> bool:
+        """Check if take profit should be triggered."""
+        if position.take_profit is None:
+            return False
+
+        if position.side == "UP":
+            return current_price >= position.take_profit
+        else:
+            return current_price <= position.take_profit
+
+    def calculate_position_size_with_risk(
+        self,
+        balance: float,
+        entry_price: float,
+        stop_loss: float,
+        side: str,
+    ) -> float:
+        """
+        Calculate position size based on risk per trade.
+
+        Formula: Position Size = (Balance × Risk%) / |Entry - StopLoss| / Entry
+        """
+        risk_amount = balance * self.config.max_risk_per_trade
+        price_diff = abs(entry_price - stop_loss)
+
+        if price_diff == 0:
+            return balance * risk_amount
+
+        position_size = risk_amount / (price_diff / entry_price)
+        return min(position_size, balance)
+
+    def _get_market_exposure(self, market_id: str, positions: dict[str, RealPosition]) -> float:
+        """Get total exposure for a market."""
+        exposure = 0.0
+        for position in positions.values():
+            if position.market_id == market_id and not position.resolved:
+                exposure += position.cost_basis
+        return exposure
 
 
 # ── Wallet Manager ───────────────────────────────────────────────────────────────
@@ -557,6 +828,12 @@ class RealTradingEngine:
         self._orders: dict[str, RealOrder] = {}
         self._positions: dict[str, RealPosition] = {}  # key: "{market_id}:{side}"
 
+        # Position sizing
+        self._position_sizer: PositionSizer = self._create_position_sizer()
+
+        # Risk management
+        self._risk_manager = RiskManager(self._config)
+
         # CLOB client
         self._clob_client = ClobClient(
             api_key=polymarket_api_key,
@@ -602,6 +879,18 @@ class RealTradingEngine:
         """Set a custom auto-redeem configuration."""
         from .auto_redeem import AutoRedeemEngine
         self._auto_redeem = AutoRedeemEngine(self, config)
+
+    def set_position_sizer(self, sizer: PositionSizer) -> None:
+        """
+        Set a custom position sizer.
+
+        Parameters
+        ----------
+        sizer : PositionSizer
+            Position sizer instance (FixedPositionSizer, PercentagePositionSizer, etc.)
+        """
+        self._position_sizer = sizer
+        log.info("Position sizer updated to %s", type(sizer).__name__)
 
     @property
     def balance(self) -> float:
@@ -698,47 +987,43 @@ class RealTradingEngine:
         # Track if user explicitly provided a price (for limit vs market order)
         user_provided_price = price is not None
 
-        # Get price
-        if price is None:
-            price = market.up_price if side == "UP" else market.down_price
-
-        # Calculate position size if not provided
+        # 1. Calculate position size if not provided
         if amount is None:
-            amount = self._calculate_position_size(market, side, confidence, price)
+            amount = self._position_sizer.calculate_size(
+                self._balance, market, side, confidence, price
+            )
 
-        # Validate against risk limits
-        self._validate_order(amount, market)
+        # 2. Validate against risk limits
+        self._risk_manager.validate_order(amount, self._balance, market, self._positions)
 
-        # Check balance
+        # 3. Check balance
         if amount > self._balance:
             raise InsufficientBalance(
                 f"Order amount ${amount:.2f} exceeds balance ${self._balance:.2f}"
             )
 
-        # Check allowance
-        if amount > self._allowance:
-            raise InsufficientAllowance(
-                f"Order amount ${amount:.2f} exceeds allowance ${self._allowance:.2f}"
-            )
+        # 4. Get price
+        if price is None:
+            price = market.up_price if side == "UP" else market.down_price
 
-        # Calculate shares and fee
+        # 5. Calculate shares and fee
         shares, fee = self._calculate_shares_and_fee(amount, price)
 
-        # Require confirmation if enabled
+        # 6. Require confirmation if enabled
         if confirm and self._config.require_confirmation:
             self._require_confirmation(market, side, amount, price, shares, fee)
 
-        # Place order on CLOB (placeholder)
+        # 7. Place order on CLOB
         token_id = market.up_token if side == "UP" else market.down_token
         order_response = self._place_clob_order(
             token_id,
             "buy",  # Always buying tokens (UP or DOWN)
             price,
             shares,
-            "market" if price is None else "limit"
+            "market" if not user_provided_price else "limit"
         )
 
-        # Create order object
+        # 8. Create order object
         order = RealOrder(
             id=order_response["order_id"],
             market_id=market.id,
@@ -757,16 +1042,16 @@ class RealTradingEngine:
             confidence=confidence,
         )
 
-        # Update balance
+        # 9. Update balance
         self._balance -= (amount + fee)
 
-        # Store order
+        # 10. Store order
         self._orders[order.id] = order
 
-        # Update position
+        # 11. Update position
         self._update_position(market, side, order)
 
-        # Save to database
+        # 12. Save to database
         if self._db_enabled:
             self._save_order_to_db(order)
 
@@ -940,6 +1225,23 @@ class RealTradingEngine:
 
     # ── Private Methods ───────────────────────────────────────────────────────────
 
+    def _create_position_sizer(self) -> PositionSizer:
+        """Create position sizer based on configuration."""
+        strategy = self._config.position_sizing
+
+        if strategy == "fixed":
+            return FixedPositionSizer(amount=self._config.fixed_amount)
+        elif strategy == "percentage":
+            return PercentagePositionSizer(percentage=self._config.percentage_of_balance)
+        elif strategy == "kelly":
+            return KellyPositionSizer(
+                kelly_fraction=self._config.kelly_fraction,
+                min_confidence=0.55,
+            )
+        else:
+            # Default to fixed
+            return FixedPositionSizer(amount=self._config.fixed_amount)
+
     def _calculate_position_size(
         self,
         market,
@@ -947,58 +1249,23 @@ class RealTradingEngine:
         confidence: float,
         price: float,
     ) -> float:
-        """Calculate position size based on configured strategy."""
-        strategy = self._config.position_sizing
-
-        if strategy == "fixed":
-            return min(self._config.fixed_amount, self._balance)
-        elif strategy == "percentage":
-            return self._balance * self._config.percentage_of_balance
-        elif strategy == "kelly":
-            # Kelly criterion calculation
-            if confidence < 0.55:
-                return 0.0  # Minimum confidence for Kelly
-
-            implied_prob = price
-            if confidence <= implied_prob:
-                return 0.0  # No edge
-
-            kelly_fraction = (confidence - implied_prob) / (1 - implied_prob)
-            kelly_fraction *= self._config.kelly_fraction
-            kelly_fraction = min(kelly_fraction, 0.5)  # Cap at 50%
-
-            return self._balance * kelly_fraction
-        else:
-            return min(self._config.fixed_amount, self._balance)
+        """Calculate position size using the configured position sizer."""
+        return self._position_sizer.calculate_size(
+            balance=self._balance,
+            market=market,
+            side=side,
+            confidence=confidence,
+            price=price,
+        )
 
     def _validate_order(self, amount: float, market) -> None:
-        """Validate order against risk limits."""
-        # Check max order size
-        if amount > self._config.max_order_size:
-            raise RiskLimitExceeded(
-                f"Order amount ${amount:.2f} exceeds maximum ${self._config.max_order_size:.2f}"
-            )
-
-        # Check max position size
-        current_exposure = self._get_market_exposure(market.id)
-        if current_exposure + amount > self._config.max_position_size:
-            raise RiskLimitExceeded(
-                f"Position would exceed maximum size ${self._config.max_position_size:.2f}"
-            )
-
-        # Check max open positions
-        if len(self.positions()) >= self._config.max_open_positions:
-            raise RiskLimitExceeded(
-                f"Maximum open positions ({self._config.max_open_positions}) reached"
-            )
-
-        # Check max risk per trade
-        max_risk = self._balance * self._config.max_risk_per_trade
-        if amount > max_risk:
-            raise RiskLimitExceeded(
-                f"Order amount ${amount:.2f} exceeds max risk ${max_risk:.2f} "
-                f"({self._config.max_risk_per_trade:.1%})"
-            )
+        """Validate order against risk limits using RiskManager."""
+        self._risk_manager.validate_order(
+            amount=amount,
+            balance=self._balance,
+            market=market,
+            positions=self._positions,
+        )
 
     def _calculate_shares_and_fee(self, amount: float, price: float) -> tuple[float, float]:
         """Calculate shares and fee for an order."""
