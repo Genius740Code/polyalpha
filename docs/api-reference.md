@@ -249,6 +249,24 @@ Print balance, positions with live P&L, and totals to stdout.
 
 Clear all orders and positions and restore the original balance.
 
+#### `get_risk_summary() → dict`
+
+Get current risk management summary including daily P&L, trade count, and remaining limits.
+
+Returns a dictionary with:
+- `daily_pnl`: Current daily profit/loss
+- `daily_trades`: Number of trades today
+- `daily_start_balance`: Balance at start of day
+- `daily_date`: Date of current tracking period
+- `max_daily_loss`: Configured daily loss limit
+- `max_trades_per_day`: Configured daily trade limit
+- `remaining_loss_limit`: Remaining loss limit before stop
+- `remaining_trades`: Remaining trades before limit
+
+#### `reset_daily_limits() → None`
+
+Manually reset daily risk limits (useful for testing). Limits also automatically reset at midnight UTC.
+
 ---
 
 ## polyalpha.PaperOrder

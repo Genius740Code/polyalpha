@@ -47,8 +47,21 @@ stream.start()  # blocks until the market closes
 `polyalpha.Client` is the single entry point for everything.
 
 ```python
+from polyalpha.trading.paper import PaperConfig
+
+# Optional: configure paper trading with risk management
+config = PaperConfig(
+    max_daily_loss=500.0,         # Stop trading if daily loss exceeds $500
+    max_trades_per_day=100,       # Maximum 100 trades per day
+    max_order_size=1000.0,        # Maximum $1000 per order
+    max_position_size=2000.0,     # Maximum $2000 position per market
+    max_open_positions=10,        # Maximum 10 concurrent positions
+    max_risk_per_trade=0.02,      # Maximum 2% of balance per trade
+)
+
 client = polyalpha.Client(
     balance=100.0,     # starting paper USDC balance (default 100)
+    paper_config=config,  # optional paper trading configuration
     timeout=10,        # HTTP timeout in seconds (default 10)
     retries=3,         # retries on 5xx errors (default 3)
     log_level="INFO",  # "DEBUG" | "INFO" | "WARNING" | "ERROR"
