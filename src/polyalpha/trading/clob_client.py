@@ -149,12 +149,12 @@ class ClobClient:
 
         try:
             from eth_account import Account
+            from eth_account.messages import encode_defunct
             import json
 
             message = json.dumps(order_data, sort_keys=True)
-            message_hash = Account.from_key(self.private_key).sign_message(
-                text=message
-            )
+            message_encoded = encode_defunct(text=message)
+            message_hash = Account.from_key(self.private_key).sign_message(message_encoded)
             return message_hash.signature.hex()
         except ImportError:
             log.warning("eth_account not available. Using simulated signature.")

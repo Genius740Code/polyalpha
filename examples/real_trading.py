@@ -209,6 +209,7 @@ def position_management():
     
     for position in positions:
         print(f"\nMarket: {position.slug}")
+        print(f"Question: {position.question}")
         print(f"Side: {position.side}")
         print(f"Shares: {position.shares:.4f}")
         print(f"Avg Price: ${position.avg_price:.4f}")
@@ -216,6 +217,53 @@ def position_management():
         print(f"Cost Basis: ${position.cost_basis:.2f}")
         print(f"Current Value: ${position.current_value:.2f}")
         print(f"P&L: ${position.pnl:.2f} ({position.pnl_pct:.2f}%)")
+        print(f"Stop Loss: ${position.stop_loss:.4f}" if position.stop_loss else "Stop Loss: None")
+        print(f"Take Profit: ${position.take_profit:.4f}" if position.take_profit else "Take Profit: None")
+        print(f"Resolved: {position.resolved}")
+        if position.resolved:
+            print(f"Outcome: {position.outcome}")
+        print(f"Order IDs: {len(position.order_ids)} orders")
+
+
+def position_details_example():
+    """Getting detailed position information."""
+    
+    client = polyalpha.Client(
+        private_key="your-private-key-here",
+        rpc_url="https://polygon-rpc.com",
+        polymarket_api_key="your-polymarket-api-key",
+        real_config=polyalpha.RealTradingConfig(),
+    )
+    
+    market = client.markets.get("btc-updown-5m-9999999")
+    
+    # Get a specific position by market and side
+    try:
+        position = client.real.get_position(market.id, "UP")
+        
+        print(f"Position Details:")
+        print(f"  Market ID: {position.market_id}")
+        print(f"  Slug: {position.slug}")
+        print(f"  Question: {position.question}")
+        print(f"  Side: {position.side}")
+        print(f"  Shares: {position.shares}")
+        print(f"  Average Price: ${position.avg_price}")
+        print(f"  Current Price: ${position.current_price}")
+        print(f"  Cost Basis: ${position.cost_basis}")
+        print(f"  Current Value: ${position.current_value}")
+        print(f"  P&L: ${position.pnl} ({position.pnl_pct}%)")
+        print(f"  Resolved: {position.resolved}")
+        print(f"  Outcome: {position.outcome}")
+        print(f"  Stop Loss: {position.stop_loss}")
+        print(f"  Take Profit: {position.take_profit}")
+        print(f"  Order IDs: {position.order_ids}")
+        
+        # Export position data as dictionary
+        position_dict = position.dump()
+        print(f"\nPosition data (dict): {position_dict}")
+        
+    except polyalpha.PositionNotFound:
+        print("No position found for this market and side")
 
 
 # ── Emergency Stop ────────────────────────────────────────────────────────────────
@@ -365,6 +413,7 @@ if __name__ == "__main__":
     # limit_order_example()
     # stop_loss_example()
     # position_management()
+    # position_details_example()
     # emergency_stop_example()
     # database_integration()
     # wallet_management()
