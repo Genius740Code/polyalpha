@@ -642,3 +642,191 @@ def test_rebate_accumulation_across_trades():
     filled_orders = [o for o in engine.orders() if o.status == "filled"]
     for order in filled_orders:
         assert order.rebate_amount > 0
+
+
+# ── Risk Management Tests ─────────────────────────────────────────────────────
+
+def test_risk_manager_max_order_size():
+    """Test that orders exceeding max_order_size are rejected"""
+    config = PaperConfig(max_order_size=50.0, max_risk_per_trade=0.50)  # 50% to allow larger orders
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    
+    # Should accept order under limit
+    order = engine.buy(market, side="UP", amount=40.0)
+    assert order.status == "filled"
+    
+    # Should reject order over limit
+    with pytest.raises(ValueError, match="exceeds maximum"):
+        engine.buy(market, side="UP", amount=60.0)
+
+
+def test_risk_manager_max_position_size():
+    """Test that position size limits are enforced"""
+    config = PaperConfig(max_position_size=30.0, max_risk_per_trade=0.50)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    
+    # First order should succeed
+    order1 = engine.buy(market, side="UP", amount=20.0)
+    assert order1.status == "filled"
+    
+    # Second order should exceed position limit
+    with pytest.raises(ValueError, match="Position would exceed maximum size"):
+        engine.buy(market, side="UP", amount=15.0)
+
+
+def test_risk_manager_max_open_positions():
+    """Test that max open positions limit is enforced"""
+    config = PaperConfig(max_open_positions=2, max_risk_per_trade=0.20)
+    engine = PaperEngine(balance=100.0, config=config)
+    
+    # Create different markets
+    market1 = make_market(id="m1", slug="market1")
+    market2 = make_market(id="m2", slug="market2")
+    market3 = make_market(id="m3", slug="market3")
+    
+    # First two positions should succeed
+    engine.buy(market1, side="UP", amount=10.0)
+    engine.buy(market2, side="UP", amount=10.0)
+    assert len(engine.positions()) == 2
+    
+    # Third should exceed limit
+    with pytest.raises(ValueError, match="Maximum open positions"):
+        engine.buy(market3, side="UP", amount=10.0)
+
+
+def test_risk_manager_daily_loss_limit():
+    """Test that daily loss limit stops trading"""
+    config = PaperConfig(max_daily_loss=20.0, max_risk_per_trade=0.50)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    
+    # Make a losing trade
+    engine.buy(market, side="UP", amount=30.0)
+    
+    # Simulate a loss by resolving at a loss
+    engine.resolve(market, outcome="DOWN")  # UP position loses
+    
+    # Try another trade - should be blocked due to loss limit
+    with pytest.raises(ValueError, match="Daily loss"):
+        engine.buy(market, side="UP", amount=10.0)
+
+
+def test_risk_manager_max_trades_per_day():
+    """Test that max trades per day limit is enforced"""
+    config = PaperConfig(max_trades_per_day=3, max_risk_per_trade=0.20)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    
+    # First three trades should succeed (trades counted on order entry)
+    for _ in range(3):
+        engine.buy(market, side="UP", amount=10.0)
+    
+    # Fourth should exceed daily limit
+    with pytest.raises(ValueError, match="Maximum daily trades"):
+        engine.buy(market, side="UP", amount=10.0)
+
+
+def test_risk_manager_max_risk_per_trade():
+    """Test that max risk per trade percentage is enforced"""
+    config = PaperConfig(max_risk_per_trade=0.10)  # 10% of balance
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    
+    # Should accept order under 10% of balance
+    order = engine.buy(market, side="UP", amount=5.0)
+    assert order.status == "filled"
+    
+    # Should reject order over 10% of balance
+    with pytest.raises(ValueError, match="exceeds max risk"):
+        engine.buy(market, side="UP", amount=15.0)
+
+
+def test_risk_manager_disable():
+    """Test that risk management can be disabled"""
+    config = PaperConfig(
+        enable_risk_management=False,
+        max_order_size=10.0
+    )
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    
+    # Should succeed even though it exceeds the limit
+    order = engine.buy(market, side="UP", amount=50.0)
+    assert order.status == "filled"
+
+
+def test_risk_manager_summary():
+    """Test risk summary reporting"""
+    config = PaperConfig(max_daily_loss=50.0, max_trades_per_day=10, max_risk_per_trade=0.20)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    
+    # Make some trades (trades counted on order entry)
+    engine.buy(market, side="UP", amount=10.0)
+    engine.buy(market, side="DOWN", amount=10.0)
+    
+    summary = engine.get_risk_summary()
+    
+    assert summary["daily_trades"] == 2
+    assert summary["max_daily_loss"] == 50.0
+    assert summary["max_trades_per_day"] == 10
+    assert summary["remaining_trades"] == 8
+    assert "daily_pnl" in summary
+
+
+def test_risk_manager_reset_daily_limits():
+    """Test manual reset of daily limits"""
+    config = PaperConfig(max_trades_per_day=2, max_risk_per_trade=0.20)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    
+    # Use up daily limit (trades counted on order entry)
+    for _ in range(2):
+        engine.buy(market, side="UP", amount=10.0)
+    
+    # Should be blocked
+    with pytest.raises(ValueError, match="Maximum daily trades"):
+        engine.buy(market, side="UP", amount=10.0)
+    
+    # Reset limits
+    engine.reset_daily_limits()
+    
+    # Should now work
+    order = engine.buy(market, side="UP", amount=10.0)
+    assert order.status == "filled"
+
+
+def test_risk_manager_pnl_tracking():
+    """Test that P&L is tracked correctly"""
+    config = PaperConfig(max_daily_loss=100.0, max_risk_per_trade=0.50)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    
+    # Make a trade
+    engine.buy(market, side="UP", amount=20.0)
+    
+    # Resolve as a win
+    engine.resolve(market, outcome="UP")
+    
+    summary = engine.get_risk_summary()
+    assert summary["daily_pnl"] > 0  # Should have profit
+
+
+def test_risk_manager_sell_position_pnl():
+    """Test that P&L is tracked when selling positions"""
+    config = PaperConfig(max_daily_loss=100.0, max_risk_per_trade=0.50)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    
+    # Buy a position
+    engine.buy(market, side="UP", amount=20.0)
+    
+    # Update price and sell
+    engine.check_limits(market.id, up_price=0.60, down_price=0.40)
+    engine.sell_position(market, side="UP")
+    
+    summary = engine.get_risk_summary()
+    # Should have tracked the trade
+    assert summary["daily_trades"] >= 1

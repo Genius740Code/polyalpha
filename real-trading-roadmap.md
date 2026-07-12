@@ -564,6 +564,8 @@ def buy(
 
 ### 4.1 Risk Manager
 
+ITS AN ADD ON TO PAPER TRADING
+
 ```python
 class RiskManager:
     """Risk management for real trading."""

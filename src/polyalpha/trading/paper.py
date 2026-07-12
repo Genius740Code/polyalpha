@@ -102,6 +102,15 @@ class PaperConfig:
     # Condition check mode for limit orders
     check_mode: str | int = "continuous"  # "continuous", "once", or int for N times
     
+    # Risk management settings
+    enable_risk_management: bool = True  # Enable risk management checks
+    max_daily_loss: float = 500.0  # Stop trading if daily loss exceeds this (USDC)
+    max_trades_per_day: int = 100  # Maximum number of trades per day
+    max_order_size: float = 1000.0  # Maximum USDC per order
+    max_position_size: float = 2000.0  # Maximum position size per market (USDC)
+    max_open_positions: int = 10  # Maximum concurrent positions
+    max_risk_per_trade: float = 0.02  # Maximum risk per trade as percentage of balance (2%)
+    
     def __post_init__(self):
         """Validate configuration values."""
         if self.fee_mode not in ("polymarket", "custom", "zero"):
@@ -136,6 +145,136 @@ class PaperConfig:
             rates = [self.rebate_tiers[t] for t in thresholds]
             if any(not 0 <= r <= 1 for r in rates):
                 raise ValueError(f"Rebate rates must be between 0 and 1")
+        # Validate risk management settings
+        if self.max_daily_loss < 0:
+            raise ValueError(f"max_daily_loss must be >= 0, got {self.max_daily_loss}")
+        if self.max_trades_per_day < 0:
+            raise ValueError(f"max_trades_per_day must be >= 0, got {self.max_trades_per_day}")
+        if self.max_order_size < 0:
+            raise ValueError(f"max_order_size must be >= 0, got {self.max_order_size}")
+        if self.max_position_size < 0:
+            raise ValueError(f"max_position_size must be >= 0, got {self.max_position_size}")
+        if self.max_open_positions < 0:
+            raise ValueError(f"max_open_positions must be >= 0, got {self.max_open_positions}")
+        if not 0 <= self.max_risk_per_trade <= 1:
+            raise ValueError(f"max_risk_per_trade must be between 0 and 1, got {self.max_risk_per_trade}")
+
+
+# ── Risk Manager ────────────────────────────────────────────────────────────────
+
+class RiskManager:
+    """Risk management for paper trading."""
+    
+    def __init__(self, config: PaperConfig, initial_balance: float):
+        self.config = config
+        self.daily_pnl: float = 0.0
+        self.daily_trades: int = 0
+        self.daily_start_balance: float = initial_balance
+        self.daily_start_date: datetime = datetime.now(timezone.utc).date()
+        
+    def _check_day_reset(self) -> None:
+        """Check if we've crossed into a new day and reset counters if so."""
+        current_date = datetime.now(timezone.utc).date()
+        if current_date != self.daily_start_date:
+            log.info("RiskManager: New day detected, resetting daily limits")
+            self.daily_pnl = 0.0
+            self.daily_trades = 0
+            self.daily_start_date = current_date
+    
+    def validate_order(
+        self,
+        amount: float,
+        balance: float,
+        market_id: str,
+        positions: dict,
+    ) -> None:
+        """Validate order against risk limits."""
+        if not self.config.enable_risk_management:
+            return
+        
+        self._check_day_reset()
+        
+        # Check max order size
+        if amount > self.config.max_order_size:
+            raise ValueError(
+                f"Order amount ${amount:.2f} exceeds maximum ${self.config.max_order_size:.2f}"
+            )
+        
+        # Check max position size
+        current_exposure = self._get_market_exposure(market_id, positions)
+        if current_exposure + amount > self.config.max_position_size:
+            raise ValueError(
+                f"Position would exceed maximum size ${self.config.max_position_size:.2f} "
+                f"(current: ${current_exposure:.2f}, adding: ${amount:.2f})"
+            )
+        
+        # Check max open positions
+        open_positions = [p for p in positions.values() if not p.resolved]
+        if len(open_positions) >= self.config.max_open_positions:
+            raise ValueError(
+                f"Maximum open positions ({self.config.max_open_positions}) reached"
+            )
+        
+        # Check daily loss limit
+        if self.daily_pnl < -self.config.max_daily_loss:
+            raise ValueError(
+                f"Daily loss ${abs(self.daily_pnl):.2f} exceeds limit ${self.config.max_daily_loss:.2f}"
+            )
+        
+        # Check max trades per day
+        if self.daily_trades >= self.config.max_trades_per_day:
+            raise ValueError(
+                f"Maximum daily trades ({self.config.max_trades_per_day}) reached"
+            )
+        
+        # Check max risk per trade
+        max_risk = balance * self.config.max_risk_per_trade
+        if amount > max_risk:
+            raise ValueError(
+                f"Order amount ${amount:.2f} exceeds max risk ${max_risk:.2f} "
+                f"({self.config.max_risk_per_trade:.1%} of balance)"
+            )
+        
+        # Increment trade count on order entry (not exit)
+        self.daily_trades += 1
+    
+    def _get_market_exposure(self, market_id: str, positions: dict) -> float:
+        """Get current exposure for a specific market."""
+        exposure = 0.0
+        for key, pos in positions.items():
+            if pos.market_id == market_id and not pos.resolved:
+                exposure += pos.cost_basis
+        return exposure
+    
+    def record_trade(self, pnl: float) -> None:
+        """Record a completed trade and update daily P&L."""
+        self._check_day_reset()
+        self.daily_pnl += pnl
+        log.debug(
+            "RiskManager: Trade recorded - daily_pnl=$%.2f",
+            self.daily_pnl
+        )
+    
+    def get_summary(self) -> dict:
+        """Get current risk management summary."""
+        self._check_day_reset()
+        return {
+            "daily_pnl": self.daily_pnl,
+            "daily_trades": self.daily_trades,
+            "daily_start_balance": self.daily_start_balance,
+            "daily_date": self.daily_start_date.isoformat(),
+            "max_daily_loss": self.config.max_daily_loss,
+            "max_trades_per_day": self.config.max_trades_per_day,
+            "remaining_loss_limit": max(0, self.config.max_daily_loss + self.daily_pnl),
+            "remaining_trades": max(0, self.config.max_trades_per_day - self.daily_trades),
+        }
+    
+    def reset_daily_limits(self) -> None:
+        """Manually reset daily limits (useful for testing)."""
+        self.daily_pnl = 0.0
+        self.daily_trades = 0
+        self.daily_start_date = datetime.now(timezone.utc).date()
+        log.info("RiskManager: Daily limits manually reset")
 
 
 # ── Dataclasses ────────────────────────────────────────────────────────────────
@@ -298,6 +437,8 @@ class PaperEngine:
         self._db_enabled: bool = False
         if db_path:
             self.enable_database(db_path)
+        # Risk management
+        self._risk_manager: RiskManager = RiskManager(self._config, self._balance)
         # Fee rebate tracking
         self._total_fees_paid: float = 0.0
         self._total_rebates_earned: float = 0.0
@@ -354,6 +495,39 @@ class PaperEngine:
         """Update the paper trading configuration."""
         self._config = config
         log.info("Paper: configuration updated")
+
+    # ── Risk Management ───────────────────────────────────────────────────────────
+
+    def get_risk_summary(self) -> dict:
+        """
+        Get current risk management summary.
+
+        Returns
+        -------
+        dict
+            Dictionary with daily P&L, trade count, and remaining limits.
+
+        Example
+        -------
+        >>> summary = client.paper.get_risk_summary()
+        >>> print(f"Daily P&L: ${summary['daily_pnl']:.2f}")
+        >>> print(f"Trades today: {summary['daily_trades']}")
+        >>> print(f"Remaining loss limit: ${summary['remaining_loss_limit']:.2f}")
+        """
+        return self._risk_manager.get_summary()
+
+    def reset_daily_limits(self) -> None:
+        """
+        Manually reset daily risk limits.
+
+        This is useful for testing or when you want to start fresh without
+        waiting for the calendar day to change.
+
+        Example
+        -------
+        >>> client.paper.reset_daily_limits()
+        """
+        self._risk_manager.reset_daily_limits()
 
     # ── Database Integration ─────────────────────────────────────────────────────
 
@@ -749,6 +923,9 @@ class PaperEngine:
             if time_window_end is not None and now > time_window_end:
                 raise ValueError(f"Cannot buy: current time {now} is after time window end {time_window_end}")
 
+        # Validate against risk limits
+        self._risk_manager.validate_order(amount, self._balance, market.id, self._positions)
+
         # Apply execution delay if configured
         self._apply_execution_delay()
 
@@ -821,6 +998,9 @@ class PaperEngine:
             raise InsufficientBalance(
                 f"Order amount ${amount:.2f} exceeds balance ${self._balance:.2f}"
             )
+
+        # Validate against risk limits
+        self._risk_manager.validate_order(amount, self._balance, market.id, self._positions)
 
         order_id = _new_id()
         order = PaperOrder(
@@ -937,6 +1117,9 @@ class PaperEngine:
                 raise ValueError(f"Cannot buy: current time {now} is before time window start {time_window_start}")
             if time_window_end is not None and now > time_window_end:
                 raise ValueError(f"Cannot buy: current time {now} is after time window end {time_window_end}")
+
+        # Validate against risk limits
+        self._risk_manager.validate_order(amount, self._balance, market.id, self._positions)
 
         # Validate TP/SL prices
         if stop_loss is not None:
@@ -1056,7 +1239,7 @@ class PaperEngine:
             return order
 
         # Calculate fee (selling also has fee)
-        fee = self._calculate_fee(sell_amount, actual_price, sell_shares, is_maker=False)
+        fee, rebate_amount, rebate_rate, fee_type = self._calculate_fee(sell_amount, actual_price, sell_shares, is_maker=False)
         net_amount = sell_amount - fee
 
         # Update balance (add proceeds)
@@ -1085,6 +1268,10 @@ class PaperEngine:
             position.shares = 0
             position.resolved = True
             position.outcome = "CLOSED"
+            # Calculate P&L for the closed position
+            pnl = net_amount - position.cost_basis
+            # Record P&L with risk manager
+            self._risk_manager.record_trade(pnl)
             log.info(
                 "Paper: closed position %s %s — proceeds $%.2f, balance $%.2f",
                 market.slug, side, net_amount, self._balance,
@@ -1266,6 +1453,8 @@ class PaperEngine:
                 pos.outcome  = "WON" if pos.side == outcome else "LOST"
                 payout = pos.shares if pos.outcome == "WON" else 0.0
                 self._balance += payout
+                # Record P&L with risk manager
+                self._risk_manager.record_trade(pos.pnl)
                 log.info(
                     "Paper: resolved %s → %s  payout=$%.2f  balance=$%.2f",
                     pos.slug, pos.outcome, payout, self._balance,

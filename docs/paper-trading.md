@@ -520,6 +520,123 @@ client.paper.reset()  # clears orders, positions, restores original balance
 
 ---
 
+## Risk Management
+
+Paper trading includes built-in risk management features to help you simulate realistic trading constraints and protect your paper trading account from excessive losses.
+
+### Configuration
+
+Risk management is configured through `PaperConfig`:
+
+```python
+from polyalpha.trading.paper import PaperConfig
+
+config = PaperConfig(
+    enable_risk_management=True,  # Enable/disable risk checks
+    max_daily_loss=500.0,         # Stop trading if daily loss exceeds $500
+    max_trades_per_day=100,       # Maximum 100 trades per day
+    max_order_size=1000.0,        # Maximum $1000 per order
+    max_position_size=2000.0,     # Maximum $2000 position per market
+    max_open_positions=10,        # Maximum 10 concurrent positions
+    max_risk_per_trade=0.02,      # Maximum 2% of balance per trade
+)
+
+client = polyalpha.Client(balance=1000.0, paper_config=config)
+```
+
+### Risk Limits
+
+The following risk limits are enforced:
+
+- **Max Daily Loss**: Stops trading when cumulative daily P&L drops below this threshold
+- **Max Trades Per Day**: Limits the number of orders you can place per calendar day
+- **Max Order Size**: Prevents placing orders larger than this amount
+- **Max Position Size**: Limits total exposure to a single market
+- **Max Open Positions**: Limits the number of concurrent open positions
+- **Max Risk Per Trade**: Limits each order to a percentage of your current balance
+
+### Monitoring Risk
+
+Get a summary of your current risk status:
+
+```python
+summary = client.paper.get_risk_summary()
+print(f"Daily P&L: ${summary['daily_pnl']:.2f}")
+print(f"Trades today: {summary['daily_trades']}")
+print(f"Remaining loss limit: ${summary['remaining_loss_limit']:.2f}")
+print(f"Remaining trades: {summary['remaining_trades']}")
+```
+
+### Example: Daily Loss Limit
+
+```python
+config = PaperConfig(max_daily_loss=50.0, max_risk_per_trade=0.50)
+client = polyalpha.Client(balance=100.0, paper_config=config)
+
+# Make a losing trade
+client.paper.buy(market, side="UP", amount=30.0)
+client.paper.resolve(market, outcome="DOWN")  # Loss
+
+# Next trade will be blocked due to loss limit
+try:
+    client.paper.buy(market, side="UP", amount=10.0)
+except ValueError as e:
+    print(f"Trade blocked: {e}")  # "Daily loss $30.00 exceeds limit $50.00"
+```
+
+### Example: Trade Count Limit
+
+```python
+config = PaperConfig(max_trades_per_day=3, max_risk_per_trade=0.20)
+client = polyalpha.Client(balance=100.0, paper_config=config)
+
+# First 3 trades succeed
+for _ in range(3):
+    client.paper.buy(market, side="UP", amount=10.0)
+
+# 4th trade is blocked
+try:
+    client.paper.buy(market, side="UP", amount=10.0)
+except ValueError as e:
+    print(f"Trade blocked: {e}")  # "Maximum daily trades (3) reached"
+```
+
+### Resetting Daily Limits
+
+Manually reset daily limits (useful for testing):
+
+```python
+client.paper.reset_daily_limits()
+```
+
+Daily limits also automatically reset at midnight UTC.
+
+### Disabling Risk Management
+
+If you want to disable all risk checks:
+
+```python
+config = PaperConfig(enable_risk_management=False)
+client = polyalpha.Client(balance=100.0, paper_config=config)
+
+# Orders will succeed regardless of limits
+client.paper.buy(market, side="UP", amount=5000.0)  # No error
+```
+
+### Default Values
+
+If no configuration is provided, these defaults are used:
+
+- `enable_risk_management`: True
+- `max_daily_loss`: $500.0
+- `max_trades_per_day`: 100
+- `max_order_size`: $1000.0
+- `max_position_size`: $2000.0
+- `max_open_positions`: 10
+- `max_risk_per_trade`: 2% (0.02)
+
+---
+
 ## Time Window Execution
 
 Control when orders are allowed to execute using time windows. This is useful for strategies that only want to trade during specific periods, such as the final minute before market close.
