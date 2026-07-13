@@ -11,6 +11,7 @@ requests>=2.28.0
 pandas-ta>=0.3.14b0
 web3>=6.0.0
 eth-account>=0.9.0
+python-dotenv>=1.0.0  # For environment variable management
 
 # Optional dependencies for database export formats
 pyarrow>=12.0.0  # For Parquet export

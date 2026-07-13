@@ -432,6 +432,7 @@ class RiskManager:
         self.daily_pnl: float = 0.0
         self.daily_trades: int = 0
         self.daily_start_balance: float = 0.0
+        self._last_reset_date: Optional[str] = None
 
     def validate_order(
         self,
@@ -524,6 +525,67 @@ class RiskManager:
             if position.market_id == market_id and not position.resolved:
                 exposure += position.cost_basis
         return exposure
+
+    def _check_and_reset_daily(self) -> None:
+        """Check if we need to reset daily tracking (new day)."""
+        today = datetime.now(timezone.utc).date().isoformat()
+        if self._last_reset_date != today:
+            self.daily_pnl = 0.0
+            self.daily_trades = 0
+            self._last_reset_date = today
+            log.info("RiskManager: Daily tracking reset for new day")
+
+    def record_trade(self, pnl: float) -> None:
+        """
+        Record a trade's P&L for daily tracking.
+
+        Parameters
+        ----------
+        pnl : float
+            Profit or loss from the trade (positive for profit, negative for loss)
+        """
+        self._check_and_reset_daily()
+        self.daily_pnl += pnl
+        self.daily_trades += 1
+        log.info("RiskManager: Recorded trade P&L: $%.2f (Daily: $%.2f, Trades: %d)", 
+                 pnl, self.daily_pnl, self.daily_trades)
+
+    def initialize_daily_balance(self, balance: float) -> None:
+        """
+        Initialize the daily starting balance for P&L tracking.
+
+        Parameters
+        ----------
+        balance : float
+            Current balance to set as daily start
+        """
+        self._check_and_reset_daily()
+        if self.daily_start_balance == 0.0:
+            self.daily_start_balance = balance
+            log.info("RiskManager: Daily start balance set to $%.2f", balance)
+
+    def get_daily_stats(self) -> dict:
+        """
+        Get daily trading statistics.
+
+        Returns
+        -------
+        dict
+            Dictionary with daily_pnl, daily_trades, daily_start_balance, daily_pct_change
+        """
+        self._check_and_reset_daily()
+        pct_change = 0.0
+        if self.daily_start_balance > 0:
+            pct_change = (self.daily_pnl / self.daily_start_balance) * 100
+
+        return {
+            "daily_pnl": self.daily_pnl,
+            "daily_trades": self.daily_trades,
+            "daily_start_balance": self.daily_start_balance,
+            "daily_pct_change": pct_change,
+            "daily_loss_limit": self.config.max_daily_loss,
+            "daily_loss_remaining": self.config.max_daily_loss + self.daily_pnl if self.daily_pnl < 0 else self.config.max_daily_loss,
+        }
 
 
 # ── Wallet Manager ───────────────────────────────────────────────────────────────
@@ -1393,6 +1455,104 @@ class RealTradingEngine:
         position.trail_sl_price = position.current_price - trail_distance if side == "UP" else position.current_price + trail_distance
         
         log.info("Trailing stop set at %.4f distance for %s %s", trail_distance, market.slug, side)
+
+    def check_and_execute_trailing_stops(self, market_updates: dict[str, float]) -> list[str]:
+        """
+        Check and execute trailing stops based on current market prices.
+
+        Parameters
+        ----------
+        market_updates : dict[str, float]
+            Dictionary mapping token_id to current price
+
+        Returns
+        -------
+        list[str]
+            List of position keys that had trailing stops triggered
+        """
+        triggered = []
+        
+        for key, position in self._positions.items():
+            if position.resolved:
+                continue
+            
+            # Check if position has trailing stop enabled
+            if not hasattr(position, 'trail_sl') or position.trail_sl is None:
+                continue
+            
+            # Get current price for this position
+            token_id = None
+            if hasattr(position, 'token_id'):
+                token_id = position.token_id
+            else:
+                # Try to derive from market_id
+                token_id = position.market_id  # Fallback
+            
+            if token_id not in market_updates:
+                continue
+            
+            current_price = market_updates[token_id]
+            old_trail_price = position.trail_sl_price
+            
+            # Update trailing stop price based on favorable price movement
+            if position.side == "UP":
+                # For long positions, trail price moves up with price
+                new_trail_price = current_price - position.trail_sl
+                if new_trail_price > old_trail_price:
+                    position.trail_sl_price = new_trail_price
+                    log.info("Trailing stop updated for %s %s: $%.4f -> $%.4f", 
+                             position.slug, position.side, old_trail_price, new_trail_price)
+                
+                # Check if stop triggered
+                if current_price <= position.trail_sl_price:
+                    triggered.append(key)
+                    log.warning("Trailing stop triggered for %s %s at $%.4f", 
+                              position.slug, position.side, current_price)
+                    
+            else:  # DOWN
+                # For short positions, trail price moves down with price
+                new_trail_price = current_price + position.trail_sl
+                if new_trail_price < old_trail_price:
+                    position.trail_sl_price = new_trail_price
+                    log.info("Trailing stop updated for %s %s: $%.4f -> $%.4f", 
+                             position.slug, position.side, old_trail_price, new_trail_price)
+                
+                # Check if stop triggered
+                if current_price >= position.trail_sl_price:
+                    triggered.append(key)
+                    log.warning("Trailing stop triggered for %s %s at $%.4f", 
+                              position.slug, position.side, current_price)
+        
+        return triggered
+
+    def execute_trailing_stop_exit(self, position_key: str) -> None:
+        """
+        Execute an exit order for a position whose trailing stop was triggered.
+
+        Parameters
+        ----------
+        position_key : str
+            Position key in format "{market_id}:{side}"
+        """
+        if position_key not in self._positions:
+            log.warning("Position %s not found for trailing stop exit", position_key)
+            return
+        
+        position = self._positions[position_key]
+        
+        # Create a market sell order to exit the position
+        # This is a simplified implementation - in production, you'd need to
+        # construct the actual sell order with proper token_id and price
+        log.info("Executing trailing stop exit for %s %s at current price", 
+                 position.slug, position.side)
+        
+        # Update position status
+        position.resolved = True
+        position.outcome = "STOPPED"
+        
+        # Record the exit (simplified - would need actual order execution)
+        log.warning("Trailing stop exit executed for %s %s (simplified - needs actual order execution)", 
+                   position.slug, position.side)
 
     # ── Safety Features ───────────────────────────────────────────────────────────
 

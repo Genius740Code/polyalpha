@@ -13,6 +13,7 @@ from .auto_redeem import (
     RedeemRecord,
     RedeemResult,
 )
+from .retry import retry_on_error, retry_with_jitter
 
 __all__ = [
     "PaperEngine",
@@ -28,4 +29,6 @@ __all__ = [
     "RedeemablePosition",
     "RedeemRecord",
     "RedeemResult",
+    "retry_on_error",
+    "retry_with_jitter",
 ]
