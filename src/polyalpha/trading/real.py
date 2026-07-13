@@ -939,6 +939,99 @@ class RealTradingEngine:
         if self._config.log_balance_updates:
             log.info("Balance: $%.2f, Allowance: $%.2f", self._balance, self._allowance)
 
+    # ── Pre-Trade Checks ─────────────────────────────────────────────────────────
+
+    def pre_trade_checks(self, market, side: str, amount: float) -> dict:
+        """
+        Run comprehensive pre-trade checks before order execution.
+
+        This method validates various conditions before allowing a trade to proceed,
+        helping prevent errors and risky trades in real trading.
+
+        Parameters
+        ----------
+        market : Market object
+            Market to trade
+        side : str
+            "UP" or "DOWN"
+        amount : float
+            USDC amount to spend
+
+        Returns
+        -------
+        dict
+            Dictionary with check results and warnings:
+            - balance_ok: bool - Whether sufficient balance exists
+            - allowance_ok: bool - Whether sufficient CLOB allowance exists
+            - market_open: bool - Whether market is still open
+            - price_reasonable: bool - Whether price is within reasonable range
+            - warnings: list[str] - List of warning messages
+            - can_proceed: bool - Whether trade can proceed (all critical checks pass)
+
+        Example
+        -------
+        >>> checks = client.real.pre_trade_checks(market, side="UP", amount=10.0)
+        >>> if not checks["can_proceed"]:
+        ...     for warning in checks["warnings"]:
+        ...         print(f"Warning: {warning}")
+        ... else:
+        ...     order = client.real.buy(market, side="UP", amount=10.0)
+        """
+        checks = {
+            "balance_ok": True,
+            "allowance_ok": True,
+            "market_open": True,
+            "price_reasonable": True,
+            "warnings": [],
+            "can_proceed": True,
+        }
+
+        # Check balance
+        if amount > self._balance:
+            checks["balance_ok"] = False
+            checks["can_proceed"] = False
+            checks["warnings"].append(
+                f"Insufficient balance: need ${amount:.2f}, have ${self._balance:.2f}"
+            )
+
+        # Check CLOB allowance (real trading specific)
+        if self._allowance < amount:
+            checks["allowance_ok"] = False
+            checks["warnings"].append(
+                f"Insufficient CLOB allowance: need ${amount:.2f}, have ${self._allowance:.2f}. "
+                f"Call approve_clob() to increase allowance."
+            )
+            # Allowance warning doesn't block trade (can be auto-approved), but warn user
+
+        # Check if market is still open
+        if hasattr(market, 'end_time') and market.end_time:
+            try:
+                end_time = datetime.fromisoformat(market.end_time.replace('Z', '+00:00'))
+                if end_time < datetime.now(timezone.utc):
+                    checks["market_open"] = False
+                    checks["can_proceed"] = False
+                    checks["warnings"].append("Market has closed")
+            except (ValueError, AttributeError) as e:
+                log.debug("Real: could not parse market end_time: %s", e)
+
+        # Check if price is reasonable
+        price = market.up_price if side == "UP" else market.down_price
+        if price < 0.01 or price > 0.99:
+            checks["price_reasonable"] = False
+            checks["warnings"].append(f"Unusual price: ${price:.4f}")
+
+        # Additional warning if price is very close to boundaries
+        if price < 0.02 or price > 0.98:
+            checks["warnings"].append(
+                f"Price near boundary (${price:.4f}) - low liquidity risk"
+            )
+
+        # Log warnings if any
+        if checks["warnings"]:
+            log.info("Real: pre-trade checks warnings: %s", checks["warnings"])
+
+        return checks
+
     # ── Order Execution ─────────────────────────────────────────────────────────
 
     def buy(
@@ -993,27 +1086,34 @@ class RealTradingEngine:
                 self._balance, market, side, confidence, price
             )
 
-        # 2. Validate against risk limits
+        # 2. Run pre-trade checks
+        checks = self.pre_trade_checks(market, side, amount)
+        if not checks["can_proceed"]:
+            raise ValueError(
+                f"Pre-trade checks failed: {'; '.join(checks['warnings'])}"
+            )
+
+        # 3. Validate against risk limits
         self._risk_manager.validate_order(amount, self._balance, market, self._positions)
 
-        # 3. Check balance
+        # 4. Check balance
         if amount > self._balance:
             raise InsufficientBalance(
                 f"Order amount ${amount:.2f} exceeds balance ${self._balance:.2f}"
             )
 
-        # 4. Get price
+        # 5. Get price
         if price is None:
             price = market.up_price if side == "UP" else market.down_price
 
-        # 5. Calculate shares and fee
+        # 6. Calculate shares and fee
         shares, fee = self._calculate_shares_and_fee(amount, price)
 
-        # 6. Require confirmation if enabled
+        # 7. Require confirmation if enabled
         if confirm and self._config.require_confirmation:
             self._require_confirmation(market, side, amount, price, shares, fee)
 
-        # 7. Place order on CLOB
+        # 8. Place order on CLOB
         token_id = market.up_token if side == "UP" else market.down_token
         order_response = self._place_clob_order(
             token_id,
@@ -1023,7 +1123,7 @@ class RealTradingEngine:
             "market" if not user_provided_price else "limit"
         )
 
-        # 8. Create order object
+        # 9. Create order object
         order = RealOrder(
             id=order_response["order_id"],
             market_id=market.id,
@@ -1042,16 +1142,16 @@ class RealTradingEngine:
             confidence=confidence,
         )
 
-        # 9. Update balance
+        # 10. Update balance
         self._balance -= (amount + fee)
 
-        # 10. Store order
+        # 11. Store order
         self._orders[order.id] = order
 
-        # 11. Update position
+        # 12. Update position
         self._update_position(market, side, order)
 
-        # 12. Save to database
+        # 13. Save to database
         if self._db_enabled:
             self._save_order_to_db(order)
 

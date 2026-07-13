@@ -316,6 +316,53 @@ def database_integration():
     print(f"Order saved to database: {order.id}")
 
 
+# ── Pre-Trade Checks ─────────────────────────────────────────────────────────────
+
+def pre_trade_checks_example():
+    """Using pre-trade checks before placing orders."""
+
+    client = polyalpha.Client(
+        private_key="your-private-key-here",
+        rpc_url="https://polygon-rpc.com",
+        polymarket_api_key="your-polymarket-api-key",
+        real_config=polyalpha.RealTradingConfig(
+            position_sizing="fixed",
+            fixed_amount=10.0,
+        ),
+    )
+
+    market = client.markets.get("btc-updown-5m-9999999")
+
+    # Run pre-trade checks before placing order
+    checks = client.real.pre_trade_checks(market, side="UP", amount=10.0)
+
+    print("Pre-Trade Check Results:")
+    print(f"  Balance OK: {checks['balance_ok']}")
+    print(f"  Allowance OK: {checks['allowance_ok']}")
+    print(f"  Market Open: {checks['market_open']}")
+    print(f"  Price Reasonable: {checks['price_reasonable']}")
+    print(f"  Can Proceed: {checks['can_proceed']}")
+
+    if checks['warnings']:
+        print("\n  Warnings:")
+        for warning in checks['warnings']:
+            print(f"    - {warning}")
+
+    # Only proceed if checks pass
+    if checks['can_proceed']:
+        print("\nAll checks passed. Placing order...")
+        order = client.real.buy(
+            market=market,
+            side="UP",
+            amount=10.0,
+            confirm=True,
+        )
+        print(f"Order placed: {order.id}")
+    else:
+        print("\nPre-trade checks failed. Order not placed.")
+        print("Review warnings and address issues before proceeding.")
+
+
 # ── Wallet Management ───────────────────────────────────────────────────────────
 
 def wallet_management():
@@ -406,7 +453,7 @@ if __name__ == "__main__":
     print("=" * 60)
     
     # Uncomment one of the examples below to run:
-    
+
     # basic_real_trading()
     # percentage_position_sizing()
     # kelly_position_sizing()
@@ -416,5 +463,6 @@ if __name__ == "__main__":
     # position_details_example()
     # emergency_stop_example()
     # database_integration()
+    # pre_trade_checks_example()
     # wallet_management()
     # advanced_configuration()
