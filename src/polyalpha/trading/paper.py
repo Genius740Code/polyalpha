@@ -275,6 +275,93 @@ class RiskManager:
         self.daily_trades = 0
         self.daily_start_date = datetime.now(timezone.utc).date()
         log.info("RiskManager: Daily limits manually reset")
+    
+    def check_stop_loss(self, position: "PaperPosition", current_price: float) -> bool:
+        """
+        Check if stop loss should be triggered.
+        
+        Parameters
+        ----------
+        position : PaperPosition
+            The position to check
+        current_price : float
+            Current market price
+        
+        Returns
+        -------
+        bool
+            True if stop loss should be triggered
+        """
+        if position.stop_loss is None:
+            return False
+        
+        if position.side == "UP":
+            return current_price <= position.stop_loss
+        else:
+            return current_price >= position.stop_loss
+    
+    def check_take_profit(self, position: "PaperPosition", current_price: float) -> bool:
+        """
+        Check if take profit should be triggered.
+        
+        Parameters
+        ----------
+        position : PaperPosition
+            The position to check
+        current_price : float
+            Current market price
+        
+        Returns
+        -------
+        bool
+            True if take profit should be triggered
+        """
+        if position.take_profit is None:
+            return False
+        
+        if position.side == "UP":
+            return current_price >= position.take_profit
+        else:
+            return current_price <= position.take_profit
+    
+    def calculate_position_size_with_risk(
+        self,
+        balance: float,
+        entry_price: float,
+        stop_loss: float,
+        side: str,
+    ) -> float:
+        """
+        Calculate position size based on risk per trade.
+        
+        Formula: Position Size = (Balance × Risk%) / |Entry - StopLoss| / Entry
+        
+        Parameters
+        ----------
+        balance : float
+            Current account balance
+        entry_price : float
+            Entry price for the trade
+        stop_loss : float
+            Stop loss price
+        side : str
+            "UP" or "DOWN"
+        
+        Returns
+        -------
+        float
+            Recommended position size in USDC
+        """
+        risk_amount = balance * self.config.max_risk_per_trade
+        price_diff = abs(entry_price - stop_loss)
+        
+        if price_diff == 0:
+            # If no price difference, can't calculate based on risk
+            # Return the risk amount as a safe default
+            return min(risk_amount, balance)
+        
+        position_size = risk_amount / (price_diff / entry_price)
+        return min(position_size, balance)
 
 
 # ── Dataclasses ────────────────────────────────────────────────────────────────
@@ -365,6 +452,10 @@ class PaperPosition:
     resolved:      bool                = False
     outcome:       Optional[str]       = None   # "WON" | "LOST"
     order_ids:     list[str]           = field(default_factory=list)
+    
+    # Risk management
+    stop_loss:     Optional[float]      = None
+    take_profit:   Optional[float]      = None
 
     # ── Computed ───────────────────────────────────────────────────────────────
 
@@ -403,6 +494,8 @@ class PaperPosition:
             "pnl_pct":       round(self.pnl_pct,       DISPLAY_ROUNDING_PNL_PCT),
             "resolved":      self.resolved,
             "outcome":       self.outcome,
+            "stop_loss":     self.stop_loss,
+            "take_profit":   self.take_profit,
         }
 
 

@@ -141,3 +141,81 @@ print("- Limiting position sizes to manage exposure per market")
 print("- Limiting open positions to prevent over-diversification")
 print("- Automatically tracking daily P&L and trade count")
 print("- Resetting daily limits automatically at midnight UTC")
+
+print()
+print("=== Example 7: Stop Loss & Take Profit Checks ===")
+from polyalpha.trading.paper import PaperPosition
+
+config = PaperConfig(max_risk_per_trade=0.20)
+client = polyalpha.Client(balance=100.0, paper_config=config)
+
+# Create a position with stop loss and take profit
+position = PaperPosition(
+    market_id="test-market",
+    slug="test-market",
+    question="Test question",
+    side="UP",
+    shares=10.0,
+    avg_price=0.50,
+    current_price=0.50,
+    stop_loss=0.45,
+    take_profit=0.60
+)
+
+# Check if stop loss should trigger
+should_sl = client.paper._risk_manager.check_stop_loss(position, 0.44)
+print(f"Stop loss triggered at $0.44: {should_sl}")
+
+# Check if take profit should trigger
+should_tp = client.paper._risk_manager.check_take_profit(position, 0.61)
+print(f"Take profit triggered at $0.61: {should_tp}")
+
+print()
+print("=== Example 8: Position Sizing with Risk ===")
+# Calculate position size based on risk per trade
+config = PaperConfig(max_risk_per_trade=0.02)  # 2% risk per trade
+client = polyalpha.Client(balance=1000.0, paper_config=config)
+
+entry_price = 0.50
+stop_loss = 0.45
+
+# Calculate recommended position size
+position_size = client.paper._risk_manager.calculate_position_size_with_risk(
+    balance=1000.0,
+    entry_price=entry_price,
+    stop_loss=stop_loss,
+    side="UP"
+)
+
+print(f"Balance: $1000.00")
+print(f"Risk per trade: 2% ($20.00)")
+print(f"Entry price: ${entry_price}")
+print(f"Stop loss: ${stop_loss}")
+print(f"Recommended position size: ${position_size:.2f}")
+print()
+print("The position size is calculated to ensure that if the stop loss is hit,")
+print("the maximum loss will not exceed the risk per trade percentage.")
+
+print()
+print("=== Example 9: Position with Stop Loss and Take Profit ===")
+# Buy a position and set stop loss/take profit
+config = PaperConfig(max_risk_per_trade=0.20)
+client = polyalpha.Client(balance=100.0, paper_config=config)
+market = MockMarket()
+
+# Buy position
+order = client.paper.buy(market, side="UP", amount=20.0)
+
+# Get the position and set risk management levels
+positions = client.paper.positions()
+if positions:
+    positions[0].stop_loss = 0.45
+    positions[0].take_profit = 0.60
+    print(f"Position opened with:")
+    print(f"  - Stop loss: ${positions[0].stop_loss}")
+    print(f"  - Take profit: ${positions[0].take_profit}")
+    
+    # Check dump includes risk management fields
+    dump = positions[0].dump()
+    print(f"  - Dump includes stop_loss: {'stop_loss' in dump}")
+    print(f"  - Dump includes take_profit: {'take_profit' in dump}")

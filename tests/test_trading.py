@@ -830,3 +830,255 @@ def test_risk_manager_sell_position_pnl():
     summary = engine.get_risk_summary()
     # Should have tracked the trade
     assert summary["daily_trades"] >= 1
+
+
+def test_risk_manager_check_stop_loss_up():
+    """Test stop loss check for UP position"""
+    config = PaperConfig(max_risk_per_trade=0.50)
+    engine = PaperEngine(balance=100.0, config=config)
+    
+    # Create a position with stop loss
+    from polyalpha.trading.paper import PaperPosition
+    position = PaperPosition(
+        market_id="test",
+        slug="test",
+        question="Test",
+        side="UP",
+        shares=10.0,
+        avg_price=0.50,
+        current_price=0.50,
+        stop_loss=0.45,
+        take_profit=None
+    )
+    
+    # Should trigger when price drops to or below stop loss
+    assert engine._risk_manager.check_stop_loss(position, 0.45) == True
+    assert engine._risk_manager.check_stop_loss(position, 0.44) == True
+    assert engine._risk_manager.check_stop_loss(position, 0.46) == False
+
+
+def test_risk_manager_check_stop_loss_down():
+    """Test stop loss check for DOWN position"""
+    config = PaperConfig(max_risk_per_trade=0.50)
+    engine = PaperEngine(balance=100.0, config=config)
+    
+    # Create a DOWN position with stop loss
+    from polyalpha.trading.paper import PaperPosition
+    position = PaperPosition(
+        market_id="test",
+        slug="test",
+        question="Test",
+        side="DOWN",
+        shares=10.0,
+        avg_price=0.50,
+        current_price=0.50,
+        stop_loss=0.55,
+        take_profit=None
+    )
+    
+    # Should trigger when price rises to or above stop loss (DOWN loses when price goes up)
+    assert engine._risk_manager.check_stop_loss(position, 0.55) == True
+    assert engine._risk_manager.check_stop_loss(position, 0.56) == True
+    assert engine._risk_manager.check_stop_loss(position, 0.54) == False
+
+
+def test_risk_manager_check_stop_loss_none():
+    """Test stop loss check when no stop loss is set"""
+    config = PaperConfig(max_risk_per_trade=0.50)
+    engine = PaperEngine(balance=100.0, config=config)
+    
+    from polyalpha.trading.paper import PaperPosition
+    position = PaperPosition(
+        market_id="test",
+        slug="test",
+        question="Test",
+        side="UP",
+        shares=10.0,
+        avg_price=0.50,
+        current_price=0.50,
+        stop_loss=None,
+        take_profit=None
+    )
+    
+    # Should never trigger when stop loss is None
+    assert engine._risk_manager.check_stop_loss(position, 0.30) == False
+    assert engine._risk_manager.check_stop_loss(position, 0.70) == False
+
+
+def test_risk_manager_check_take_profit_up():
+    """Test take profit check for UP position"""
+    config = PaperConfig(max_risk_per_trade=0.50)
+    engine = PaperEngine(balance=100.0, config=config)
+    
+    # Create a position with take profit
+    from polyalpha.trading.paper import PaperPosition
+    position = PaperPosition(
+        market_id="test",
+        slug="test",
+        question="Test",
+        side="UP",
+        shares=10.0,
+        avg_price=0.50,
+        current_price=0.50,
+        stop_loss=None,
+        take_profit=0.60
+    )
+    
+    # Should trigger when price reaches or exceeds take profit
+    assert engine._risk_manager.check_take_profit(position, 0.60) == True
+    assert engine._risk_manager.check_take_profit(position, 0.61) == True
+    assert engine._risk_manager.check_take_profit(position, 0.59) == False
+
+
+def test_risk_manager_check_take_profit_down():
+    """Test take profit check for DOWN position"""
+    config = PaperConfig(max_risk_per_trade=0.50)
+    engine = PaperEngine(balance=100.0, config=config)
+    
+    # Create a DOWN position with take profit
+    from polyalpha.trading.paper import PaperPosition
+    position = PaperPosition(
+        market_id="test",
+        slug="test",
+        question="Test",
+        side="DOWN",
+        shares=10.0,
+        avg_price=0.50,
+        current_price=0.50,
+        stop_loss=None,
+        take_profit=0.40
+    )
+    
+    # Should trigger when price drops to or below take profit (DOWN profits when price goes down)
+    assert engine._risk_manager.check_take_profit(position, 0.40) == True
+    assert engine._risk_manager.check_take_profit(position, 0.39) == True
+    assert engine._risk_manager.check_take_profit(position, 0.41) == False
+
+
+def test_risk_manager_check_take_profit_none():
+    """Test take profit check when no take profit is set"""
+    config = PaperConfig(max_risk_per_trade=0.50)
+    engine = PaperEngine(balance=100.0, config=config)
+    
+    from polyalpha.trading.paper import PaperPosition
+    position = PaperPosition(
+        market_id="test",
+        slug="test",
+        question="Test",
+        side="UP",
+        shares=10.0,
+        avg_price=0.50,
+        current_price=0.50,
+        stop_loss=None,
+        take_profit=None
+    )
+    
+    # Should never trigger when take profit is None
+    assert engine._risk_manager.check_take_profit(position, 0.30) == False
+    assert engine._risk_manager.check_take_profit(position, 0.70) == False
+
+
+def test_risk_manager_calculate_position_size_with_risk():
+    """Test position size calculation based on risk"""
+    config = PaperConfig(max_risk_per_trade=0.02)  # 2% risk per trade
+    engine = PaperEngine(balance=1000.0, config=config)
+    
+    # Test with normal stop loss
+    entry_price = 0.50
+    stop_loss = 0.45
+    size = engine._risk_manager.calculate_position_size_with_risk(
+        balance=1000.0,
+        entry_price=entry_price,
+        stop_loss=stop_loss,
+        side="UP"
+    )
+    
+    # Risk amount = 1000 * 0.02 = 20
+    # Price diff = 0.05
+    # Position size = 20 / (0.05/0.50) = 20 / 0.10 = 200
+    assert size == pytest.approx(200.0, abs=1e-6)
+    
+    # Test with tighter stop loss (should allow larger position)
+    stop_loss = 0.48
+    size = engine._risk_manager.calculate_position_size_with_risk(
+        balance=1000.0,
+        entry_price=entry_price,
+        stop_loss=stop_loss,
+        side="UP"
+    )
+    # Risk amount = 20
+    # Price diff = 0.02
+    # Position size = 20 / (0.02/0.50) = 20 / 0.04 = 500
+    assert size == pytest.approx(500.0, abs=1e-6)
+    
+    # Test with wider stop loss (should allow smaller position)
+    stop_loss = 0.40
+    size = engine._risk_manager.calculate_position_size_with_risk(
+        balance=1000.0,
+        entry_price=entry_price,
+        stop_loss=stop_loss,
+        side="UP"
+    )
+    # Risk amount = 20
+    # Price diff = 0.10
+    # Position size = 20 / (0.10/0.50) = 20 / 0.20 = 100
+    assert size == pytest.approx(100.0, abs=1e-6)
+
+
+def test_risk_manager_calculate_position_size_zero_diff():
+    """Test position size calculation when entry equals stop loss"""
+    config = PaperConfig(max_risk_per_trade=0.02)
+    engine = PaperEngine(balance=1000.0, config=config)
+    
+    # When price diff is zero, should return risk amount (capped at balance)
+    size = engine._risk_manager.calculate_position_size_with_risk(
+        balance=1000.0,
+        entry_price=0.50,
+        stop_loss=0.50,
+        side="UP"
+    )
+    
+    # Should return risk amount = 1000 * 0.02 = 20
+    assert size == pytest.approx(20.0, abs=1e-6)
+
+
+def test_risk_manager_calculate_position_size_exceeds_balance():
+    """Test that calculated position size is capped at balance"""
+    config = PaperConfig(max_risk_per_trade=0.50)  # 50% risk per trade
+    engine = PaperEngine(balance=100.0, config=config)
+    
+    # With very tight stop loss, calculation might exceed balance
+    size = engine._risk_manager.calculate_position_size_with_risk(
+        balance=100.0,
+        entry_price=0.50,
+        stop_loss=0.49,
+        side="UP"
+    )
+    
+    # Should be capped at balance
+    assert size <= 100.0
+
+
+def test_position_dump_includes_stop_loss_take_profit():
+    """Test that position dump includes stop loss and take profit"""
+    config = PaperConfig(max_risk_per_trade=0.50)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market()
+    
+    # Buy a position
+    engine.buy(market, side="UP", amount=20.0)
+    
+    # Get the position
+    positions = engine.positions()
+    assert len(positions) == 1
+    
+    # Set stop loss and take profit on the position
+    positions[0].stop_loss = 0.45
+    positions[0].take_profit = 0.60
+    
+    # Check dump includes the fields
+    dump = positions[0].dump()
+    assert "stop_loss" in dump
+    assert "take_profit" in dump
+    assert dump["stop_loss"] == 0.45
+    assert dump["take_profit"] == 0.60

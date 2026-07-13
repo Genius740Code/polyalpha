@@ -560,7 +560,7 @@ def buy(
 
 ---
 
-## Phase 4: Risk Management
+## Phase 4: Risk Management ✅
 
 ### 4.1 Risk Manager
 
