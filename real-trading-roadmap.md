@@ -658,7 +658,7 @@ class RiskManager:
         return min(position_size, balance)
 ```
 
-### 4.2 Stop Loss & Take Profit
+### 4.2 Stop Loss & Take Profit ✅
 
 ```python
 def set_stop_loss(

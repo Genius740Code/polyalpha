@@ -104,7 +104,27 @@ market = client.markets.latest(args.asset, args.timeframe)
 print(f"  {market.question}")
 print(f"  UP={market.up_price:.3f}  DOWN={market.down_price:.3f}\n")
 
-# ── 2. Place order ─────────────────────────────────────────────────────────────
+# ── 2. Run pre-trade checks ─────────────────────────────────────────────────────
+print("Running pre-trade checks...")
+checks = client.paper.pre_trade_checks(market, side=args.side, amount=args.amount)
+
+print(f"  Balance OK: {checks['balance_ok']}")
+print(f"  Market Open: {checks['market_open']}")
+print(f"  Price Reasonable: {checks['price_reasonable']}")
+print(f"  Can Proceed: {checks['can_proceed']}")
+
+if checks['warnings']:
+    print("\n  Warnings:")
+    for warning in checks['warnings']:
+        print(f"    - {warning}")
+
+print()
+
+# ── 3. Place order ─────────────────────────────────────────────────────────────
+if not checks['can_proceed']:
+    print("Pre-trade checks failed. Order not placed.")
+    sys.exit(1)
+
 if args.limit:
     print(f"Placing limit {args.side} @ {args.limit} for ${args.amount:.2f}…")
     order = client.paper.limit(market, side=args.side, price=args.limit, amount=args.amount)
@@ -115,7 +135,7 @@ else:
     print(f"  Filled {order.shares:.4f} shares @ {order.price:.3f}")
     print(f"  Fee: ${order.fee:.4f}  status={order.status}\n")
 
-# ── 3. Stream prices + auto-fill limits ────────────────────────────────────────
+# ── 4. Stream prices + auto-fill limits ────────────────────────────────────────
 stream = client.stream(market)
 client.paper.attach_stream(stream, market)
 

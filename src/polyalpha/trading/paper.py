@@ -623,6 +623,88 @@ class PaperEngine:
         """
         self._risk_manager.reset_daily_limits()
 
+    # ── Pre-Trade Checks ─────────────────────────────────────────────────────────
+
+    def pre_trade_checks(self, market, side: str, amount: float) -> dict:
+        """
+        Run comprehensive pre-trade checks before order execution.
+
+        This method validates various conditions before allowing a trade to proceed,
+        helping prevent errors and risky trades.
+
+        Parameters
+        ----------
+        market : Market object
+            Market to trade
+        side : str
+            "UP" or "DOWN"
+        amount : float
+            USDC amount to spend
+
+        Returns
+        -------
+        dict
+            Dictionary with check results and warnings:
+            - balance_ok: bool - Whether sufficient balance exists
+            - market_open: bool - Whether market is still open
+            - price_reasonable: bool - Whether price is within reasonable range
+            - warnings: list[str] - List of warning messages
+            - can_proceed: bool - Whether trade can proceed (all critical checks pass)
+
+        Example
+        -------
+        >>> checks = client.paper.pre_trade_checks(market, side="UP", amount=10.0)
+        >>> if not checks["can_proceed"]:
+        ...     for warning in checks["warnings"]:
+        ...         print(f"Warning: {warning}")
+        ... else:
+        ...     order = client.paper.buy(market, side="UP", amount=10.0)
+        """
+        checks = {
+            "balance_ok": True,
+            "market_open": True,
+            "price_reasonable": True,
+            "warnings": [],
+            "can_proceed": True,
+        }
+
+        # Check balance
+        if amount > self._balance:
+            checks["balance_ok"] = False
+            checks["can_proceed"] = False
+            checks["warnings"].append(
+                f"Insufficient balance: need ${amount:.2f}, have ${self._balance:.2f}"
+            )
+
+        # Check if market is still open
+        if hasattr(market, 'end_time') and market.end_time:
+            try:
+                end_time = datetime.fromisoformat(market.end_time.replace('Z', '+00:00'))
+                if end_time < datetime.now(timezone.utc):
+                    checks["market_open"] = False
+                    checks["can_proceed"] = False
+                    checks["warnings"].append("Market has closed")
+            except (ValueError, AttributeError) as e:
+                log.debug("Paper: could not parse market end_time: %s", e)
+
+        # Check if price is reasonable
+        price = market.up_price if side == "UP" else market.down_price
+        if price < 0.01 or price > 0.99:
+            checks["price_reasonable"] = False
+            checks["warnings"].append(f"Unusual price: ${price:.4f}")
+
+        # Additional warning if price is very close to boundaries
+        if price < 0.02 or price > 0.98:
+            checks["warnings"].append(
+                f"Price near boundary (${price:.4f}) - low liquidity risk"
+            )
+
+        # Log warnings if any
+        if checks["warnings"]:
+            log.info("Paper: pre-trade checks warnings: %s", checks["warnings"])
+
+        return checks
+
     # ── Database Integration ─────────────────────────────────────────────────────
 
     def enable_database(self, db_path: str) -> None:
@@ -1017,6 +1099,13 @@ class PaperEngine:
             if time_window_end is not None and now > time_window_end:
                 raise ValueError(f"Cannot buy: current time {now} is after time window end {time_window_end}")
 
+        # Run pre-trade checks
+        checks = self.pre_trade_checks(market, side, amount)
+        if not checks["can_proceed"]:
+            raise ValueError(
+                f"Pre-trade checks failed: {'; '.join(checks['warnings'])}"
+            )
+
         # Validate against risk limits
         self._risk_manager.validate_order(amount, self._balance, market.id, self._positions)
 
@@ -1091,6 +1180,13 @@ class PaperEngine:
         if amount > self._balance:
             raise InsufficientBalance(
                 f"Order amount ${amount:.2f} exceeds balance ${self._balance:.2f}"
+            )
+
+        # Run pre-trade checks
+        checks = self.pre_trade_checks(market, side, amount)
+        if not checks["can_proceed"]:
+            raise ValueError(
+                f"Pre-trade checks failed: {'; '.join(checks['warnings'])}"
             )
 
         # Validate against risk limits
