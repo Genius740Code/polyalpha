@@ -720,6 +720,9 @@ class PaperEngine:
         -------
         >>> client.paper.enable_database("trades.db")
         """
+        if not db_path or not isinstance(db_path, str):
+            raise ValueError("db_path must be a non-empty string")
+        
         try:
             from ..database.database import TradeDatabase
             self._db = TradeDatabase(db_path)
@@ -728,6 +731,10 @@ class PaperEngine:
         except ImportError:
             log.error("Paper: database module not available. Install required dependencies.")
             self._db_enabled = False
+        except Exception as e:
+            log.error("Paper: failed to enable database: %s", e)
+            self._db_enabled = False
+            raise
 
     def disable_database(self) -> None:
         """Disable database persistence and close connection."""
@@ -1084,6 +1091,7 @@ class PaperEngine:
         ...     time_window_start=end_time - timedelta(minutes=1),
         ...     time_window_end=end_time)
         """
+        _validate_market(market)
         side   = _validate_side(side)
         amount = _validate_positive(float(amount), "amount")
 
@@ -1173,8 +1181,9 @@ class PaperEngine:
         ...     time_window_start=end_time - timedelta(minutes=1),
         ...     time_window_end=end_time)
         """
+        _validate_market(market)
         side   = _validate_side(side)
-        price  = _validate_positive(float(price),  "price")
+        price  = _validate_price(float(price), "price")
         amount = _validate_positive(float(amount), "amount")
 
         if amount > self._balance:
@@ -1293,6 +1302,7 @@ class PaperEngine:
         ...     time_window_end=end_time
         ... )
         """
+        _validate_market(market)
         side = _validate_side(side)
         amount = _validate_positive(float(amount), "amount")
 
@@ -1313,9 +1323,9 @@ class PaperEngine:
 
         # Validate TP/SL prices
         if stop_loss is not None:
-            stop_loss = _validate_positive(float(stop_loss), "stop_loss")
+            stop_loss = _validate_price(float(stop_loss), "stop_loss")
         if take_profit is not None:
-            take_profit = _validate_positive(float(take_profit), "take_profit")
+            take_profit = _validate_price(float(take_profit), "take_profit")
         if trail_sl is not None:
             trail_sl = _validate_positive(float(trail_sl), "trail_sl")
         if trail_tp is not None:
@@ -1384,6 +1394,7 @@ class PaperEngine:
         -------
         >>> order = client.paper.sell_position(market, side="UP")
         """
+        _validate_market(market)
         side = _validate_side(side)
         key = f"{market.id}:{side}"
 
@@ -1396,6 +1407,10 @@ class PaperEngine:
         if current_price <= 0:
             current_price = FALLBACK_PRICE
 
+        # Validate position has shares to sell
+        if position.shares <= 0:
+            raise ValueError(f"Position has no shares to sell: {position.shares}")
+
         # Determine amount to sell
         if amount is None:
             # Sell full position
@@ -1405,6 +1420,12 @@ class PaperEngine:
             amount = _validate_positive(float(amount), "amount")
             sell_shares = amount / current_price
             sell_amount = amount
+            
+            # Validate not selling more than available
+            if sell_shares > position.shares:
+                raise ValueError(
+                    f"Cannot sell {sell_shares:.4f} shares, only {position.shares:.4f} available"
+                )
 
         # Apply execution delay and slippage
         self._apply_execution_delay()
@@ -1568,7 +1589,9 @@ class PaperEngine:
         -------
         >>> client.paper.set_stop_loss(market, side="UP", stop_price=0.45)
         """
+        _validate_market(market)
         side = _validate_side(side)
+        stop_price = _validate_price(float(stop_price), "stop_price")
         position_key = f"{market.id}:{side}"
         
         if position_key not in self._positions:
@@ -1601,7 +1624,9 @@ class PaperEngine:
         -------
         >>> client.paper.set_take_profit(market, side="UP", profit_price=0.55)
         """
+        _validate_market(market)
         side = _validate_side(side)
+        profit_price = _validate_price(float(profit_price), "profit_price")
         position_key = f"{market.id}:{side}"
         
         if position_key not in self._positions:
@@ -1634,7 +1659,9 @@ class PaperEngine:
         -------
         >>> client.paper.set_trailing_stop(market, side="UP", trail_distance=0.05)
         """
+        _validate_market(market)
         side = _validate_side(side)
+        trail_distance = _validate_positive(float(trail_distance), "trail_distance")
         position_key = f"{market.id}:{side}"
         
         if position_key not in self._positions:
@@ -1686,10 +1713,11 @@ class PaperEngine:
         ...     stop_loss=0.45, take_profit=0.55
         ... )
         """
+        _validate_market(market)
         side = _validate_side(side)
         amount = _validate_positive(float(amount), "amount")
-        stop_loss = _validate_positive(float(stop_loss), "stop_loss")
-        take_profit = _validate_positive(float(take_profit), "take_profit")
+        stop_loss = _validate_price(float(stop_loss), "stop_loss")
+        take_profit = _validate_price(float(take_profit), "take_profit")
 
         # Create main order with TP/SL
         main_order = self.buy_with_tp_sl(
@@ -1740,6 +1768,7 @@ class PaperEngine:
         -------
         >>> client.paper.resolve(market, outcome="UP")
         """
+        _validate_market(market)
         outcome = outcome.upper()
         if outcome not in ("UP", "DOWN"):
             raise ValueError(f"outcome must be 'UP' or 'DOWN', got '{outcome}'")
@@ -1774,6 +1803,10 @@ class PaperEngine:
         - "once": Only check conditions once
         - int N: Check conditions N times maximum
         """
+        # Validate prices
+        up_price = _validate_price(float(up_price), "up_price")
+        down_price = _validate_price(float(down_price), "down_price")
+        
         # Update live prices for all open positions in this market
         for pos in self._positions.values():
             if pos.market_id == market_id and not pos.resolved:
@@ -1971,6 +2004,8 @@ class PaperEngine:
         >>> client.paper.attach_stream(stream, market)
         >>> stream.start(background=True)
         """
+        _validate_market(market)
+        
         @stream.on("price")
         def _on_price(up: float, down: float) -> None:
             self.check_limits(market.id, up, down)
@@ -2115,9 +2150,19 @@ class PaperEngine:
                 f"Order amount ${amount:.2f} exceeds balance ${self._balance:.2f}"
             )
 
+        # Validate price is positive
+        if price <= 0:
+            raise ValueError(f"Price must be positive, got {price}")
+
         # Calculate shares first (needed for fee calculation)
         net = amount  # Will subtract fee after calculation
         shares = round(net / price, SHARE_ROUNDING) if price > 0 else 0.0
+        
+        # Validate shares calculation resulted in positive amount
+        if shares <= 0:
+            raise ValueError(
+                f"Calculated shares is zero or negative (amount=${amount:.2f}, price=${price:.4f})"
+            )
 
         # Calculate fee and rebate
         fee, rebate_amount, rebate_rate, fee_type = self._calculate_fee(amount, price, shares, is_maker=is_limit)
@@ -2156,6 +2201,13 @@ class PaperEngine:
 
     def _fill_limit(self, order: PaperOrder, current_price: float) -> None:
         """Fill a pending limit order at *current_price* (balance already reserved)."""
+        # Validate current price
+        if current_price <= 0:
+            log.warning("Paper: invalid current price %.4f for limit order %s, cancelling", current_price, order.id[:8])
+            order.status = "cancelled"
+            self._balance += order.amount  # refund
+            return
+        
         # Check fill probability
         if not self._check_fill_probability():
             log.info(
@@ -2179,6 +2231,17 @@ class PaperEngine:
 
         # Calculate fee and rebate
         shares = round(order.amount / actual_price, SHARE_ROUNDING) if actual_price > 0 else 0.0
+        
+        # Validate shares calculation
+        if shares <= 0:
+            log.warning(
+                "Paper: calculated shares is zero for limit order %s (amount=$%.2f, price=$%.4f), cancelling",
+                order.id[:8], order.amount, actual_price
+            )
+            order.status = "cancelled"
+            self._balance += order.amount  # refund
+            return
+        
         fee, rebate_amount, rebate_rate, fee_type = self._calculate_fee(order.amount, actual_price, shares, is_maker=True)
         net = order.amount - fee + rebate_amount
         shares = round(net / actual_price, SHARE_ROUNDING) if actual_price > 0 else 0.0
@@ -2243,6 +2306,26 @@ class PaperEngine:
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
+def _validate_market(market) -> None:
+    """Validate that market object has required attributes."""
+    required_attrs = ['id', 'slug', 'question', 'up_price', 'down_price']
+    for attr in required_attrs:
+        if not hasattr(market, attr):
+            raise ValueError(f"Market object missing required attribute: {attr}")
+    
+    # Validate price attributes are numeric
+    if not isinstance(market.up_price, (int, float)):
+        raise ValueError(f"Market up_price must be numeric, got {type(market.up_price)}")
+    if not isinstance(market.down_price, (int, float)):
+        raise ValueError(f"Market down_price must be numeric, got {type(market.down_price)}")
+    
+    # Validate prices are not NaN or infinity
+    import math
+    if math.isnan(market.up_price) or math.isinf(market.up_price):
+        raise ValueError(f"Market up_price is invalid: {market.up_price}")
+    if math.isnan(market.down_price) or math.isinf(market.down_price):
+        raise ValueError(f"Market down_price is invalid: {market.down_price}")
+
 def _validate_side(side: str) -> str:
     s = side.strip().upper()
     if s not in ("UP", "DOWN"):
@@ -2254,6 +2337,21 @@ def _validate_positive(value: float, name: str) -> float:
     if value <= 0:
         raise ValueError(f"{name} must be > 0, got {value}")
     return value
+
+
+def _validate_price(price: float, name: str = "price") -> float:
+    """Validate that price is within valid range for prediction markets (0-1)."""
+    if not isinstance(price, (int, float)):
+        raise ValueError(f"{name} must be numeric, got {type(price)}")
+    
+    import math
+    if math.isnan(price) or math.isinf(price):
+        raise ValueError(f"{name} is invalid: {price}")
+    
+    if price < 0 or price > 1:
+        raise ValueError(f"{name} must be between 0 and 1, got {price}")
+    
+    return price
 
 
 def _new_id() -> str:
