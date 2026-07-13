@@ -44,6 +44,7 @@ if TYPE_CHECKING:
 from ..core import (
     InsufficientBalance,
     OrderNotFound,
+    PositionNotFound,
     TAKER_FEE_RATE,
     FEE_RATE_SPORTS,
     FEE_RATE_CRYPTO,
@@ -1448,6 +1449,113 @@ class PaperEngine:
             trail_distance * 100, order_id[:8], order.trail_tp_price,
         )
         return order
+
+    def set_stop_loss(
+        self,
+        market,
+        side: str,
+        stop_price: float,
+    ) -> None:
+        """
+        Set stop loss for a position.
+
+        Parameters
+        ----------
+        market : Market
+            Market object
+        side : str
+            "UP" or "DOWN"
+        stop_price : float
+            Stop loss price trigger
+
+        Example
+        -------
+        >>> client.paper.set_stop_loss(market, side="UP", stop_price=0.45)
+        """
+        side = _validate_side(side)
+        position_key = f"{market.id}:{side}"
+        
+        if position_key not in self._positions:
+            raise PositionNotFound(f"No position found for {market.slug} {side}")
+        
+        position = self._positions[position_key]
+        position.stop_loss = stop_price
+        
+        log.info("Stop loss set at $%.4f for %s %s", stop_price, market.slug, side)
+
+    def set_take_profit(
+        self,
+        market,
+        side: str,
+        profit_price: float,
+    ) -> None:
+        """
+        Set take profit for a position.
+
+        Parameters
+        ----------
+        market : Market
+            Market object
+        side : str
+            "UP" or "DOWN"
+        profit_price : float
+            Take profit price trigger
+
+        Example
+        -------
+        >>> client.paper.set_take_profit(market, side="UP", profit_price=0.55)
+        """
+        side = _validate_side(side)
+        position_key = f"{market.id}:{side}"
+        
+        if position_key not in self._positions:
+            raise PositionNotFound(f"No position found for {market.slug} {side}")
+        
+        position = self._positions[position_key]
+        position.take_profit = profit_price
+        
+        log.info("Take profit set at $%.4f for %s %s", profit_price, market.slug, side)
+
+    def set_trailing_stop(
+        self,
+        market,
+        side: str,
+        trail_distance: float,
+    ) -> None:
+        """
+        Set trailing stop loss for a position.
+
+        Parameters
+        ----------
+        market : Market
+            Market object
+        side : str
+            "UP" or "DOWN"
+        trail_distance : float
+            Trailing distance as percentage (e.g., 0.05 for 5%)
+
+        Example
+        -------
+        >>> client.paper.set_trailing_stop(market, side="UP", trail_distance=0.05)
+        """
+        side = _validate_side(side)
+        position_key = f"{market.id}:{side}"
+        
+        if position_key not in self._positions:
+            raise PositionNotFound(f"No position found for {market.slug} {side}")
+        
+        position = self._positions[position_key]
+        
+        # Add trailing stop fields to position if not already present
+        if not hasattr(position, 'trail_sl'):
+            position.trail_sl = None
+        if not hasattr(position, 'trail_sl_price'):
+            position.trail_sl_price = None
+        
+        position.trail_sl = trail_distance
+        position.trail_sl_price = position.current_price - trail_distance if side == "UP" else position.current_price + trail_distance
+        
+        log.info("Trailing stop set at %.4f distance for %s %s", trail_distance, market.slug, side)
 
     def oco_order(
        self,
