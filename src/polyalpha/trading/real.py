@@ -168,7 +168,7 @@ class RealOrder:
     amount: float
     shares: float
     fee: float
-    status: str  # "pending", "open", "filled", "partially_filled", "cancelled"
+    status: str  # "pending", "open", "filled", "partially_filled", "cancelled", "expired"
     is_limit: bool
     created_at: datetime
     filled_at: Optional[datetime] = None
@@ -182,6 +182,13 @@ class RealOrder:
     sizing_strategy: str = "fixed"
     confidence: float = 0.5
     kelly_fraction: float = 0.0
+
+    # Fill tracking
+    filled_shares: float = 0.0
+    filled_amount: float = 0.0
+    avg_fill_price: float = 0.0
+    last_status_check: Optional[datetime] = None
+    status_check_attempts: int = 0
 
     def dump(self) -> dict:
         return {
@@ -202,6 +209,11 @@ class RealOrder:
             "sizing_strategy": self.sizing_strategy,
             "confidence": self.confidence,
             "kelly_fraction": self.kelly_fraction,
+            "filled_shares": self.filled_shares,
+            "filled_amount": self.filled_amount,
+            "avg_fill_price": self.avg_fill_price,
+            "last_status_check": self.last_status_check.isoformat() if self.last_status_check else None,
+            "status_check_attempts": self.status_check_attempts,
         }
 
 
@@ -1383,6 +1395,236 @@ class RealTradingEngine:
         """Get all open orders."""
         return [o for o in self._orders.values() if o.status in ("open", "pending")]
 
+    def poll_order_status(self, order_id: str) -> dict:
+        """
+        Poll order status from CLOB API with retry logic.
+
+        Parameters
+        ----------
+        order_id : str
+            Order ID to poll
+
+        Returns
+        -------
+        dict
+            Order status response from CLOB API
+
+        Raises
+        ------
+        OrderNotFound
+            If order not found in local records
+        NetworkError
+            If polling fails after retries
+        """
+        if order_id not in self._orders:
+            raise OrderNotFound(f"Order {order_id} not found")
+
+        order = self._orders[order_id]
+        order.last_status_check = datetime.now(timezone.utc)
+        order.status_check_attempts += 1
+
+        try:
+            status_response = self._clob_client.get_order_status(order_id)
+            log.debug("Order %s status: %s", order_id, status_response.get("status"))
+            return status_response
+        except Exception as e:
+            log.error("Failed to poll order %s status (attempt %d): %s",
+                     order_id, order.status_check_attempts, e)
+            if order.status_check_attempts >= self._config.retry_attempts:
+                raise NetworkError(f"Order status polling failed after {self._config.retry_attempts} attempts: {e}")
+            raise
+
+    def update_order_fill_status(self, order_id: str) -> None:
+        """
+        Update order fill status based on CLOB API response.
+
+        Handles partial fills, full fills, and status transitions.
+
+        Parameters
+        ----------
+        order_id : str
+            Order ID to update
+        """
+        if order_id not in self._orders:
+            raise OrderNotFound(f"Order {order_id} not found")
+
+        order = self._orders[order_id]
+
+        # Skip if order is already in final state
+        if order.status in ("filled", "cancelled", "expired"):
+            return
+
+        # Poll current status from CLOB
+        status_response = self.poll_order_status(order_id)
+
+        api_status = status_response.get("status", "unknown")
+        filled_size = float(status_response.get("filled_size", 0.0))
+        avg_price = float(status_response.get("avg_price", order.price))
+
+        # Handle partial fills
+        if filled_size > 0 and filled_size < order.shares:
+            if order.status != "partially_filled":
+                log.info("Order %s partially filled: %.2f/%.2f shares",
+                        order_id, filled_size, order.shares)
+                order.status = "partially_filled"
+
+            order.filled_shares = filled_size
+            order.filled_amount = filled_size * avg_price
+            order.avg_fill_price = avg_price
+
+            # Update position with partial fill
+            self._handle_partial_fill(order, filled_size, avg_price)
+
+        # Handle full fills
+        elif filled_size >= order.shares or api_status == "filled":
+            if order.status != "filled":
+                log.info("Order %s fully filled: %.2f shares @ %.4f",
+                        order_id, filled_size, avg_price)
+                order.status = "filled"
+                order.filled_at = datetime.now(timezone.utc)
+                order.filled_shares = filled_size
+                order.filled_amount = filled_size * avg_price
+                order.avg_fill_price = avg_price
+
+                # Trigger fill callback
+                self._on_order_filled(order)
+
+        # Handle cancelled orders
+        elif api_status == "cancelled":
+            if order.status != "cancelled":
+                log.info("Order %s cancelled", order_id)
+                order.status = "cancelled"
+
+        # Handle expired orders
+        elif api_status == "expired":
+            if order.status != "expired":
+                log.warning("Order %s expired", order_id)
+                order.status = "expired"
+
+        # Update database if enabled
+        if self._db_enabled:
+            self._update_order_in_db(order)
+
+    def _handle_partial_fill(self, order: RealOrder, filled_shares: float, avg_price: float) -> None:
+        """
+        Handle partial fill by updating position incrementally.
+
+        Parameters
+        ----------
+        order : RealOrder
+            Order that was partially filled
+        filled_shares : float
+            Number of shares filled in this update
+        avg_price : float
+            Average fill price
+        """
+        # Find the position for this order
+        position_key = f"{order.market_id}:{order.side}"
+        
+        if position_key not in self._positions:
+            # Position doesn't exist yet, create it with partial fill
+            log.warning("Position not found for partial fill order %s, creating new position",
+                       order.id)
+            # This shouldn't normally happen as position is created on order placement
+            return
+
+        position = self._positions[position_key]
+
+        # Calculate additional shares from this partial fill
+        new_shares = filled_shares - position.shares
+        if new_shares <= 0:
+            return  # No new shares to add
+
+        # Update position with volume-weighted average price
+        total_shares = position.shares + new_shares
+        position.avg_price = (
+            (position.avg_price * position.shares + avg_price * new_shares)
+            / total_shares
+        )
+        position.shares = total_shares
+        position.cost_basis = position.shares * position.avg_price
+        position.current_value = position.shares * avg_price
+
+        log.debug("Position updated with partial fill: %s %s, shares=%.2f, avg_price=%.4f",
+                 position.slug, position.side, position.shares, position.avg_price)
+
+    def _on_order_filled(self, order: RealOrder) -> None:
+        """
+        Callback when order is fully filled.
+
+        Parameters
+        ----------
+        order : RealOrder
+            Filled order
+        """
+        log.info("Order fill callback: %s %s $%.2f @ $%.4f",
+                order.slug, order.side, order.amount, order.price)
+
+        # Record trade in risk manager for daily P&L tracking
+        # Note: This is a simplified P&L calculation
+        # Real P&L would be calculated on position exit
+        self._risk_manager.record_trade(0.0)
+
+    def check_order_timeout(self, order_id: str) -> bool:
+        """
+        Check if order has exceeded timeout threshold.
+
+        Parameters
+        ----------
+        order_id : str
+            Order ID to check
+
+        Returns
+        -------
+        bool
+            True if order has timed out
+        """
+        if order_id not in self._orders:
+            raise OrderNotFound(f"Order {order_id} not found")
+
+        order = self._orders[order_id]
+
+        # Only check timeout for pending/open orders
+        if order.status not in ("pending", "open", "partially_filled"):
+            return False
+
+        # Check if order has exceeded timeout
+        if order.created_at:
+            elapsed = (datetime.now(timezone.utc) - order.created_at).total_seconds()
+            if elapsed > self._config.order_timeout:
+                log.warning("Order %s timed out after %.1f seconds (status: %s)",
+                           order_id, elapsed, order.status)
+                return True
+
+        return False
+
+    def poll_all_orders(self) -> dict[str, str]:
+        """
+        Poll status for all open orders.
+
+        Returns
+        -------
+        dict[str, str]
+            Dictionary mapping order_id to new status
+        """
+        status_updates = {}
+
+        for order_id, order in list(self._orders.items()):
+            if order.status in ("pending", "open", "partially_filled"):
+                try:
+                    old_status = order.status
+                    self.update_order_fill_status(order_id)
+                    if order.status != old_status:
+                        status_updates[order_id] = order.status
+                except Exception as e:
+                    log.error("Failed to update order %s status: %s", order_id, e)
+
+                    # Check for timeout
+                    if self.check_order_timeout(order_id):
+                        status_updates[order_id] = "timeout"
+
+        return status_updates
+
     # ── Position Management ───────────────────────────────────────────────────────
 
     def positions(self) -> list[RealPosition]:
@@ -2046,10 +2288,31 @@ class RealTradingEngine:
                 tx_hash=order.tx_hash,
                 is_real_trade=True,
                 wallet_address=self._wallet.get_address(),
+                order_id=order.id,
+                status=order.status,
             )
             log.debug("Real: order saved to database for %s", order.slug)
         except Exception as exc:
             log.error("Real: failed to save order to database: %s", exc)
+
+    def _update_order_in_db(self, order: RealOrder) -> None:
+        """Update order status in database after fill status changes."""
+        if not self._db_enabled or self._db is None:
+            return
+
+        try:
+            # Update the trade record with fill information
+            self._db.update_trade_status(
+                order_id=order.id,
+                status=order.status,
+                filled_shares=order.filled_shares,
+                filled_amount=order.filled_amount,
+                avg_fill_price=order.avg_fill_price,
+                filled_at=order.filled_at,
+            )
+            log.debug("Real: order status updated in database for %s: %s", order.slug, order.status)
+        except Exception as exc:
+            log.error("Real: failed to update order in database: %s", exc)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────

@@ -342,7 +342,13 @@ class TradeDatabase:
                 pnl REAL NOT NULL,
                 timestamp TEXT NOT NULL,
                 market_session TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                order_id TEXT,
+                status TEXT DEFAULT 'pending',
+                filled_shares REAL DEFAULT 0.0,
+                filled_amount REAL DEFAULT 0.0,
+                avg_fill_price REAL DEFAULT 0.0,
+                filled_at TEXT
             )
         """)
         
@@ -488,6 +494,8 @@ class TradeDatabase:
         timestamp: datetime,
         market_session: Optional[str] = None,
         check_duplicates: bool = True,
+        order_id: Optional[str] = None,
+        status: str = "pending",
     ) -> int:
         """
         Save a trade to the database.
@@ -553,11 +561,13 @@ class TradeDatabase:
         cursor.execute("""
             INSERT INTO trades (
                 market_slug, market_id, side, entry_price, exit_price,
-                amount, shares, fee, outcome, pnl, timestamp, market_session
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                amount, shares, fee, outcome, pnl, timestamp, market_session,
+                order_id, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             market_slug, market_id, side, entry_price, exit_price,
-            amount, shares, fee, outcome, pnl, timestamp_str, market_session
+            amount, shares, fee, outcome, pnl, timestamp_str, market_session,
+            order_id, status
         ))
         
         conn.commit()
@@ -684,11 +694,75 @@ class TradeDatabase:
             
             log.info("Bulk saved %d trades", len(trades))
             return trade_ids
-            
+
         except Exception as e:
             conn.rollback()
             log.error("Bulk insert failed: %s", e)
             raise
+
+    def update_trade_status(
+        self,
+        order_id: str,
+        status: str,
+        filled_shares: float = 0.0,
+        filled_amount: float = 0.0,
+        avg_fill_price: float = 0.0,
+        filled_at: Optional[datetime] = None,
+    ) -> bool:
+        """
+        Update order fill status in the database.
+
+        Parameters
+        ----------
+        order_id : str
+            Order ID to update
+        status : str
+            New order status ("pending", "open", "filled", "partially_filled", "cancelled", "expired")
+        filled_shares : float, optional
+            Number of shares filled
+        filled_amount : float, optional
+            Amount filled in USDC
+        avg_fill_price : float, optional
+            Average fill price
+        filled_at : datetime, optional
+            Timestamp when order was filled
+
+        Returns
+        -------
+        bool
+            True if update was successful, False otherwise
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        filled_at_str = filled_at.isoformat() if filled_at else None
+
+        try:
+            cursor.execute("""
+                UPDATE trades
+                SET status = ?,
+                    filled_shares = ?,
+                    filled_amount = ?,
+                    avg_fill_price = ?,
+                    filled_at = ?
+                WHERE order_id = ?
+            """, (status, filled_shares, filled_amount, avg_fill_price, filled_at_str, order_id))
+
+            conn.commit()
+
+            if cursor.rowcount > 0:
+                log.debug("Trade status updated: order_id=%s, status=%s", order_id, status)
+                # Invalidate cache on update
+                self._invalidate_cache()
+                return True
+            else:
+                log.warning("No trade found with order_id=%s", order_id)
+                return False
+
+        except Exception as e:
+            conn.rollback()
+            log.error("Failed to update trade status: %s", e)
+            return False
     
     def is_duplicate_trade(
         self,
@@ -827,11 +901,14 @@ class TradeDatabase:
         
         # Define migrations
         migrations = {
-            # Future migrations can be added here
-            # Example:
-            # 2: """
-            # ALTER TABLE trades ADD COLUMN notes TEXT;
-            # """,
+            2: """
+            ALTER TABLE trades ADD COLUMN order_id TEXT;
+            ALTER TABLE trades ADD COLUMN status TEXT DEFAULT 'pending';
+            ALTER TABLE trades ADD COLUMN filled_shares REAL DEFAULT 0.0;
+            ALTER TABLE trades ADD COLUMN filled_amount REAL DEFAULT 0.0;
+            ALTER TABLE trades ADD COLUMN avg_fill_price REAL DEFAULT 0.0;
+            ALTER TABLE trades ADD COLUMN filled_at TEXT;
+            """,
         }
         
         # Apply migrations in order
