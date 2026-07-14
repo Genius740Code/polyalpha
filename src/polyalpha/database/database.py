@@ -24,8 +24,10 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable, Set
 from functools import lru_cache
 import hashlib
-from threading import Lock
+from threading import Lock, Thread, Event
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from queue import Queue, Empty
 
 from .security import (
     DatabaseEncryption,
@@ -208,6 +210,13 @@ class TradeDatabase:
         self._cache_enabled = enable_cache
         self._query_cache: Dict[str, List[TradeRecord]] = {}
         self._cache_max_size = 100
+        self._cache_ttl: Dict[str, float] = {}  # Cache entry TTL
+        self._default_cache_ttl = 300.0  # 5 minutes default TTL
+        
+        # Prepared statement cache
+        self._prepared_statements: Dict[str, sqlite3.Statement] = {}
+        self._statement_cache_max_size = 50
+        self._statement_lock = Lock()
         
         # Event hooks for real-time synchronization
         self._trade_saved_hooks: List[Callable[[TradeRecord], None]] = []
@@ -244,25 +253,66 @@ class TradeDatabase:
         self._current_roles: Set[str] = set()
         self._encryption_fields: List[str] = []  # Fields to encrypt
         
+        # Connection pool for thread safety
+        self._connection_pool: Queue[sqlite3.Connection] = Queue(maxsize=5)
+        self._pool_lock = Lock()
+        self._max_pool_size = 5
+        self._pool_created = 0
+        
+        # Background optimization scheduler
+        self._optimization_thread: Optional[Thread] = None
+        self._optimization_stop_event = Event()
+        self._optimization_interval = 3600  # 1 hour
+        
         self._initialize_db()
     
     def _get_connection(self) -> sqlite3.Connection:
-        """Get or create database connection."""
-        if self._conn is None:
-            self._conn = sqlite3.connect(self.db_path)
-            self._conn.row_factory = sqlite3.Row
-            
-            # Enable WAL mode for better concurrency
-            if self._enable_wal:
-                self._conn.execute("PRAGMA journal_mode=WAL")
-                self._conn.execute("PRAGMA synchronous=NORMAL")
-            
-            # Set performance optimizations
-            self._conn.execute("PRAGMA busy_timeout=5000")  # 5 second timeout
-            self._conn.execute("PRAGMA temp_store=MEMORY")  # Store temp tables in memory
-            self._conn.execute("PRAGMA mmap_size=268435456")  # 256MB memory-mapped I/O
-            
-        return self._conn
+        """Get or create database connection from pool."""
+        try:
+            # Try to get connection from pool
+            conn = self._connection_pool.get_nowait()
+            return conn
+        except Empty:
+            # Pool is empty, create new connection
+            with self._pool_lock:
+                if self._pool_created < self._max_pool_size:
+                    conn = self._create_connection()
+                    self._pool_created += 1
+                    return conn
+                else:
+                    # Pool is full, wait for available connection
+                    return self._connection_pool.get(timeout=5)
+    
+    def _create_connection(self) -> sqlite3.Connection:
+        """Create a new database connection with optimizations."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        
+        # Enable WAL mode for better concurrency
+        if self._enable_wal:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+        
+        # Set performance optimizations
+        conn.execute("PRAGMA busy_timeout=5000")  # 5 second timeout
+        conn.execute("PRAGMA temp_store=MEMORY")  # Store temp tables in memory
+        conn.execute("PRAGMA mmap_size=268435456")  # 256MB memory-mapped I/O
+        conn.execute("PRAGMA page_size=4096")  # Optimal page size
+        conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
+        conn.execute("PRAGMA locking_mode=NORMAL")
+        conn.execute("PRAGMA foreign_keys=OFF")  # No foreign keys needed
+        
+        return conn
+    
+    def _return_connection(self, conn: sqlite3.Connection) -> None:
+        """Return a connection to the pool."""
+        try:
+            self._connection_pool.put_nowait(conn)
+        except:
+            # Pool is full, close the connection
+            conn.close()
+            with self._pool_lock:
+                self._pool_created -= 1
     
     def _initialize_db(self) -> None:
         """Create database schema if it doesn't exist."""
@@ -328,6 +378,31 @@ class TradeDatabase:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_market_session 
             ON trades(market_session)
+        """)
+        
+        # Create materialized views for common aggregations
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS trade_statistics_mv (
+                asset TEXT PRIMARY KEY,
+                total_trades INTEGER,
+                wins INTEGER,
+                losses INTEGER,
+                win_rate REAL,
+                total_pnl REAL,
+                avg_pnl REAL,
+                last_updated TEXT
+            )
+        """)
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS daily_summary_mv (
+                date TEXT PRIMARY KEY,
+                total_trades INTEGER,
+                total_pnl REAL,
+                total_fees REAL,
+                win_rate REAL,
+                last_updated TEXT
+            )
         """)
         
         # Initialize schema version if not exists
@@ -786,7 +861,269 @@ class TradeDatabase:
     def _invalidate_cache(self) -> None:
         """Invalidate the query cache."""
         self._query_cache.clear()
+        self._cache_ttl.clear()
         log.debug("Query cache invalidated")
+    
+    def _is_cache_entry_valid(self, cache_key: str) -> bool:
+        """Check if a cache entry is still valid based on TTL."""
+        if cache_key not in self._cache_ttl:
+            return False
+        
+        entry_time = self._cache_ttl[cache_key]
+        current_time = time.time()
+        return (current_time - entry_time) < self._default_cache_ttl
+    
+    def _get_prepared_statement(self, query: str) -> sqlite3.Statement:
+        """Get or create a prepared statement for the given query."""
+        with self._statement_lock:
+            if query in self._prepared_statements:
+                return self._prepared_statements[query]
+            
+            conn = self._get_connection()
+            stmt = conn.prepare(query)
+            
+            # Implement LRU eviction for statement cache
+            if len(self._prepared_statements) >= self._statement_cache_max_size:
+                # Remove oldest entry
+                self._prepared_statements.pop(next(iter(self._prepared_statements)))
+            
+            self._prepared_statements[query] = stmt
+            log.debug("Prepared statement cached for query: %s", query[:50])
+            return stmt
+    
+    def clear_prepared_statements(self) -> None:
+        """Clear the prepared statement cache."""
+        with self._statement_lock:
+            self._prepared_statements.clear()
+            log.debug("Prepared statement cache cleared")
+    
+    def refresh_materialized_views(self) -> None:
+        """Refresh materialized views for common aggregations."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Refresh trade statistics by asset
+        cursor.execute("DELETE FROM trade_statistics_mv")
+        
+        cursor.execute("""
+            INSERT INTO trade_statistics_mv (asset, total_trades, wins, losses, win_rate, total_pnl, avg_pnl, last_updated)
+            SELECT 
+                SUBSTR(market_slug, 1, INSTR(market_slug, '-') - 1) as asset,
+                COUNT(*) as total_trades,
+                SUM(CASE WHEN outcome = 'WON' THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN outcome = 'LOST' THEN 1 ELSE 0 END) as losses,
+                CAST(SUM(CASE WHEN outcome = 'WON' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS REAL) as win_rate,
+                SUM(pnl) as total_pnl,
+                AVG(pnl) as avg_pnl,
+                datetime('now') as last_updated
+            FROM trades
+            GROUP BY asset
+        """)
+        
+        # Refresh daily summary
+        cursor.execute("DELETE FROM daily_summary_mv")
+        
+        cursor.execute("""
+            INSERT INTO daily_summary_mv (date, total_trades, total_pnl, total_fees, win_rate, last_updated)
+            SELECT 
+                DATE(timestamp) as date,
+                COUNT(*) as total_trades,
+                SUM(pnl) as total_pnl,
+                SUM(fee) as total_fees,
+                CAST(SUM(CASE WHEN outcome = 'WON' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS REAL) as win_rate,
+                datetime('now') as last_updated
+            FROM trades
+            GROUP BY DATE(timestamp)
+        """)
+        
+        conn.commit()
+        log.info("Materialized views refreshed")
+    
+    def get_trade_statistics_from_mv(self) -> Dict[str, Dict[str, Any]]:
+        """Get trade statistics from materialized view (faster than calculating)."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM trade_statistics_mv")
+        
+        stats = {}
+        for row in cursor.fetchall():
+            stats[row['asset']] = {
+                'total_trades': row['total_trades'],
+                'wins': row['wins'],
+                'losses': row['losses'],
+                'win_rate': row['win_rate'],
+                'total_pnl': row['total_pnl'],
+                'avg_pnl': row['avg_pnl'],
+                'last_updated': row['last_updated']
+            }
+        
+        return stats
+    
+    def get_daily_summary_from_mv(self) -> Dict[str, Dict[str, Any]]:
+        """Get daily summary from materialized view."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM daily_summary_mv ORDER BY date DESC")
+        
+        summary = {}
+        for row in cursor.fetchall():
+            summary[row['date']] = {
+                'total_trades': row['total_trades'],
+                'total_pnl': row['total_pnl'],
+                'total_fees': row['total_fees'],
+                'win_rate': row['win_rate'],
+                'last_updated': row['last_updated']
+            }
+        
+        return summary
+    
+    def start_background_optimization(self, interval_seconds: int = 3600) -> None:
+        """
+        Start background optimization thread.
+        
+        Parameters
+        ----------
+        interval_seconds : int, optional
+            Interval between optimizations in seconds (default: 3600 = 1 hour).
+        """
+        if self._optimization_thread is not None and self._optimization_thread.is_alive():
+            log.warning("Background optimization thread already running")
+            return
+        
+        self._optimization_interval = interval_seconds
+        self._optimization_stop_event.clear()
+        
+        def optimization_loop():
+            while not self._optimization_stop_event.wait(self._optimization_interval):
+                try:
+                    self._run_background_optimization()
+                except Exception as e:
+                    log.error("Background optimization failed: %s", e)
+        
+        self._optimization_thread = Thread(target=optimization_loop, daemon=True)
+        self._optimization_thread.start()
+        log.info("Background optimization started (interval: %d seconds)", interval_seconds)
+    
+    def stop_background_optimization(self) -> None:
+        """Stop background optimization thread."""
+        if self._optimization_thread is not None:
+            self._optimization_stop_event.set()
+            self._optimization_thread.join(timeout=5)
+            self._optimization_thread = None
+            log.info("Background optimization stopped")
+    
+    def _run_background_optimization(self) -> None:
+        """Run background optimization tasks."""
+        log.info("Running background optimization...")
+        
+        # Refresh materialized views
+        self.refresh_materialized_views()
+        
+        # Analyze indexes
+        self.analyze_indexes()
+        
+        # Optimize database
+        self.optimize_database()
+        
+        # Clean expired cache entries
+        self._clean_expired_cache()
+        
+        log.info("Background optimization completed")
+    
+    def _clean_expired_cache(self) -> None:
+        """Remove expired cache entries based on TTL."""
+        current_time = time.time()
+        expired_keys = []
+        
+        for cache_key, entry_time in self._cache_ttl.items():
+            if (current_time - entry_time) >= self._default_cache_ttl:
+                expired_keys.append(cache_key)
+        
+        for key in expired_keys:
+            self._query_cache.pop(key, None)
+            self._cache_ttl.pop(key, None)
+        
+        if expired_keys:
+            log.debug("Cleaned %d expired cache entries", len(expired_keys))
+    
+    def stream_trades(
+        self,
+        filters: Optional[Dict[str, Any]] = None,
+        batch_size: int = 100,
+    ) -> List[TradeRecord]:
+        """
+        Stream trades in batches for large datasets.
+        
+        This is a generator that yields batches of trades, useful for processing
+        large datasets without loading everything into memory.
+        
+        Parameters
+        ----------
+        filters : dict, optional
+            Filter criteria (same as load_trades()).
+        batch_size : int, optional
+            Number of trades per batch (default: 100).
+        
+        Yields
+        ------
+        List[TradeRecord]
+            Batch of trades.
+        
+        Example
+        -------
+        >>> for batch in db.stream_trades(batch_size=500):
+        ...     process_batch(batch)
+        """
+        offset = 0
+        while True:
+            batch = self.load_trades(filters=filters, limit=batch_size, offset=offset)
+            if not batch:
+                break
+            yield batch
+            offset += batch_size
+    
+    def stream_trades_by_asset(self, asset: str, batch_size: int = 100) -> List[TradeRecord]:
+        """
+        Stream trades for a specific asset in batches.
+        
+        Parameters
+        ----------
+        asset : str
+            Asset symbol to filter by.
+        batch_size : int, optional
+            Number of trades per batch (default: 100).
+        
+        Yields
+        ------
+        List[TradeRecord]
+            Batch of trades for the asset.
+        """
+        offset = 0
+        while True:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            pattern = f"{asset.lower()}%"
+            cursor.execute("""
+                SELECT id, market_slug, market_id, side, entry_price, exit_price,
+                       amount, shares, fee, outcome, pnl, timestamp, market_session
+                FROM trades
+                WHERE LOWER(market_slug) LIKE ?
+                ORDER BY timestamp DESC
+                LIMIT ? OFFSET ?
+            """, (pattern, batch_size, offset))
+            
+            batch = []
+            for row in cursor.fetchall():
+                batch.append(self._row_to_trade_record(row))
+            
+            if not batch:
+                break
+            
+            yield batch
+            offset += batch_size
     
     def enable_cache(self) -> None:
         """Enable query result caching."""
@@ -798,6 +1135,149 @@ class TradeDatabase:
         self._cache_enabled = False
         self._invalidate_cache()
         log.debug("Query cache disabled")
+    
+    def execute_parallel_queries(
+        self,
+        queries: List[str],
+        params_list: Optional[List[tuple]] = None,
+        max_workers: int = 4,
+    ) -> List[List[sqlite3.Row]]:
+        """
+        Execute multiple queries in parallel using thread pool.
+        
+        This is useful for running independent queries concurrently,
+        such as fetching statistics for multiple assets simultaneously.
+        
+        Parameters
+        ----------
+        queries : list of str
+            List of SQL queries to execute.
+        params_list : list of tuple, optional
+            List of parameter tuples for each query.
+        max_workers : int, optional
+            Maximum number of worker threads (default: 4).
+        
+        Returns
+        -------
+        list of list of sqlite3.Row
+            Results for each query in the same order as input.
+        
+        Example
+        -------
+        >>> queries = [
+        ...     "SELECT * FROM trades WHERE side = 'UP'",
+        ...     "SELECT * FROM trades WHERE side = 'DOWN'",
+        ...     "SELECT * FROM trades WHERE outcome = 'WON'"
+        ... ]
+        >>> results = db.execute_parallel_queries(queries)
+        """
+        if params_list is None:
+            params_list = [() for _ in queries]
+        
+        if len(queries) != len(params_list):
+            raise ValueError("Number of queries must match number of params lists")
+        
+        results = [None] * len(queries)
+        
+        def execute_query(index: int, query: str, params: tuple) -> None:
+            """Execute a single query and store result."""
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            results[index] = cursor.fetchall()
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(execute_query, i, q, p)
+                for i, (q, p) in enumerate(zip(queries, params_list))
+            ]
+            
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    log.error("Parallel query failed: %s", e)
+        
+        return results
+    
+    def get_parallel_statistics_by_assets(
+        self,
+        assets: List[str],
+        max_workers: int = 4,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Get statistics for multiple assets in parallel.
+        
+        Parameters
+        ----------
+        assets : list of str
+            List of asset symbols (e.g., ["BTC", "ETH", "SOL"]).
+        max_workers : int, optional
+            Maximum number of worker threads (default: 4).
+        
+        Returns
+        -------
+        dict
+            Dictionary mapping asset names to their statistics.
+        
+        Example
+        -------
+        >>> stats = db.get_parallel_statistics_by_assets(["BTC", "ETH", "SOL"])
+        >>> print(stats["BTC"]["total_trades"])
+        """
+        queries = []
+        params_list = []
+        
+        for asset in assets:
+            pattern = f"{asset.lower()}%"
+            queries.append("""
+                SELECT 
+                    COUNT(*) as total_trades,
+                    SUM(CASE WHEN outcome = 'WON' THEN 1 ELSE 0 END) as wins,
+                    SUM(CASE WHEN outcome = 'LOST' THEN 1 ELSE 0 END) as losses,
+                    SUM(pnl) as total_pnl,
+                    AVG(pnl) as avg_pnl,
+                    SUM(fee) as total_fees
+                FROM trades
+                WHERE LOWER(market_slug) LIKE ?
+            """)
+            params_list.append((pattern,))
+        
+        results = self.execute_parallel_queries(queries, params_list, max_workers)
+        
+        stats = {}
+        for asset, rows in zip(assets, results):
+            if rows and rows[0]:
+                row = rows[0]
+                total_trades = row['total_trades']
+                wins = row['wins'] or 0
+                losses = row['losses'] or 0
+                total_pnl = row['total_pnl'] or 0
+                avg_pnl = row['avg_pnl'] or 0
+                total_fees = row['total_fees'] or 0
+                win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+                
+                stats[asset] = {
+                    'total_trades': total_trades,
+                    'wins': wins,
+                    'losses': losses,
+                    'win_rate': win_rate,
+                    'total_pnl': total_pnl,
+                    'avg_pnl': avg_pnl,
+                    'total_fees': total_fees,
+                }
+            else:
+                stats[asset] = {
+                    'total_trades': 0,
+                    'wins': 0,
+                    'losses': 0,
+                    'win_rate': 0,
+                    'total_pnl': 0,
+                    'avg_pnl': 0,
+                    'total_fees': 0,
+                }
+        
+        return stats
     
     def clear_cache(self) -> None:
         """Clear the query cache."""
@@ -1180,7 +1660,7 @@ class TradeDatabase:
         # Check cache if enabled
         if self._cache_enabled:
             cache_key = self._generate_cache_key(filters, sort_by, sort_order, limit, offset)
-            if cache_key in self._query_cache:
+            if cache_key in self._query_cache and self._is_cache_entry_valid(cache_key):
                 self._cache_hits += 1
                 log.debug("Cache hit for key: %s", cache_key)
                 return self._query_cache[cache_key]
@@ -1298,8 +1778,11 @@ class TradeDatabase:
             # Implement LRU eviction if cache is full
             if len(self._query_cache) >= self._cache_max_size:
                 # Remove oldest entry (first in dict)
-                self._query_cache.pop(next(iter(self._query_cache)))
+                oldest_key = next(iter(self._query_cache))
+                self._query_cache.pop(oldest_key)
+                self._cache_ttl.pop(oldest_key, None)
             self._query_cache[cache_key] = trades
+            self._cache_ttl[cache_key] = time.time()
             log.debug("Cached %d trades with key: %s", len(trades), cache_key)
         
         return trades
@@ -2968,11 +3451,27 @@ class TradeDatabase:
         return self._data_masker.mask_record(record_dict)
     
     def close(self) -> None:
-        """Close the database connection."""
+        """Close the database connection and cleanup resources."""
+        # Stop optimization thread if running
+        if self._optimization_thread is not None:
+            self._optimization_stop_event.set()
+            self._optimization_thread.join(timeout=5)
+            self._optimization_thread = None
+        
+        # Close all connections in pool
+        while not self._connection_pool.empty():
+            try:
+                conn = self._connection_pool.get_nowait()
+                conn.close()
+            except Empty:
+                break
+        
+        # Close legacy connection if exists
         if self._conn is not None:
             self._conn.close()
             self._conn = None
-            log.debug("Database connection closed")
+        
+        log.debug("Database connection closed")
     
     def __enter__(self):
         """Context manager entry."""
