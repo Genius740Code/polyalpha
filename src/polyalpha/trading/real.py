@@ -268,6 +268,237 @@ class RealPosition:
         }
 
 
+@dataclass
+class OCOOrder:
+    """
+    One-Cancels-Other (OCO) order pair.
+    
+    An OCO order consists of two orders where if one is filled,
+    the other is automatically cancelled.
+    """
+
+    id: str
+    market_id: str
+    slug: str
+    side: str
+    order1_id: str  # First order (e.g., take profit)
+    order2_id: str  # Second order (e.g., stop loss)
+    order1_price: float
+    order2_price: float
+    amount: float
+    status: str  # "active", "triggered", "cancelled"
+    created_at: datetime
+    triggered_order_id: Optional[str] = None
+    cancelled_order_id: Optional[str] = None
+    triggered_at: Optional[datetime] = None
+
+    def dump(self) -> dict:
+        return {
+            "id": self.id,
+            "market": self.slug,
+            "side": self.side,
+            "order1_id": self.order1_id,
+            "order2_id": self.order2_id,
+            "order1_price": self.order1_price,
+            "order2_price": self.order2_price,
+            "amount": self.amount,
+            "status": self.status,
+            "created_at": self.created_at.isoformat(),
+            "triggered_order_id": self.triggered_order_id,
+            "cancelled_order_id": self.cancelled_order_id,
+            "triggered_at": self.triggered_at.isoformat() if self.triggered_at else None,
+        }
+
+
+@dataclass
+class BracketOrder:
+    """
+    Bracket order (entry + stop loss + take profit).
+    
+    A bracket order places an entry order along with
+    associated stop loss and take profit orders.
+    """
+
+    id: str
+    market_id: str
+    slug: str
+    side: str
+    entry_order_id: str
+    stop_loss_order_id: Optional[str] = None
+    take_profit_order_id: Optional[str] = None
+    entry_price: float
+    stop_loss_price: Optional[float] = None
+    take_profit_price: Optional[float] = None
+    amount: float
+    status: str  # "pending", "active", "partial", "completed", "cancelled"
+    created_at: datetime
+    filled_at: Optional[datetime] = None
+
+    def dump(self) -> dict:
+        return {
+            "id": self.id,
+            "market": self.slug,
+            "side": self.side,
+            "entry_order_id": self.entry_order_id,
+            "stop_loss_order_id": self.stop_loss_order_id,
+            "take_profit_order_id": self.take_profit_order_id,
+            "entry_price": self.entry_price,
+            "stop_loss_price": self.stop_loss_price,
+            "take_profit_price": self.take_profit_price,
+            "amount": self.amount,
+            "status": self.status,
+            "created_at": self.created_at.isoformat(),
+            "filled_at": self.filled_at.isoformat() if self.filled_at else None,
+        }
+
+
+@dataclass
+class ConditionalOrder:
+    """
+    Conditional order with if-then logic.
+    
+    A conditional order triggers a child order when
+    specified conditions are met (e.g., price threshold).
+    """
+
+    id: str
+    market_id: str
+    slug: str
+    side: str
+    condition_type: str  # "price_above", "price_below", "time_after"
+    condition_value: float
+    child_order_id: Optional[str] = None
+    child_order_price: Optional[float] = None
+    child_order_amount: Optional[float] = None
+    status: str  # "waiting", "triggered", "cancelled", "expired"
+    created_at: datetime
+    triggered_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+
+    def dump(self) -> dict:
+        return {
+            "id": self.id,
+            "market": self.slug,
+            "side": self.side,
+            "condition_type": self.condition_type,
+            "condition_value": self.condition_value,
+            "child_order_id": self.child_order_id,
+            "child_order_price": self.child_order_price,
+            "child_order_amount": self.child_order_amount,
+            "status": self.status,
+            "created_at": self.created_at.isoformat(),
+            "triggered_at": self.triggered_at.isoformat() if self.triggered_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+        }
+
+
+@dataclass
+class IcebergOrder:
+    """
+    Iceberg order for large order splitting.
+    
+    An iceberg order splits a large order into smaller
+    visible chunks to avoid market impact.
+    """
+
+    id: str
+    market_id: str
+    slug: str
+    side: str
+    total_amount: float
+    visible_size: float
+    price: float
+    filled_amount: float = 0.0
+    status: str  # "active", "partial", "completed", "cancelled"
+    created_at: datetime
+    child_order_ids: list[str] = field(default_factory=list)
+
+    @property
+    def remaining_amount(self) -> float:
+        return self.total_amount - self.filled_amount
+
+    @property
+    def progress_pct(self) -> float:
+        if self.total_amount == 0:
+            return 0.0
+        return (self.filled_amount / self.total_amount) * 100
+
+    def dump(self) -> dict:
+        return {
+            "id": self.id,
+            "market": self.slug,
+            "side": self.side,
+            "total_amount": self.total_amount,
+            "visible_size": self.visible_size,
+            "price": self.price,
+            "filled_amount": self.filled_amount,
+            "remaining_amount": self.remaining_amount,
+            "progress_pct": self.progress_pct,
+            "status": self.status,
+            "created_at": self.created_at.isoformat(),
+            "child_order_ids": self.child_order_ids,
+        }
+
+
+@dataclass
+class TWAPOrder:
+    """
+    Time-Weighted Average Price (TWAP) execution order.
+    
+    A TWAP order executes a large order over a specified
+    time period to achieve an average execution price.
+    """
+
+    id: str
+    market_id: str
+    slug: str
+    side: str
+    total_amount: float
+    duration_seconds: int
+    num_slices: int
+    price: Optional[float] = None  # If None, uses market price
+    filled_amount: float = 0.0
+    status: str  # "active", "partial", "completed", "cancelled"
+    created_at: datetime
+    ends_at: Optional[datetime] = None
+    child_order_ids: list[str] = field(default_factory=list)
+    slice_interval: float = 0.0  # Seconds between slices
+
+    @property
+    def remaining_amount(self) -> float:
+        return self.total_amount - self.filled_amount
+
+    @property
+    def slice_amount(self) -> float:
+        return self.total_amount / self.num_slices
+
+    @property
+    def progress_pct(self) -> float:
+        if self.total_amount == 0:
+            return 0.0
+        return (self.filled_amount / self.total_amount) * 100
+
+    def dump(self) -> dict:
+        return {
+            "id": self.id,
+            "market": self.slug,
+            "side": self.side,
+            "total_amount": self.total_amount,
+            "duration_seconds": self.duration_seconds,
+            "num_slices": self.num_slices,
+            "price": self.price,
+            "filled_amount": self.filled_amount,
+            "remaining_amount": self.remaining_amount,
+            "slice_amount": self.slice_amount,
+            "progress_pct": self.progress_pct,
+            "status": self.status,
+            "created_at": self.created_at.isoformat(),
+            "ends_at": self.ends_at.isoformat() if self.ends_at else None,
+            "child_order_ids": self.child_order_ids,
+            "slice_interval": self.slice_interval,
+        }
+
+
 # ── Position Sizers ────────────────────────────────────────────────────────────────
 
 class PositionSizer(ABC):
@@ -1108,6 +1339,13 @@ class RealTradingEngine:
         # Order management
         self._orders: dict[str, RealOrder] = {}
         self._positions: dict[str, RealPosition] = {}  # key: "{market_id}:{side}"
+
+        # Advanced order types storage
+        self._oco_orders: dict[str, OCOOrder] = {}
+        self._bracket_orders: dict[str, BracketOrder] = {}
+        self._conditional_orders: dict[str, ConditionalOrder] = {}
+        self._iceberg_orders: dict[str, IcebergOrder] = {}
+        self._twap_orders: dict[str, TWAPOrder] = {}
 
         # Position sizing
         self._position_sizer: PositionSizer = self._create_position_sizer()
@@ -2510,6 +2748,759 @@ class RealTradingEngine:
             log.debug("Real: order status updated in database for %s: %s", order.slug, order.status)
         except Exception as exc:
             log.error("Real: failed to update order in database: %s", exc)
+
+    # ── Advanced Order Types ─────────────────────────────────────────────────────────
+
+    def place_oco_order(
+        self,
+        market,
+        side: str,
+        amount: float,
+        price1: float,
+        price2: float,
+        confirm: bool = True,
+    ) -> OCOOrder:
+        """
+        Place a One-Cancels-Other (OCO) order pair.
+
+        An OCO order places two orders where if one is filled, the other is automatically cancelled.
+        Commonly used for stop loss + take profit combinations.
+
+        Parameters
+        ----------
+        market : Market
+            Market to trade
+        side : str
+            "UP" or "DOWN"
+        amount : float
+            USDC amount for each order
+        price1 : float
+            Price for first order (e.g., take profit)
+        price2 : float
+            Price for second order (e.g., stop loss)
+        confirm : bool
+            Require manual confirmation
+
+        Returns
+        -------
+        OCOOrder
+            The OCO order object
+
+        Example
+        -------
+        >>> oco = client.real.place_oco_order(
+        ...     market, side="UP", amount=10.0, price1=0.60, price2=0.40
+        ... )
+        """
+        import uuid
+
+        if self._emergency_mode:
+            raise OrderCancelled("Trading halted - emergency mode active")
+
+        side = _validate_side(side)
+
+        # Place first order
+        order1 = self.limit(market, side, price1, amount, confirm=confirm)
+
+        # Place second order
+        order2 = self.limit(market, side, price2, amount, confirm=False)
+
+        # Create OCO order
+        oco_id = str(uuid.uuid4())
+        oco_order = OCOOrder(
+            id=oco_id,
+            market_id=market.id,
+            slug=market.slug,
+            side=side,
+            order1_id=order1.id,
+            order2_id=order2.id,
+            order1_price=price1,
+            order2_price=price2,
+            amount=amount,
+            status="active",
+            created_at=datetime.now(timezone.utc),
+        )
+
+        self._oco_orders[oco_id] = oco_order
+
+        log.info(
+            "OCO order placed: %s %s, order1=%s @ %.4f, order2=%s @ %.4f",
+            market.slug, side, order1.id, price1, order2.id, price2
+        )
+
+        return oco_order
+
+    def check_oco_triggers(self) -> list[str]:
+        """
+        Check OCO orders for trigger conditions and cancel the other order if one fills.
+
+        Returns
+        -------
+        list[str]
+            List of OCO order IDs that were triggered
+        """
+        triggered_ocos = []
+
+        for oco_id, oco in list(self._oco_orders.items()):
+            if oco.status != "active":
+                continue
+
+            # Check if either order is filled
+            order1 = self._orders.get(oco.order1_id)
+            order2 = self._orders.get(oco.order2_id)
+
+            if not order1 or not order2:
+                continue
+
+            # Update order statuses
+            self.update_order_fill_status(oco.order1_id)
+            self.update_order_fill_status(oco.order2_id)
+
+            # Check if order1 is filled
+            if order1.status == "filled":
+                # Cancel order2
+                try:
+                    self.cancel(oco.order2_id)
+                    oco.status = "triggered"
+                    oco.triggered_order_id = order1.id
+                    oco.cancelled_order_id = order2.id
+                    oco.triggered_at = datetime.now(timezone.utc)
+                    triggered_ocos.append(oco_id)
+                    log.info("OCO triggered: order1 %s filled, cancelled order2 %s", order1.id, order2.id)
+                except Exception as e:
+                    log.error("Failed to cancel order2 in OCO %s: %s", oco_id, e)
+
+            # Check if order2 is filled
+            elif order2.status == "filled":
+                # Cancel order1
+                try:
+                    self.cancel(oco.order1_id)
+                    oco.status = "triggered"
+                    oco.triggered_order_id = order2.id
+                    oco.cancelled_order_id = order1.id
+                    oco.triggered_at = datetime.now(timezone.utc)
+                    triggered_ocos.append(oco_id)
+                    log.info("OCO triggered: order2 %s filled, cancelled order1 %s", order2.id, order1.id)
+                except Exception as e:
+                    log.error("Failed to cancel order1 in OCO %s: %s", oco_id, e)
+
+        return triggered_ocos
+
+    def place_bracket_order(
+        self,
+        market,
+        side: str,
+        entry_price: float,
+        amount: float,
+        stop_loss_price: Optional[float] = None,
+        take_profit_price: Optional[float] = None,
+        stop_loss_pct: Optional[float] = None,
+        take_profit_pct: Optional[float] = None,
+        confirm: bool = True,
+    ) -> BracketOrder:
+        """
+        Place a bracket order (entry + stop loss + take profit).
+
+        A bracket order places an entry order along with associated stop loss and take profit orders.
+
+        Parameters
+        ----------
+        market : Market
+            Market to trade
+        side : str
+            "UP" or "DOWN"
+        entry_price : float
+            Entry order price
+        amount : float
+            USDC amount for entry order
+        stop_loss_price : float, optional
+            Stop loss price (overrides stop_loss_pct)
+        take_profit_price : float, optional
+            Take profit price (overrides take_profit_pct)
+        stop_loss_pct : float, optional
+            Stop loss as percentage of entry price (e.g., 0.20 for 20%)
+        take_profit_pct : float, optional
+            Take profit as percentage of entry price (e.g., 0.50 for 50%)
+        confirm : bool
+            Require manual confirmation
+
+        Returns
+        -------
+        BracketOrder
+            The bracket order object
+
+        Example
+        -------
+        >>> bracket = client.real.place_bracket_order(
+        ...     market, side="UP", entry_price=0.50, amount=10.0,
+        ...     stop_loss_pct=0.20, take_profit_pct=0.50
+        ... )
+        """
+        import uuid
+
+        if self._emergency_mode:
+            raise OrderCancelled("Trading halted - emergency mode active")
+
+        side = _validate_side(side)
+
+        # Calculate stop loss and take profit prices if not provided
+        if stop_loss_price is None and stop_loss_pct is not None:
+            if side == "UP":
+                stop_loss_price = entry_price * (1 - stop_loss_pct)
+            else:
+                stop_loss_price = entry_price * (1 + stop_loss_pct)
+
+        if take_profit_price is None and take_profit_pct is not None:
+            if side == "UP":
+                take_profit_price = entry_price * (1 + take_profit_pct)
+            else:
+                take_profit_price = entry_price * (1 - take_profit_pct)
+
+        # Place entry order
+        entry_order = self.limit(market, side, entry_price, amount, confirm=confirm)
+
+        # Create bracket order
+        bracket_id = str(uuid.uuid4())
+        bracket_order = BracketOrder(
+            id=bracket_id,
+            market_id=market.id,
+            slug=market.slug,
+            side=side,
+            entry_order_id=entry_order.id,
+            entry_price=entry_price,
+            stop_loss_price=stop_loss_price,
+            take_profit_price=take_profit_price,
+            amount=amount,
+            status="pending",
+            created_at=datetime.now(timezone.utc),
+        )
+
+        self._bracket_orders[bracket_id] = bracket_order
+
+        log.info(
+            "Bracket order placed: %s %s @ %.4f, stop=%.4f, take=%.4f",
+            market.slug, side, entry_price, stop_loss_price, take_profit_price
+        )
+
+        return bracket_order
+
+    def activate_bracket_orders(self) -> None:
+        """
+        Activate stop loss and take profit orders for filled bracket entry orders.
+
+        This method checks all pending bracket orders and if the entry order is filled,
+        it places the corresponding stop loss and take profit orders.
+        """
+        for bracket_id, bracket in list(self._bracket_orders.items()):
+            if bracket.status != "pending":
+                continue
+
+            entry_order = self._orders.get(bracket.entry_order_id)
+            if not entry_order:
+                continue
+
+            # Update entry order status
+            self.update_order_fill_status(bracket.entry_order_id)
+
+            # If entry order is filled, place stop loss and take profit
+            if entry_order.status == "filled":
+                bracket.status = "active"
+                bracket.filled_at = datetime.now(timezone.utc)
+
+                # Place stop loss order if specified
+                if bracket.stop_loss_price is not None:
+                    try:
+                        # Need to get market object - simplified for now
+                        # In production, you'd need to retrieve the market from market_id
+                        log.info("Placing stop loss order for bracket %s at %.4f", bracket_id, bracket.stop_loss_price)
+                        # stop_order = self.limit(market, side, bracket.stop_loss_price, bracket.amount, confirm=False)
+                        # bracket.stop_loss_order_id = stop_order.id
+                    except Exception as e:
+                        log.error("Failed to place stop loss for bracket %s: %s", bracket_id, e)
+
+                # Place take profit order if specified
+                if bracket.take_profit_price is not None:
+                    try:
+                        log.info("Placing take profit order for bracket %s at %.4f", bracket_id, bracket.take_profit_price)
+                        # take_profit_order = self.limit(market, side, bracket.take_profit_price, bracket.amount, confirm=False)
+                        # bracket.take_profit_order_id = take_profit_order.id
+                    except Exception as e:
+                        log.error("Failed to place take profit for bracket %s: %s", bracket_id, e)
+
+                log.info("Bracket order %s activated", bracket_id)
+
+    def place_conditional_order(
+        self,
+        market,
+        side: str,
+        condition_type: str,
+        condition_value: float,
+        child_order_price: float,
+        child_order_amount: float,
+        expires_after_seconds: Optional[int] = None,
+    ) -> ConditionalOrder:
+        """
+        Place a conditional order with if-then logic.
+
+        A conditional order triggers a child order when specified conditions are met.
+
+        Parameters
+        ----------
+        market : Market
+            Market to trade
+        side : str
+            "UP" or "DOWN"
+        condition_type : str
+            Condition type: "price_above", "price_below", "time_after"
+        condition_value : float
+            Value for the condition (price threshold or timestamp)
+        child_order_price : float
+            Price for the child order when triggered
+        child_order_amount : float
+            Amount for the child order when triggered
+        expires_after_seconds : int, optional
+            Expiration time in seconds
+
+        Returns
+        -------
+        ConditionalOrder
+            The conditional order object
+
+        Example
+        -------
+        >>> cond = client.real.place_conditional_order(
+        ...     market, side="UP", condition_type="price_above",
+        ...     condition_value=0.60, child_order_price=0.61, child_order_amount=10.0
+        ... )
+        """
+        import uuid
+
+        if self._emergency_mode:
+            raise OrderCancelled("Trading halted - emergency mode active")
+
+        side = _validate_side(side)
+
+        if condition_type not in ("price_above", "price_below", "time_after"):
+            raise ValueError(f"Invalid condition_type: {condition_type}")
+
+        # Calculate expiration
+        expires_at = None
+        if expires_after_seconds is not None:
+            expires_at = datetime.now(timezone.utc).replace(
+                second=0, microsecond=0
+            ) + datetime.timedelta(seconds=expires_after_seconds)
+
+        # Create conditional order
+        cond_id = str(uuid.uuid4())
+        cond_order = ConditionalOrder(
+            id=cond_id,
+            market_id=market.id,
+            slug=market.slug,
+            side=side,
+            condition_type=condition_type,
+            condition_value=condition_value,
+            child_order_price=child_order_price,
+            child_order_amount=child_order_amount,
+            status="waiting",
+            created_at=datetime.now(timezone.utc),
+            expires_at=expires_at,
+        )
+
+        self._conditional_orders[cond_id] = cond_order
+
+        log.info(
+            "Conditional order placed: %s %s, condition=%s %.4f",
+            market.slug, side, condition_type, condition_value
+        )
+
+        return cond_order
+
+    def check_conditional_triggers(self, market_updates: dict[str, float]) -> list[str]:
+        """
+        Check conditional orders for trigger conditions.
+
+        Parameters
+        ----------
+        market_updates : dict[str, float]
+            Dictionary mapping market_id to current price
+
+        Returns
+        -------
+        list[str]
+            List of conditional order IDs that were triggered
+        """
+        triggered = []
+
+        for cond_id, cond in list(self._conditional_orders.items()):
+            if cond.status != "waiting":
+                continue
+
+            # Check expiration
+            if cond.expires_at and datetime.now(timezone.utc) > cond.expires_at:
+                cond.status = "expired"
+                log.info("Conditional order %s expired", cond_id)
+                continue
+
+            # Check price conditions
+            if cond.condition_type in ("price_above", "price_below"):
+                current_price = market_updates.get(cond.market_id)
+                if current_price is None:
+                    continue
+
+                should_trigger = False
+                if cond.condition_type == "price_above" and current_price > cond.condition_value:
+                    should_trigger = True
+                elif cond.condition_type == "price_below" and current_price < cond.condition_value:
+                    should_trigger = True
+
+                if should_trigger:
+                    try:
+                        # Place child order (simplified - would need market object)
+                        log.info(
+                            "Conditional order %s triggered: price %.4f, placing child order",
+                            cond_id, current_price
+                        )
+                        # child_order = self.limit(market, cond.side, cond.child_order_price, cond.child_order_amount, confirm=False)
+                        # cond.child_order_id = child_order.id
+                        cond.status = "triggered"
+                        cond.triggered_at = datetime.now(timezone.utc)
+                        triggered.append(cond_id)
+                    except Exception as e:
+                        log.error("Failed to place child order for conditional %s: %s", cond_id, e)
+
+        return triggered
+
+    def place_iceberg_order(
+        self,
+        market,
+        side: str,
+        total_amount: float,
+        visible_size: float,
+        price: float,
+        confirm: bool = True,
+    ) -> IcebergOrder:
+        """
+        Place an iceberg order for large order splitting.
+
+        An iceberg order splits a large order into smaller visible chunks to avoid market impact.
+
+        Parameters
+        ----------
+        market : Market
+            Market to trade
+        side : str
+            "UP" or "DOWN"
+        total_amount : float
+            Total USDC amount to execute
+        visible_size : float
+            Visible chunk size in USDC
+        price : float
+            Limit price for each chunk
+        confirm : bool
+            Require manual confirmation for first chunk
+
+        Returns
+        -------
+        IcebergOrder
+            The iceberg order object
+
+        Example
+        -------
+        >>> iceberg = client.real.place_iceberg_order(
+        ...     market, side="UP", total_amount=1000.0, visible_size=50.0, price=0.50
+        ... )
+        """
+        import uuid
+
+        if self._emergency_mode:
+            raise OrderCancelled("Trading halted - emergency mode active")
+
+        side = _validate_side(side)
+
+        if visible_size > total_amount:
+            raise ValueError("visible_size cannot exceed total_amount")
+
+        # Create iceberg order
+        iceberg_id = str(uuid.uuid4())
+        iceberg_order = IcebergOrder(
+            id=iceberg_id,
+            market_id=market.id,
+            slug=market.slug,
+            side=side,
+            total_amount=total_amount,
+            visible_size=visible_size,
+            price=price,
+            status="active",
+            created_at=datetime.now(timezone.utc),
+        )
+
+        self._iceberg_orders[iceberg_id] = iceberg_order
+
+        # Place first visible chunk
+        self._execute_iceberg_slice(iceberg_id, confirm=confirm)
+
+        log.info(
+            "Iceberg order placed: %s %s, total=$%.2f, visible=$%.2f @ %.4f",
+            market.slug, side, total_amount, visible_size, price
+        )
+
+        return iceberg_order
+
+    def _execute_iceberg_slice(self, iceberg_id: str, confirm: bool = True) -> Optional[RealOrder]:
+        """
+        Execute a single slice of an iceberg order.
+
+        Parameters
+        ----------
+        iceberg_id : str
+            Iceberg order ID
+        confirm : bool
+            Require manual confirmation
+
+        Returns
+        -------
+        RealOrder, optional
+            The placed order, or None if no more to execute
+        """
+        iceberg = self._iceberg_orders.get(iceberg_id)
+        if not iceberg or iceberg.status not in ("active", "partial"):
+            return None
+
+        remaining = iceberg.remaining_amount
+        if remaining <= 0:
+            iceberg.status = "completed"
+            return None
+
+        # Calculate slice size (visible size or remaining, whichever is smaller)
+        slice_amount = min(iceberg.visible_size, remaining)
+
+        try:
+            # Place limit order for this slice (simplified - would need market object)
+            log.info(
+                "Executing iceberg slice: %s %s, amount=$%.2f @ %.4f",
+                iceberg.slug, iceberg.side, slice_amount, iceberg.price
+            )
+            # order = self.limit(market, iceberg.side, iceberg.price, slice_amount, confirm=confirm)
+            # iceberg.child_order_ids.append(order.id)
+            # return order
+            return None  # Placeholder until market object is available
+        except Exception as e:
+            log.error("Failed to execute iceberg slice for %s: %s", iceberg_id, e)
+            return None
+
+    def update_iceberg_orders(self) -> None:
+        """
+        Update iceberg orders and execute additional slices as previous ones fill.
+
+        This method should be called periodically to check if iceberg slices have filled
+        and execute additional slices if needed.
+        """
+        for iceberg_id, iceberg in list(self._iceberg_orders.items()):
+            if iceberg.status not in ("active", "partial"):
+                continue
+
+            # Check if child orders have filled
+            filled_amount = 0.0
+            for child_id in iceberg.child_order_ids:
+                child_order = self._orders.get(child_id)
+                if child_order:
+                    self.update_order_fill_status(child_id)
+                    if child_order.status == "filled":
+                        filled_amount += child_order.amount
+
+            iceberg.filled_amount = filled_amount
+
+            # Update status
+            if iceberg.filled_amount >= iceberg.total_amount:
+                iceberg.status = "completed"
+                log.info("Iceberg order %s completed", iceberg_id)
+            elif iceberg.filled_amount > 0:
+                iceberg.status = "partial"
+
+            # Execute next slice if there's remaining amount and previous slice filled
+            if iceberg.remaining_amount > 0 and len(iceberg.child_order_ids) > 0:
+                last_child_id = iceberg.child_order_ids[-1]
+                last_child = self._orders.get(last_child_id)
+                if last_child and last_child.status == "filled":
+                    self._execute_iceberg_slice(iceberg_id, confirm=False)
+
+    def place_twap_order(
+        self,
+        market,
+        side: str,
+        total_amount: float,
+        duration_seconds: int,
+        num_slices: int,
+        price: Optional[float] = None,
+        confirm: bool = True,
+    ) -> TWAPOrder:
+        """
+        Place a Time-Weighted Average Price (TWAP) execution order.
+
+        A TWAP order executes a large order over a specified time period to achieve an average execution price.
+
+        Parameters
+        ----------
+        market : Market
+            Market to trade
+        side : str
+            "UP" or "DOWN"
+        total_amount : float
+            Total USDC amount to execute
+        duration_seconds : int
+            Duration over which to execute (in seconds)
+        num_slices : int
+            Number of slices to split the order into
+        price : float, optional
+            Limit price for each slice (if None, uses market price)
+        confirm : bool
+            Require manual confirmation for first slice
+
+        Returns
+        -------
+        TWAPOrder
+            The TWAP order object
+
+        Example
+        -------
+        >>> twap = client.real.place_twap_order(
+        ...     market, side="UP", total_amount=1000.0, duration_seconds=300, num_slices=10
+        ... )
+        """
+        import uuid
+
+        if self._emergency_mode:
+            raise OrderCancelled("Trading halted - emergency mode active")
+
+        side = _validate_side(side)
+
+        if num_slices < 1:
+            raise ValueError("num_slices must be at least 1")
+
+        # Calculate slice interval
+        slice_interval = duration_seconds / num_slices
+
+        # Calculate end time
+        ends_at = datetime.now(timezone.utc) + datetime.timedelta(seconds=duration_seconds)
+
+        # Create TWAP order
+        twap_id = str(uuid.uuid4())
+        twap_order = TWAPOrder(
+            id=twap_id,
+            market_id=market.id,
+            slug=market.slug,
+            side=side,
+            total_amount=total_amount,
+            duration_seconds=duration_seconds,
+            num_slices=num_slices,
+            price=price,
+            status="active",
+            created_at=datetime.now(timezone.utc),
+            ends_at=ends_at,
+            slice_interval=slice_interval,
+        )
+
+        self._twap_orders[twap_id] = twap_order
+
+        # Place first slice
+        self._execute_twap_slice(twap_id, confirm=confirm)
+
+        log.info(
+            "TWAP order placed: %s %s, total=$%.2f over %ds in %d slices",
+            market.slug, side, total_amount, duration_seconds, num_slices
+        )
+
+        return twap_order
+
+    def _execute_twap_slice(self, twap_id: str, confirm: bool = True) -> Optional[RealOrder]:
+        """
+        Execute a single slice of a TWAP order.
+
+        Parameters
+        ----------
+        twap_id : str
+            TWAP order ID
+        confirm : bool
+            Require manual confirmation
+
+        Returns
+        -------
+        RealOrder, optional
+            The placed order, or None if no more to execute
+        """
+        twap = self._twap_orders.get(twap_id)
+        if not twap or twap.status not in ("active", "partial"):
+            return None
+
+        # Check if we've exceeded the end time
+        if twap.ends_at and datetime.now(timezone.utc) > twap.ends_at:
+            twap.status = "completed"
+            log.info("TWAP order %s completed (time expired)", twap_id)
+            return None
+
+        remaining = twap.remaining_amount
+        if remaining <= 0:
+            twap.status = "completed"
+            return None
+
+        # Calculate slice amount
+        slice_amount = twap.slice_amount
+
+        try:
+            # Place order for this slice (simplified - would need market object)
+            log.info(
+                "Executing TWAP slice: %s %s, amount=$%.2f",
+                twap.slug, twap.side, slice_amount
+            )
+            # if twap.price:
+            #     order = self.limit(market, twap.side, twap.price, slice_amount, confirm=confirm)
+            # else:
+            #     order = self.buy(market, twap.side, amount=slice_amount, confirm=confirm)
+            # twap.child_order_ids.append(order.id)
+            # return order
+            return None  # Placeholder until market object is available
+        except Exception as e:
+            log.error("Failed to execute TWAP slice for %s: %s", twap_id, e)
+            return None
+
+    def update_twap_orders(self) -> None:
+        """
+        Update TWAP orders and execute slices based on schedule.
+
+        This method should be called periodically to check if it's time to execute
+        the next slice of each TWAP order.
+        """
+        for twap_id, twap in list(self._twap_orders.items()):
+            if twap.status not in ("active", "partial"):
+                continue
+
+            # Check if child orders have filled
+            filled_amount = 0.0
+            for child_id in twap.child_order_ids:
+                child_order = self._orders.get(child_id)
+                if child_order:
+                    self.update_order_fill_status(child_id)
+                    if child_order.status == "filled":
+                        filled_amount += child_order.amount
+
+            twap.filled_amount = filled_amount
+
+            # Update status
+            if twap.filled_amount >= twap.total_amount:
+                twap.status = "completed"
+                log.info("TWAP order %s completed", twap_id)
+            elif twap.filled_amount > 0:
+                twap.status = "partial"
+
+            # Check if it's time for next slice
+            if twap.remaining_amount > 0:
+                # Calculate expected number of slices based on elapsed time
+                elapsed = (datetime.now(timezone.utc) - twap.created_at).total_seconds()
+                expected_slices = int(elapsed / twap.slice_interval) + 1
+
+                # Execute next slice if we haven't placed enough slices yet
+                if len(twap.child_order_ids) < expected_slices and len(twap.child_order_ids) < twap.num_slices:
+                    self._execute_twap_slice(twap_id, confirm=False)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────

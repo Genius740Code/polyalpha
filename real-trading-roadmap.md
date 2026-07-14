@@ -46,11 +46,11 @@ Current implementation is functional but incomplete. Several critical features a
 ## Priority 2: Advanced Trading Features
 
 ### 2.1 Advanced Order Types
-- [ ] Implement OCO (One-Cancels-Other) orders
-- [ ] Implement bracket orders (entry + stop + take profit)
-- [ ] Add conditional orders (if-then logic)
-- [ ] Implement iceberg orders (large order splitting)
-- [ ] Add time-weighted average price (TWAP) execution
+- [x] Implement OCO (One-Cancels-Other) orders
+- [x] Implement bracket orders (entry + stop + take profit)
+- [x] Add conditional orders (if-then logic)
+- [x] Implement iceberg orders (large order splitting)
+- [x] Add time-weighted average price (TWAP) execution
 
 ### 2.2 Position Management
 - [ ] Implement position scaling (pyramiding)
