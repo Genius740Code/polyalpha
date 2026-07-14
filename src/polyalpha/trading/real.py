@@ -637,68 +637,233 @@ class WalletManager:
         log.info("WalletManager initialized")
 
     def _init_web3(self) -> None:
-        """Initialize Web3.py and contracts (lazy loading)."""
+        """Initialize Web3.py and contracts (mandatory for production)."""
+        from web3 import Web3
+        from eth_account import Account
+
+        self._web3 = Web3(Web3.HTTPProvider(self._rpc_url))
+        account = Account.from_key(self._private_key)
+        self._address = account.address
+
+        # USDC contract on Polygon (minimal ABI for balance and allowance)
+        usdc_abi = [
+            {
+                "constant": True,
+                "inputs": [{"name": "_owner", "type": "address"}],
+                "name": "balanceOf",
+                "outputs": [{"name": "balance", "type": "uint256"}],
+                "type": "function",
+            },
+            {
+                "constant": True,
+                "inputs": [
+                    {"name": "_owner", "type": "address"},
+                    {"name": "_spender", "type": "address"},
+                ],
+                "name": "allowance",
+                "outputs": [{"name": "", "type": "uint256"}],
+                "type": "function",
+            },
+            {
+                "constant": False,
+                "inputs": [
+                    {"name": "_spender", "type": "address"},
+                    {"name": "_value", "type": "uint256"},
+                ],
+                "name": "approve",
+                "outputs": [{"name": "", "type": "bool"}],
+                "type": "function",
+            },
+            {
+                "constant": True,
+                "inputs": [],
+                "name": "decimals",
+                "outputs": [{"name": "", "type": "uint8"}],
+                "type": "function",
+            },
+        ]
+        usdc_address = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # Polygon USDC
+        self._usdc_contract = self._web3.eth.contract(
+            address=usdc_address,
+            abi=usdc_abi
+        )
+
+        # Initialize nonce management
+        self._nonce: int = self._web3.eth.get_transaction_count(self._address)
+        self._pending_transactions: dict[str, dict] = {}  # tx_hash -> {nonce, timestamp, retry_count}
+
+        # Gas cost tracking
+        self._total_gas_spent: float = 0.0
+        self._gas_cost_usd: float = 0.0
+
+        log.info("Web3.py initialized for address %s", self._address)
+
+    def _build_transaction_params(self, gas_estimate: int, to_address: str) -> dict:
+        """
+        Build transaction parameters with EIP-1559 gas management.
+
+        Parameters
+        ----------
+        gas_estimate : int
+            Estimated gas for the transaction
+        to_address : str
+            Destination address
+
+        Returns
+        -------
+        dict
+            Transaction parameters
+        """
+        # Get current gas price from network
+        latest_block = self._web3.eth.get_block('latest')
+        base_fee = latest_block.get('baseFeePerGas', 0)
+        
+        # EIP-1559: maxFeePerGas = baseFee + maxPriorityFeePerGas
+        # Set priority fee to 2 Gwei (2000000000 wei)
+        max_priority_fee_per_gas = self._web3.to_wei(2, 'gwei')
+        
+        # Set max fee to baseFee + 3 Gwei (cushion for baseFee increases)
+        max_fee_per_gas = base_fee + self._web3.to_wei(3, 'gwei')
+        
+        # Get and increment nonce
+        nonce = self._get_next_nonce()
+        
+        return {
+            'from': self._address,
+            'gas': gas_estimate,
+            'maxFeePerGas': max_fee_per_gas,
+            'maxPriorityFeePerGas': max_priority_fee_per_gas,
+            'nonce': nonce,
+            'type': 2,  # EIP-1559 transaction type
+        }
+
+    def _get_next_nonce(self) -> int:
+        """
+        Get next nonce with proper management for concurrent transactions.
+
+        Returns
+        -------
+        int
+            Next nonce to use
+        """
+        # Get current network nonce
+        network_nonce = self._web3.eth.get_transaction_count(self._address)
+        
+        # Use the higher of network nonce or local nonce
+        if self._nonce < network_nonce:
+            self._nonce = network_nonce
+        
+        current_nonce = self._nonce
+        self._nonce += 1
+        
+        return current_nonce
+
+    def _track_pending_transaction(self, tx_hash: str, nonce: int) -> None:
+        """
+        Track a pending transaction for potential re-broadcast.
+
+        Parameters
+        ----------
+        tx_hash : str
+            Transaction hash
+        nonce : int
+            Transaction nonce
+        """
+        self._pending_transactions[tx_hash] = {
+            'nonce': nonce,
+            'timestamp': time.time(),
+            'retry_count': 0,
+        }
+
+    def _rebroadcast_transaction(self, tx_hash: str) -> dict:
+        """
+        Re-broadcast a transaction that timed out.
+
+        Parameters
+        ----------
+        tx_hash : str
+            Transaction hash to re-broadcast
+
+        Returns
+        -------
+        dict
+            Transaction receipt or error info
+        """
+        if tx_hash not in self._pending_transactions:
+            log.error("Cannot re-broadcast %s: not tracked as pending", tx_hash)
+            return {'status': 0, 'error': 'Transaction not tracked'}
+        
+        tx_info = self._pending_transactions[tx_hash]
+        retry_count = tx_info['retry_count']
+        
+        if retry_count >= 3:
+            log.error("Transaction %s exceeded max retry attempts", tx_hash)
+            return {'status': 0, 'error': 'Max retries exceeded'}
+        
         try:
-            from web3 import Web3
+            # Get the original transaction
+            tx = self._web3.eth.get_transaction(tx_hash)
+            
+            # Re-broadcast with higher gas price
             from eth_account import Account
+            
+            # Increase gas price by 20% for re-broadcast
+            new_max_fee = int(tx['maxFeePerGas'] * 1.2)
+            new_priority_fee = int(tx['maxPriorityFeePerGas'] * 1.2)
+            
+            # Rebuild transaction with higher gas
+            tx_dict = {
+                'to': tx['to'],
+                'from': tx['from'],
+                'value': tx['value'],
+                'data': tx['input'],
+                'gas': tx['gas'],
+                'maxFeePerGas': new_max_fee,
+                'maxPriorityFeePerGas': new_priority_fee,
+                'nonce': tx['nonce'],
+                'type': 2,
+                'chainId': tx['chainId'],
+            }
+            
+            signed_tx = Account.sign_transaction(tx_dict, self._private_key)
+            new_tx_hash = self._web3.eth.send_raw_transaction(signed_tx.raw_transaction)
+            new_tx_hash_hex = new_tx_hash.hex()
+            
+            # Update tracking
+            tx_info['retry_count'] += 1
+            del self._pending_transactions[tx_hash]
+            self._track_pending_transaction(new_tx_hash_hex, tx['nonce'])
+            
+            log.info("Re-broadcast transaction %s as %s (attempt %d)", tx_hash, new_tx_hash_hex, retry_count + 1)
+            
+            # Wait for the new transaction
+            return self.wait_for_transaction(new_tx_hash_hex, timeout=60)
+            
+        except Exception as e:
+            log.error("Failed to re-broadcast transaction %s: %s", tx_hash, e)
+            return {'status': 0, 'error': str(e)}
 
-            self._web3 = Web3(Web3.HTTPProvider(self._rpc_url))
-            account = Account.from_key(self._private_key)
-            self._address = account.address
+    def get_gas_stats(self) -> dict:
+        """
+        Get gas cost statistics.
 
-            # USDC contract on Polygon (minimal ABI for balance and allowance)
-            usdc_abi = [
-                {
-                    "constant": True,
-                    "inputs": [{"name": "_owner", "type": "address"}],
-                    "name": "balanceOf",
-                    "outputs": [{"name": "balance", "type": "uint256"}],
-                    "type": "function",
-                },
-                {
-                    "constant": True,
-                    "inputs": [
-                        {"name": "_owner", "type": "address"},
-                        {"name": "_spender", "type": "address"},
-                    ],
-                    "name": "allowance",
-                    "outputs": [{"name": "", "type": "uint256"}],
-                    "type": "function",
-                },
-                {
-                    "constant": False,
-                    "inputs": [
-                        {"name": "_spender", "type": "address"},
-                        {"name": "_value", "type": "uint256"},
-                    ],
-                    "name": "approve",
-                    "outputs": [{"name": "", "type": "bool"}],
-                    "type": "function",
-                },
-                {
-                    "constant": True,
-                    "inputs": [],
-                    "name": "decimals",
-                    "outputs": [{"name": "", "type": "uint8"}],
-                    "type": "function",
-                },
-            ]
-            usdc_address = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # Polygon USDC
-            self._usdc_contract = self._web3.eth.contract(
-                address=usdc_address,
-                abi=usdc_abi
-            )
-
-            log.info("Web3.py initialized for address %s", self._address)
-        except ImportError:
-            log.warning("Web3.py not installed. Wallet operations will be simulated.")
-            self._address = "0x" + self._private_key[:40]  # Simulated address
+        Returns
+        -------
+        dict
+            Gas statistics including total_gas_spent, gas_cost_usd, pending_transactions
+        """
+        return {
+            'total_gas_spent': self._total_gas_spent,
+            'gas_cost_usd': self._gas_cost_usd,
+            'pending_transactions': len(self._pending_transactions),
+            'current_nonce': self._nonce,
+        }
 
     def get_address(self) -> str:
         """Get wallet address."""
         if self._address is None:
             self._init_web3()
-        return self._address or "0x" + self._private_key[:40]
+        return self._address
 
     def get_balance(self) -> float:
         """
@@ -707,92 +872,104 @@ class WalletManager:
         Returns
         -------
         float
-            USDC balance (simulated if Web3 not available)
+            USDC balance
         """
         if self._web3 is None:
             self._init_web3()
 
-        if self._web3 and self._usdc_contract:
-            try:
-                balance_raw = self._usdc_contract.functions.balanceOf(
-                    self._address
-                ).call()
-                self._balance = float(balance_raw) / 1e6  # USDC has 6 decimals
-            except Exception as e:
-                log.error("Failed to fetch balance: %s", e)
-                self._balance = 0.0
+        try:
+            balance_raw = self._usdc_contract.functions.balanceOf(
+                self._address
+            ).call()
+            self._balance = float(balance_raw) / 1e6  # USDC has 6 decimals
+        except Exception as e:
+            log.error("Failed to fetch balance: %s", e)
+            raise
 
         return self._balance
 
-    def get_allowance(self) -> float:
+    def get_allowance(self, spender_address: str) -> float:
         """
-        Get CLOB allowance for trading.
+        Get allowance for a specific spender.
+
+        Parameters
+        ----------
+        spender_address : str
+            Address of the spender (e.g., CLOB contract)
 
         Returns
         -------
         float
-            CLOB allowance (simulated if Web3 not available)
+            Allowance in USDC
         """
         if self._web3 is None:
             self._init_web3()
 
-        if self._web3 and self._clob_contract:
-            try:
-                allowance_raw = self._usdc_contract.functions.allowance(
-                    self._address,
-                    self._clob_contract.address
-                ).call()
-                self._allowance = float(allowance_raw) / 1e6
-            except Exception as e:
-                log.error("Failed to fetch allowance: %s", e)
-                self._allowance = 0.0
+        try:
+            allowance_raw = self._usdc_contract.functions.allowance(
+                self._address,
+                spender_address
+            ).call()
+            self._allowance = float(allowance_raw) / 1e6
+        except Exception as e:
+            log.error("Failed to fetch allowance: %s", e)
+            raise
 
         return self._allowance
 
-    def approve_clob(self, amount: float) -> str:
+    def approve_spender(self, spender_address: str, amount: float) -> str:
         """
-        Approve CLOB contract to spend USDC.
+        Approve a spender to spend USDC.
 
         Parameters
         ----------
+        spender_address : str
+            Address of the spender (e.g., CLOB contract)
         amount : float
             Amount to approve (use very large number for unlimited)
 
         Returns
         -------
         str
-            Transaction hash (simulated if Web3 not available)
+            Transaction hash
         """
         if self._web3 is None:
             self._init_web3()
 
-        if self._web3 and self._usdc_contract and self._clob_contract:
-            try:
-                amount_raw = int(amount * 1e6)
-                tx = self._usdc_contract.functions.approve(
-                    self._clob_contract.address,
-                    amount_raw
-                ).build_transaction({
-                    'from': self._address,
-                    'gas': 100000,
-                    'gasPrice': self._web3.eth.gas_price,
-                    'nonce': self._web3.eth.get_transaction_count(self._address),
-                })
+        try:
+            amount_raw = int(amount * 1e6)
+            
+            # Estimate gas
+            gas_estimate = self._usdc_contract.functions.approve(
+                spender_address,
+                amount_raw
+            ).estimate_gas({'from': self._address})
+            
+            # Build transaction with EIP-1559 gas params
+            tx_params = self._build_transaction_params(
+                gas_estimate=gas_estimate,
+                to_address=spender_address
+            )
+            
+            tx = self._usdc_contract.functions.approve(
+                spender_address,
+                amount_raw
+            ).build_transaction(tx_params)
 
-                # Sign and send transaction
-                from eth_account import Account
-                signed_tx = Account.sign_transaction(tx, self._private_key)
-                tx_hash = self._web3.eth.send_raw_transaction(signed_tx.raw_transaction)
-                log.info("CLOB approval transaction sent: %s", tx_hash.hex())
-                return tx_hash.hex()
-            except Exception as e:
-                log.error("Failed to approve CLOB: %s", e)
-                raise
-
-        # Simulated approval (fallback when CLOB contract not set up)
-        self._allowance = amount
-        log.info("Simulated CLOB approval for %f USDC", amount)
-        return "0x" + "0" * 64
+            # Sign and send transaction
+            from eth_account import Account
+            signed_tx = Account.sign_transaction(tx, self._private_key)
+            tx_hash = self._web3.eth.send_raw_transaction(signed_tx.raw_transaction)
+            tx_hash_hex = tx_hash.hex()
+            
+            # Track pending transaction
+            self._track_pending_transaction(tx_hash_hex, tx_params['nonce'])
+            
+            log.info("Approval transaction sent: %s", tx_hash_hex)
+            return tx_hash_hex
+        except Exception as e:
+            log.error("Failed to approve spender: %s", e)
+            raise
 
     def refresh_balance(self) -> None:
         """Refresh balance from blockchain."""
@@ -800,9 +977,9 @@ class WalletManager:
         if self._log_balance_updates:
             log.info("Balance refreshed: $%.2f", self._balance)
 
-    def wait_for_transaction(self, tx_hash: str, timeout: int = 60) -> dict:
+    def wait_for_transaction(self, tx_hash: str, timeout: int = 120, poll_interval: float = 1.0) -> dict:
         """
-        Wait for transaction confirmation.
+        Wait for transaction confirmation with polling.
 
         Parameters
         ----------
@@ -810,43 +987,63 @@ class WalletManager:
             Transaction hash
         timeout : int
             Timeout in seconds
+        poll_interval : float
+            Polling interval in seconds
 
         Returns
         -------
         dict
-            Transaction receipt
+            Transaction receipt with status, gas_used, block_number, gas_cost_usd
         """
         if self._web3 is None:
             self._init_web3()
 
-        if self._web3:
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
             try:
-                receipt = self._web3.eth.wait_for_transaction_receipt(
-                    tx_hash,
-                    timeout=timeout
-                )
-                return {
-                    'status': receipt['status'],
-                    'gas_used': receipt['gasUsed'],
-                    'block_number': receipt['blockNumber'],
-                }
+                receipt = self._web3.eth.get_transaction_receipt(tx_hash)
+                
+                if receipt is not None:
+                    # Transaction confirmed
+                    gas_used = receipt['gasUsed']
+                    block_number = receipt['blockNumber']
+                    
+                    # Calculate gas cost in USD (approximate using MATIC price)
+                    gas_cost_wei = gas_used * receipt.get('effectiveGasPrice', 0)
+                    gas_cost_matic = float(self._web3.from_wei(gas_cost_wei, 'ether'))
+                    gas_cost_usd = gas_cost_matic * 0.5  # Approximate MATIC/USD price
+                    
+                    # Update gas tracking
+                    self._total_gas_spent += float(gas_used)
+                    self._gas_cost_usd += gas_cost_usd
+                    
+                    # Remove from pending transactions
+                    if tx_hash in self._pending_transactions:
+                        del self._pending_transactions[tx_hash]
+                    
+                    log.info(
+                        "Transaction %s confirmed in block %d. Gas used: %d, Cost: $%.4f",
+                        tx_hash, block_number, gas_used, gas_cost_usd
+                    )
+                    
+                    return {
+                        'status': receipt['status'],
+                        'gas_used': int(gas_used),
+                        'block_number': block_number,
+                        'gas_cost_usd': gas_cost_usd,
+                        'effective_gas_price': receipt.get('effectiveGasPrice', 0),
+                    }
+                
             except Exception as e:
-                log.error("Transaction %s failed or timed out: %s", tx_hash, e)
-                # Fall back to simulated receipt for testing
-                log.info("Using simulated transaction receipt")
-                return {
-                    'status': 1,
-                    'gas_used': 50000,
-                    'block_number': 12345678,
-                }
-
-        # Simulated receipt (fallback when Web3 not available)
-        log.info("Simulated transaction receipt for %s", tx_hash)
-        return {
-            'status': 1,
-            'gas_used': 50000,
-            'block_number': 12345678,
-        }
+                # Transaction not yet mined
+                pass
+            
+            time.sleep(poll_interval)
+        
+        # Timeout - try to re-broadcast
+        log.warning("Transaction %s timed out after %d seconds, attempting re-broadcast", tx_hash, timeout)
+        return self._rebroadcast_transaction(tx_hash)
 
 
 # ── Real Trading Engine ───────────────────────────────────────────────────────────
@@ -1134,7 +1331,7 @@ class RealTradingEngine:
             checks["allowance_ok"] = False
             checks["warnings"].append(
                 f"Insufficient CLOB allowance: need ${amount:.2f}, have ${self._allowance:.2f}. "
-                f"Call approve_clob() to increase allowance."
+                f"Call approve_spender() to increase allowance."
             )
             # Allowance warning doesn't block trade (can be auto-approved), but warn user
 

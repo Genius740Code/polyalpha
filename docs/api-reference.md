@@ -524,30 +524,46 @@ Get wallet address.
 
 Get current USDC balance.
 
-#### `get_allowance() → float`
+#### `get_allowance(spender_address) → float`
 
-Get CLOB allowance for trading.
-
-#### `approve_clob(amount) → str`
-
-Approve CLOB contract to spend USDC.
+Get allowance for a specific spender (e.g., CLOB contract).
 
 | Parameter | Type | Description |
 |---|---|---|
+| `spender_address` | `str` | Address of the spender |
+
+#### `approve_spender(spender_address, amount) → str`
+
+Approve a spender to spend USDC.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `spender_address` | `str` | Address of the spender |
 | `amount` | `float` | Amount to approve |
 
 #### `refresh_balance() → None`
 
 Refresh balance from blockchain.
 
-#### `wait_for_transaction(tx_hash, timeout=60) → dict`
+#### `wait_for_transaction(tx_hash, timeout=120, poll_interval=1.0) → dict`
 
-Wait for transaction confirmation.
+Wait for transaction confirmation with polling.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `tx_hash` | `str` | — | Transaction hash |
-| `timeout` | `int` | `60` | Timeout in seconds |
+| `timeout` | `int` | `120` | Timeout in seconds |
+| `poll_interval` | `float` | `1.0` | Polling interval in seconds |
+
+#### `get_gas_stats() → dict`
+
+Get gas cost statistics.
+
+Returns a dictionary with:
+- `total_gas_spent`: Total gas units spent
+- `gas_cost_usd`: Total gas cost in USD
+- `pending_transactions`: Number of pending transactions
+- `current_nonce`: Current nonce value
 
 ---
 

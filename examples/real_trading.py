@@ -379,13 +379,14 @@ def wallet_management():
     client.real.refresh_balance()
     print(f"Balance: ${client.real.balance:.2f}")
     
-    # Check CLOB allowance
-    allowance = client.real._wallet.get_allowance()
+    # Check CLOB allowance (requires CLOB contract address)
+    clob_address = "0x4D16C7936c63648848F7C1d7A5bCfC6C6fF1C8f7"  # Example CLOB contract address
+    allowance = client.real._wallet.get_allowance(clob_address)
     print(f"CLOB Allowance: ${allowance:.2f}")
     
     # Approve CLOB if needed
     if allowance < 100.0:
-        tx_hash = client.real._wallet.approve_clob(10000.0)
+        tx_hash = client.real._wallet.approve_spender(clob_address, 10000.0)
         print(f"CLOB approval transaction: {tx_hash}")
 
 
