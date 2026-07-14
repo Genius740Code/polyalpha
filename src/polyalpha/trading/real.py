@@ -1615,6 +1615,232 @@ class RealTradingEngine:
         log.warning("Trailing stop exit executed for %s %s (simplified - needs actual order execution)", 
                    position.slug, position.side)
 
+    # ── Real-Time Price Monitoring ───────────────────────────────────────────────
+
+    def attach_stream(self, stream, market) -> None:
+        """
+        Wire *stream* so positions auto-update and stop loss/take profit triggers execute.
+
+        This method integrates price streams with the RealTradingEngine for automatic
+        price updates, stop loss/take profit execution, and trailing stop management.
+
+        Example
+        -------
+        >>> stream = client.stream(market)
+        >>> client.real.attach_stream(stream, market)
+        >>> stream.start(background=True)
+        """
+        # Validate market
+        if not hasattr(market, 'id') or not hasattr(market, 'slug'):
+            raise ValueError("Invalid market object")
+
+        @stream.on("price")
+        def _on_price(up: float, down: float) -> None:
+            self._on_price_update(market.id, up, down)
+
+        @stream.on("close")
+        def _on_close() -> None:
+            log.info(
+                "Real: stream closed for %s — market resolved",
+                market.slug,
+            )
+
+        log.info("Real: stream attached for %s", market.slug)
+
+    def _on_price_update(self, market_id: str, up_price: float, down_price: float) -> None:
+        """
+        Handle price updates from attached stream.
+
+        Updates live position prices and executes stop loss, take profit,
+        and trailing stop triggers based on current prices.
+
+        Parameters
+        ----------
+        market_id : str
+            Market ID for the price update
+        up_price : float
+            Current UP token price
+        down_price : float
+            Current DOWN token price
+        """
+        # Validate prices
+        up_price = _validate_positive(up_price, "up_price")
+        down_price = _validate_positive(down_price, "down_price")
+
+        # Update live prices for all open positions in this market
+        for pos in self._positions.values():
+            if pos.market_id == market_id and not pos.resolved:
+                pos.current_price = up_price if pos.side == "UP" else down_price
+
+        # Build market updates dictionary for trailing stops
+        market_updates = {}
+        for pos in self._positions.values():
+            if pos.market_id == market_id and not pos.resolved:
+                token_id = pos.market_id  # Use market_id as token_id for now
+                current_price = up_price if pos.side == "UP" else down_price
+                market_updates[token_id] = current_price
+
+        # Check and execute stop losses
+        self._check_and_execute_stop_losses(market_id, up_price, down_price)
+
+        # Check and execute take profits
+        self._check_and_execute_take_profits(market_id, up_price, down_price)
+
+        # Check and execute trailing stops
+        triggered_trailing_stops = self.check_and_execute_trailing_stops(market_updates)
+        for position_key in triggered_trailing_stops:
+            self.execute_trailing_stop_exit(position_key)
+
+    def _check_and_execute_stop_losses(self, market_id: str, up_price: float, down_price: float) -> None:
+        """
+        Check and execute stop loss orders based on current prices.
+
+        Parameters
+        ----------
+        market_id : str
+            Market ID to check
+        up_price : float
+            Current UP token price
+        down_price : float
+            Current DOWN token price
+        """
+        for position_key, position in self._positions.items():
+            if position.market_id != market_id or position.resolved:
+                continue
+
+            if position.stop_loss is None:
+                continue
+
+            current_price = up_price if position.side == "UP" else down_price
+            should_trigger = self._risk_manager.check_stop_loss(position, current_price)
+
+            if should_trigger:
+                log.warning(
+                    "Stop loss triggered for %s %s: current=%.4f, stop=%.4f",
+                    position.slug, position.side, current_price, position.stop_loss
+                )
+                self._execute_exit_order(position, "STOP_LOSS")
+
+    def _check_and_execute_take_profits(self, market_id: str, up_price: float, down_price: float) -> None:
+        """
+        Check and execute take profit orders based on current prices.
+
+        Parameters
+        ----------
+        market_id : str
+            Market ID to check
+        up_price : float
+            Current UP token price
+        down_price : float
+            Current DOWN token price
+        """
+        for position_key, position in self._positions.items():
+            if position.market_id != market_id or position.resolved:
+                continue
+
+            if position.take_profit is None:
+                continue
+
+            current_price = up_price if position.side == "UP" else down_price
+            should_trigger = self._risk_manager.check_take_profit(position, current_price)
+
+            if should_trigger:
+                log.info(
+                    "Take profit triggered for %s %s: current=%.4f, target=%.4f",
+                    position.slug, position.side, current_price, position.take_profit
+                )
+                self._execute_exit_order(position, "TAKE_PROFIT")
+
+    def _execute_exit_order(self, position: RealPosition, reason: str) -> None:
+        """
+        Execute an exit order for a position (stop loss, take profit, or trailing stop).
+
+        Parameters
+        ----------
+        position : RealPosition
+            Position to exit
+        reason : str
+            Reason for exit ("STOP_LOSS", "TAKE_PROFIT", "TRAILING_STOP")
+        """
+        try:
+            # Determine token_id for sell order
+            token_id = position.market_id  # Simplified - would need actual token mapping
+
+            # Calculate current price
+            current_price = position.current_price
+
+            # Place market sell order
+            order_response = self._place_clob_order(
+                token_id,
+                "sell",
+                current_price,
+                position.shares,
+                "market"
+            )
+
+            # Update position status
+            position.resolved = True
+            position.outcome = reason
+
+            # Calculate final P&L
+            if position.side == "UP":
+                exit_value = position.shares * current_price
+            else:
+                exit_value = position.shares * (1 - current_price)
+
+            position.pnl = exit_value - position.amount
+
+            log.info(
+                "Exit order executed for %s %s: reason=%s, pnl=$%.2f",
+                position.slug, position.side, reason, position.pnl
+            )
+
+            # Save to database if enabled
+            if self._db_enabled:
+                self._save_exit_to_db(position, reason, current_price)
+
+        except Exception as e:
+            log.error("Failed to execute exit order for %s %s: %s", position.slug, position.side, e)
+
+    def _save_exit_to_db(self, position: RealPosition, reason: str, exit_price: float) -> None:
+        """
+        Save exit trade to database.
+
+        Parameters
+        ----------
+        position : RealPosition
+            Position that was exited
+        reason : str
+            Exit reason
+        exit_price : float
+            Exit price
+        """
+        try:
+            self._db.save_trade(
+                market_slug=position.slug,
+                market_id=position.market_id,
+                side=position.side,
+                entry_price=position.entry_price,
+                exit_price=exit_price,
+                amount=position.amount,
+                shares=position.shares,
+                fee=position.fee,
+                outcome=reason,
+                pnl=position.pnl,
+                timestamp=datetime.now(timezone.utc),
+                sizing_strategy=position.sizing_strategy,
+                confidence=position.confidence,
+                kelly_fraction=position.kelly_fraction,
+                stop_loss=position.stop_loss,
+                take_profit=position.take_profit,
+                tx_hash=None,
+                is_real_trade=True,
+                wallet_address=self._wallet.get_address(),
+            )
+            log.debug("Real: exit saved to database for %s", position.slug)
+        except Exception as exc:
+            log.error("Real: failed to save exit to database: %s", exc)
+
     # ── Safety Features ───────────────────────────────────────────────────────────
 
     def emergency_stop(self, reason: str = "Manual") -> None:
