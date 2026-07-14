@@ -864,6 +864,8 @@ class RealTradingEngine:
         Configuration for real trading
     db_path : str, optional
         Path to SQLite database for trade persistence
+    simulate : bool, optional
+        Enable simulation mode for testing (default: False)
     """
 
     def __init__(
@@ -873,6 +875,7 @@ class RealTradingEngine:
         polymarket_api_key: str,
         config: Optional[RealTradingConfig] = None,
         db_path: Optional[str] = None,
+        simulate: bool = False,
     ):
         # Configuration
         self._config = config or RealTradingConfig(
@@ -880,6 +883,13 @@ class RealTradingEngine:
             rpc_url=rpc_url,
             polymarket_api_key=polymarket_api_key,
         )
+
+        # Validate credentials for real trading
+        if not simulate:
+            self._validate_credentials(private_key, polymarket_api_key, rpc_url)
+        else:
+            log.warning("⚠️  SIMULATION MODE ENABLED - No real trades will be executed")
+            log.warning("Set simulate=False for production trading")
 
         # Wallet setup
         self._wallet = WalletManager(private_key, rpc_url, log_balance_updates=self._config.log_balance_updates)
@@ -904,7 +914,7 @@ class RealTradingEngine:
             timeout=self._config.order_timeout,
             retry_attempts=self._config.retry_attempts,
             retry_delay=self._config.retry_delay,
-            simulate=True,  # Enable simulation for testing
+            simulate=simulate,
         )
 
         # Database
@@ -923,6 +933,57 @@ class RealTradingEngine:
         self.refresh_balance()
 
         log.info("RealTradingEngine initialized")
+
+    def _validate_credentials(self, private_key: str, polymarket_api_key: str, rpc_url: str) -> None:
+        """
+        Validate that real trading credentials are provided and not placeholder values.
+
+        Raises
+        ------
+        ValueError
+            If credentials appear to be placeholder or invalid values
+        """
+        # Check for common placeholder values
+        placeholder_patterns = [
+            "your-private-key",
+            "your_api_key",
+            "placeholder",
+            "test-key",
+            "example-key",
+            "xxx",
+            "0000",
+        ]
+
+        if not private_key or len(private_key) < 32:
+            raise ValueError(
+                "Invalid private key: must be at least 32 characters. "
+                "Provide a real private key for production trading."
+            )
+
+        if any(pattern.lower() in private_key.lower() for pattern in placeholder_patterns):
+            raise ValueError(
+                f"Invalid private key: appears to be a placeholder value. "
+                "Provide a real private key for production trading."
+            )
+
+        if not polymarket_api_key or len(polymarket_api_key) < 10:
+            raise ValueError(
+                "Invalid Polymarket API key: must be at least 10 characters. "
+                "Provide a real API key for production trading."
+            )
+
+        if any(pattern.lower() in polymarket_api_key.lower() for pattern in placeholder_patterns):
+            raise ValueError(
+                f"Invalid Polymarket API key: appears to be a placeholder value. "
+                "Provide a real API key for production trading."
+            )
+
+        if not rpc_url or not rpc_url.startswith(("http://", "https://")):
+            raise ValueError(
+                f"Invalid RPC URL: must be a valid HTTP/HTTPS URL. Got: {rpc_url}"
+            )
+
+        log.info("✓ Credentials validated for real trading")
 
     @property
     def config(self) -> RealTradingConfig:
