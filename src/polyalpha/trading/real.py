@@ -336,14 +336,14 @@ class BracketOrder:
     slug: str
     side: str
     entry_order_id: str
-    stop_loss_order_id: Optional[str] = None
-    take_profit_order_id: Optional[str] = None
     entry_price: float
-    stop_loss_price: Optional[float] = None
-    take_profit_price: Optional[float] = None
     amount: float
     status: str  # "pending", "active", "partial", "completed", "cancelled"
     created_at: datetime
+    stop_loss_order_id: Optional[str] = None
+    take_profit_order_id: Optional[str] = None
+    stop_loss_price: Optional[float] = None
+    take_profit_price: Optional[float] = None
     filled_at: Optional[datetime] = None
 
     def dump(self) -> dict:
@@ -379,11 +379,11 @@ class ConditionalOrder:
     side: str
     condition_type: str  # "price_above", "price_below", "time_after"
     condition_value: float
+    status: str  # "waiting", "triggered", "cancelled", "expired"
+    created_at: datetime
     child_order_id: Optional[str] = None
     child_order_price: Optional[float] = None
     child_order_amount: Optional[float] = None
-    status: str  # "waiting", "triggered", "cancelled", "expired"
-    created_at: datetime
     triggered_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
 
@@ -420,9 +420,9 @@ class IcebergOrder:
     total_amount: float
     visible_size: float
     price: float
-    filled_amount: float = 0.0
     status: str  # "active", "partial", "completed", "cancelled"
     created_at: datetime
+    filled_amount: float = 0.0
     child_order_ids: list[str] = field(default_factory=list)
 
     @property
@@ -468,10 +468,10 @@ class TWAPOrder:
     total_amount: float
     duration_seconds: int
     num_slices: int
-    price: Optional[float] = None  # If None, uses market price
-    filled_amount: float = 0.0
     status: str  # "active", "partial", "completed", "cancelled"
     created_at: datetime
+    price: Optional[float] = None  # If None, uses market price
+    filled_amount: float = 0.0
     ends_at: Optional[datetime] = None
     child_order_ids: list[str] = field(default_factory=list)
     slice_interval: float = 0.0  # Seconds between slices

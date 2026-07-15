@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import math
 import textwrap
-from typing import Any
+from datetime import datetime
+from typing import Any, Optional
 
 from .records import TradeRecord
 
@@ -200,6 +201,182 @@ def _format_duration(secs: float) -> str:
     d, rem = divmod(secs, 86400)
     h = rem // 3600
     return f"{d}d {h}h"
+
+
+def _format_datetime(dt: Optional[datetime]) -> str:
+    """Format datetime for display."""
+    if dt is None:
+        return _color("—", _GREY)
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+# ── Position render function ─────────────────────────────────────────────────────
+
+def render_positions(positions: list, orders: dict, show_all: bool = False, verbose: bool = True) -> None:
+    """
+    Render positions with entry/exit information and ROI.
+
+    Parameters
+    ----------
+    positions : list
+        List of PaperPosition objects to display
+    orders : dict
+        Dictionary of orders keyed by order ID
+    show_all : bool
+        Whether to show all positions or just live ones
+    verbose : bool
+        Whether to show detailed information including entry/exit times
+    """
+    if not positions:
+        print(_color("No positions to display", _GREY))
+        return
+
+    W = 90
+    print()
+    print(_divider(W))
+    title = "All Positions" if show_all else "Live Positions"
+    print(_color(f"  {title}", _BOLD + _WHITE))
+    print(_divider(W))
+
+    # Separate live and closed positions
+    live_positions = [p for p in positions if not p.resolved]
+    closed_positions = [p for p in positions if p.resolved]
+
+    # Show live positions first
+    if live_positions:
+        print(_color("  LIVE POSITIONS", _BOLD + _GREEN))
+        print()
+        
+        if verbose:
+            header = (
+                f"  {'Market':<22} {'Side':<5} {'Entry Time':<19} {'Entry':>6} "
+                f"{'Current':>8} {'ROI':>8} {'Shares':>8}"
+            )
+            print(_color(header, _DIM))
+            print(_color("  " + "─" * 78, _GREY))
+
+            for pos in live_positions:
+                # Get entry time from orders
+                entry_time = None
+                if pos.order_ids:
+                    fill_times = [
+                        orders[oid].filled_at 
+                        for oid in pos.order_ids 
+                        if oid in orders and orders[oid].filled_at
+                    ]
+                    if fill_times:
+                        entry_time = min(fill_times)
+
+                side_col = _GREEN if pos.side == "UP" else _BLUE
+                roi_col = _GREEN if pos.pnl_pct > 0 else (_RED if pos.pnl_pct < 0 else _GREY)
+                
+                row = (
+                    f"  {pos.slug[:20]:<22} "
+                    f"{_color(pos.side, side_col):<5} "
+                    f"{_format_datetime(entry_time):<19} "
+                    f"{pos.avg_price:>6.4f} "
+                    f"{pos.current_price:>8.4f} "
+                    f"{_color(f'{pos.pnl_pct:+.2f}%', roi_col):>8} "
+                    f"{pos.shares:>8.2f}"
+                )
+                print(row)
+        else:
+            header = (
+                f"  {'Market':<22} {'Side':<5} {'Entry':>6} "
+                f"{'Current':>8} {'ROI':>8} {'Status':<8}"
+            )
+            print(_color(header, _DIM))
+            print(_color("  " + "─" * 65, _GREY))
+
+            for pos in live_positions:
+                side_col = _GREEN if pos.side == "UP" else _BLUE
+                roi_col = _GREEN if pos.pnl_pct > 0 else (_RED if pos.pnl_pct < 0 else _GREY)
+                
+                row = (
+                    f"  {pos.slug[:20]:<22} "
+                    f"{_color(pos.side, side_col):<5} "
+                    f"{pos.avg_price:>6.4f} "
+                    f"{pos.current_price:>8.4f} "
+                    f"{_color(f'{pos.pnl_pct:+.2f}%', roi_col):>8} "
+                    f"{'OPEN':<8}"
+                )
+                print(row)
+        
+        print()
+
+    # Show closed positions if show_all
+    if show_all and closed_positions:
+        print(_color("  CLOSED POSITIONS", _BOLD + _YELLOW))
+        print()
+        
+        if verbose:
+            header = (
+                f"  {'Market':<22} {'Side':<5} {'Entry Time':<19} {'Exit Time':<19} "
+                f"{'Entry':>6} {'Exit':>6} {'ROI':>8} {'Outcome':<8}"
+            )
+            print(_color(header, _DIM))
+            print(_color("  " + "─" * 95, _GREY))
+
+            for pos in closed_positions:
+                # Get entry and exit times from orders
+                entry_time = None
+                exit_time = None
+                if pos.order_ids:
+                    fill_times = [
+                        orders[oid].filled_at 
+                        for oid in pos.order_ids 
+                        if oid in orders and orders[oid].filled_at
+                    ]
+                    if fill_times:
+                        entry_time = min(fill_times)
+                        exit_time = max(fill_times)
+
+                side_col = _GREEN if pos.side == "UP" else _BLUE
+                roi_col = _GREEN if pos.pnl_pct > 0 else (_RED if pos.pnl_pct < 0 else _GREY)
+                out_col = _GREEN if pos.outcome == "WON" else _RED
+                
+                exit_price = 1.0 if pos.outcome == "WON" else 0.0
+                
+                row = (
+                    f"  {pos.slug[:20]:<22} "
+                    f"{_color(pos.side, side_col):<5} "
+                    f"{_format_datetime(entry_time):<19} "
+                    f"{_format_datetime(exit_time):<19} "
+                    f"{pos.avg_price:>6.4f} "
+                    f"{exit_price:>6.4f} "
+                    f"{_color(f'{pos.pnl_pct:+.2f}%', roi_col):>8} "
+                    f"{_color(pos.outcome, out_col):<8}"
+                )
+                print(row)
+        else:
+            header = (
+                f"  {'Market':<22} {'Side':<5} {'Entry':>6} "
+                f"{'Exit':>6} {'ROI':>8} {'Outcome':<8}"
+            )
+            print(_color(header, _DIM))
+            print(_color("  " + "─" * 60, _GREY))
+
+            for pos in closed_positions:
+                side_col = _GREEN if pos.side == "UP" else _BLUE
+                roi_col = _GREEN if pos.pnl_pct > 0 else (_RED if pos.pnl_pct < 0 else _GREY)
+                out_col = _GREEN if pos.outcome == "WON" else _RED
+                
+                exit_price = 1.0 if pos.outcome == "WON" else 0.0
+                
+                row = (
+                    f"  {pos.slug[:20]:<22} "
+                    f"{_color(pos.side, side_col):<5} "
+                    f"{pos.avg_price:>6.4f} "
+                    f"{exit_price:>6.4f} "
+                    f"{_color(f'{pos.pnl_pct:+.2f}%', roi_col):>8} "
+                    f"{_color(pos.outcome, out_col):<8}"
+                )
+                print(row)
+        
+        print()
+
+    print(_divider(W))
+    print()
 
 
 # ── Main render function ───────────────────────────────────────────────────────

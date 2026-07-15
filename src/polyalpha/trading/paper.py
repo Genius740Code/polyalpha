@@ -1753,6 +1753,89 @@ class PaperEngine:
         """Return all positions including resolved ones."""
         return list(self._positions.values())
 
+    def show_positions(self, show_all: bool = False, verbose: bool = True) -> None:
+        """
+        Display positions with entry/exit information and ROI.
+
+        Parameters
+        ----------
+        show_all : bool
+            If True, show all positions including resolved ones. If False, only show live positions.
+        verbose : bool
+            If True, show detailed information including entry/exit times.
+
+        Example
+        -------
+        >>> client.paper.show_positions()  # Show live positions
+        >>> client.paper.show_positions(show_all=True)  # Show all positions
+        """
+        from ..report.terminal import render_positions
+
+        positions = self.all_positions() if show_all else self.positions()
+        render_positions(positions, self._orders, show_all=show_all, verbose=verbose)
+
+    def position_history(self) -> dict:
+        """
+        Get position history summary statistics.
+
+        Returns
+        -------
+        dict
+            Dictionary with position history statistics including:
+            - total_positions: Total number of positions opened
+            - total_closed: Total number of positions closed
+            - total_open: Current number of open positions
+            - win_rate: Win rate percentage
+            - avg_holding_time: Average holding time in seconds
+            - best_position: Best performing position
+            - worst_position: Worst performing position
+        """
+        all_pos = self.all_positions()
+        open_pos = [p for p in all_pos if not p.resolved]
+        closed_pos = [p for p in all_pos if p.resolved]
+
+        wins = [p for p in closed_pos if p.outcome == "WON"]
+        losses = [p for p in closed_pos if p.outcome == "LOST"]
+
+        # Calculate holding times for closed positions
+        holding_times = []
+        for pos in closed_pos:
+            if pos.order_ids:
+                fill_times = [
+                    self._orders[oid].filled_at 
+                    for oid in pos.order_ids 
+                    if oid in self._orders and self._orders[oid].filled_at
+                ]
+                if fill_times:
+                    holding_time = (max(fill_times) - min(fill_times)).total_seconds()
+                    holding_times.append(holding_time)
+
+        avg_holding = sum(holding_times) / len(holding_times) if holding_times else 0.0
+
+        # Find best and worst positions
+        best_pos = max(closed_pos, key=lambda p: p.pnl) if closed_pos else None
+        worst_pos = min(closed_pos, key=lambda p: p.pnl) if closed_pos else None
+
+        return {
+            "total_positions": len(all_pos),
+            "total_closed": len(closed_pos),
+            "total_open": len(open_pos),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": (len(wins) / len(closed_pos) * 100) if closed_pos else 0.0,
+            "avg_holding_time": avg_holding,
+            "best_position": {
+                "market": best_pos.slug if best_pos else None,
+                "pnl": best_pos.pnl if best_pos else 0.0,
+                "pnl_pct": best_pos.pnl_pct if best_pos else 0.0,
+            } if best_pos else None,
+            "worst_position": {
+                "market": worst_pos.slug if worst_pos else None,
+                "pnl": worst_pos.pnl if worst_pos else 0.0,
+                "pnl_pct": worst_pos.pnl_pct if worst_pos else 0.0,
+            } if worst_pos else None,
+        }
+
     # ── Resolution ─────────────────────────────────────────────────────────────
 
     def resolve(self, market, outcome: str) -> None:
