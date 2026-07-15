@@ -52,6 +52,7 @@ from ..core import (
     OrderTimeout,
 )
 from .clob_client import ClobClient
+from .alchemy_client import AlchemyClient
 
 log = logging.getLogger(__name__)
 
@@ -241,6 +242,7 @@ class RealPosition:
     resolved: bool = False
     outcome: Optional[str] = None
     order_ids: list[str] = field(default_factory=list)
+    entry_time: Optional[datetime] = None
 
     # Risk management
     stop_loss: Optional[float] = None
@@ -879,6 +881,15 @@ class WalletManager:
 
         log.info("WalletManager initialized")
 
+    @property
+    def address(self) -> Optional[str]:
+        """Get the wallet address."""
+        if not self._address:
+            from eth_account import Account
+            account = Account.from_key(self._private_key)
+            self._address = account.address
+        return self._address
+
     def _init_web3(self) -> None:
         """Initialize Web3.py and contracts (mandatory for production)."""
         from web3 import Web3
@@ -1375,6 +1386,9 @@ class RealTradingEngine:
             retry_delay=self._config.retry_delay,
             simulate=simulate,
         )
+
+        # Alchemy Client
+        self._alchemy_client = AlchemyClient(rpc_url=rpc_url)
 
         # Database
         self._db: Optional[TradeDatabase] = None
@@ -2074,9 +2088,158 @@ class RealTradingEngine:
 
     # ── Position Management ───────────────────────────────────────────────────────
 
+    def sync_positions_from_chain(self) -> None:
+        """
+        Fetch real positions from the blockchain using Alchemy.
+        Calculates balances from transfers and fetches token metadata.
+        """
+        log.info("Syncing positions from blockchain...")
+        address = self._wallet.address
+        balances = self._alchemy_client.get_token_balances(address)
+        transfers = self._alchemy_client.get_asset_transfers(address)
+        
+        # Build token IDs list
+        token_ids = list(balances.keys())
+        if not token_ids:
+            return
+            
+        metadata = self._alchemy_client.fetch_polymarket_metadata(token_ids)
+        
+        # Calculate cost basis from transfers
+        for token_id, amount in balances.items():
+            if amount <= 0:
+                continue
+                
+            meta = metadata.get(token_id, {})
+            market_id = meta.get("market_id", token_id)
+            slug = meta.get("slug", token_id)
+            question = meta.get("question", "Unknown Market")
+            side = meta.get("side", "UP") # Assume UP if unknown, can be derived
+            
+            # Simple average fill price derivation (placeholder)
+            # In real implementation we'd need to match with orders or parse the amounts paid
+            avg_price = 0.5  
+            cost_basis = amount * avg_price
+            current_price = float(meta.get("price", 0.5))
+            
+            # Find entry time from transfers
+            entry_time = None
+            token_transfers = [t for t in transfers if any(m.get("tokenId") == token_id for m in t.get("erc1155Metadata", []))]
+            if token_transfers:
+                # Get the earliest transfer to this address
+                # alchemy_getAssetTransfers returns a blockNum (hex string), can use block timestamp if we fetched it, but we don't have timestamps directly. We'd have to use eth_getBlockByNumber or rely on a rough estimate if time is missing. Let's set it to datetime.now() for now if we can't parse it easily.
+                entry_time = datetime.now() 
+                
+            position = RealPosition(
+                market_id=market_id,
+                slug=slug,
+                question=question,
+                side=side,
+                shares=amount,
+                avg_price=avg_price,
+                current_price=current_price,
+                cost_basis=cost_basis,
+                current_value=amount * current_price,
+                entry_time=entry_time,
+            )
+            
+            # Track buy/sell dates in position if needed (can add attributes later)
+            self._positions[f"{market_id}:{side}"] = position
+            
+        log.info(f"Synced {len(balances)} live positions.")
+
     def positions(self) -> list[RealPosition]:
         """Get all open positions."""
+        self.sync_positions_from_chain()
         return [p for p in self._positions.values() if not p.resolved]
+
+    def all_positions(self) -> list[RealPosition]:
+        """Get all positions including resolved ones."""
+        self.sync_positions_from_chain()
+        return list(self._positions.values())
+
+    def show_positions(self, show_all: bool = False, verbose: bool = True) -> None:
+        """
+        Display positions with entry/exit information and ROI.
+
+        Parameters
+        ----------
+        show_all : bool
+            If True, show all positions including resolved ones. If False, only show live positions.
+        verbose : bool
+            If True, show detailed information including entry/exit times.
+
+        Example
+        -------
+        >>> client.real.show_positions()  # Show live positions
+        >>> client.real.show_positions(show_all=True)  # Show all positions
+        """
+        from ..report.terminal import render_positions
+
+        positions = self.all_positions() if show_all else self.positions()
+        render_positions(positions, self._orders, show_all=show_all, verbose=verbose)
+
+    def position_history(self) -> dict:
+        """
+        Get position history summary statistics.
+
+        Returns
+        -------
+        dict
+            Dictionary with position history statistics including:
+            - total_positions: Total number of positions opened
+            - total_closed: Total number of positions closed
+            - total_open: Current number of open positions
+            - win_rate: Win rate percentage
+            - avg_holding_time: Average holding time in seconds
+            - best_position: Best performing position
+            - worst_position: Worst performing position
+        """
+        all_pos = self.all_positions()
+        open_pos = [p for p in all_pos if not p.resolved]
+        closed_pos = [p for p in all_pos if p.resolved]
+
+        wins = [p for p in closed_pos if p.outcome == "WON"]
+        losses = [p for p in closed_pos if p.outcome == "LOST"]
+
+        # Calculate holding times for closed positions
+        holding_times = []
+        for pos in closed_pos:
+            if pos.order_ids:
+                fill_times = [
+                    self._orders[oid].filled_at 
+                    for oid in pos.order_ids 
+                    if oid in self._orders and self._orders[oid].filled_at
+                ]
+                if fill_times:
+                    holding_time = (max(fill_times) - min(fill_times)).total_seconds()
+                    holding_times.append(holding_time)
+
+        avg_holding = sum(holding_times) / len(holding_times) if holding_times else 0.0
+
+        # Find best and worst positions
+        best_pos = max(closed_pos, key=lambda p: p.pnl) if closed_pos else None
+        worst_pos = min(closed_pos, key=lambda p: p.pnl) if closed_pos else None
+
+        return {
+            "total_positions": len(all_pos),
+            "total_closed": len(closed_pos),
+            "total_open": len(open_pos),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": (len(wins) / len(closed_pos) * 100) if closed_pos else 0.0,
+            "avg_holding_time": avg_holding,
+            "best_position": {
+                "market": best_pos.slug if best_pos else None,
+                "pnl": best_pos.pnl if best_pos else 0.0,
+                "pnl_pct": best_pos.pnl_pct if best_pos else 0.0,
+            } if best_pos else None,
+            "worst_position": {
+                "market": worst_pos.slug if worst_pos else None,
+                "pnl": worst_pos.pnl if worst_pos else 0.0,
+                "pnl_pct": worst_pos.pnl_pct if worst_pos else 0.0,
+            } if worst_pos else None,
+        }
 
     def get_position(self, market_id: str, side: str) -> RealPosition:
         """

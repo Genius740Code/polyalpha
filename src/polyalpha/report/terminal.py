@@ -216,10 +216,12 @@ def render_positions(positions: list, orders: dict, show_all: bool = False, verb
     """
     Render positions with entry/exit information and ROI.
 
+    Works with both PaperPosition and RealPosition objects.
+
     Parameters
     ----------
     positions : list
-        List of PaperPosition objects to display
+        List of PaperPosition or RealPosition objects to display
     orders : dict
         Dictionary of orders keyed by order ID
     show_all : bool
@@ -258,7 +260,9 @@ def render_positions(positions: list, orders: dict, show_all: bool = False, verb
             for pos in live_positions:
                 # Get entry time from orders
                 entry_time = None
-                if pos.order_ids:
+                if getattr(pos, "entry_time", None):
+                    entry_time = pos.entry_time
+                elif pos.order_ids:
                     fill_times = [
                         orders[oid].filled_at 
                         for oid in pos.order_ids 
