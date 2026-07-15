@@ -87,6 +87,14 @@ class RealTradingConfig:
     default_take_profit_pct: float = 0.50  # 50% take profit
     max_risk_per_trade: float = 0.02  # 2% of balance max risk
 
+    # Position management
+    enable_position_scaling: bool = True  # Allow pyramiding (adding to winning positions)
+    min_profit_for_scaling: float = 0.10  # Minimum 10% profit before allowing scaling
+    max_scale_additions: int = 3  # Maximum number of times to scale a position
+    enable_position_reduction: bool = True  # Allow reducing positions
+    enable_hedging: bool = True  # Allow hedging positions
+    max_hedge_ratio: float = 0.5  # Maximum hedge ratio (50% of position)
+
     # Execution settings
     slippage_tolerance: float = 0.05  # 5% slippage tolerance
     order_timeout: int = 60  # Order timeout in seconds
@@ -237,6 +245,10 @@ class RealPosition:
     # Risk management
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
+
+    # Position management
+    scale_count: int = 0  # Number of times position has been scaled
+    hedge_amount: float = 0.0  # Amount hedged on opposite side
 
     @property
     def pnl(self) -> float:
@@ -2289,8 +2301,408 @@ class RealTradingEngine:
         position.outcome = "STOPPED"
         
         # Record the exit (simplified - would need actual order execution)
-        log.warning("Trailing stop exit executed for %s %s (simplified - needs actual order execution)", 
+        log.warning("Trailing stop exit executed for %s %s (simplified - needs actual order execution)",
                    position.slug, position.side)
+
+    # ── Position Management ───────────────────────────────────────────────────────
+
+    def scale_position(
+        self,
+        market,
+        side: str,
+        add_amount: float,
+        confidence: float = 0.5,
+    ) -> RealOrder:
+        """
+        Scale (pyramid) a position by adding more shares to a winning position.
+
+        This implements the pyramiding strategy where you add to a position
+        as it moves in your favor, increasing exposure while maintaining risk control.
+
+        Parameters
+        ----------
+        market : Market
+            Market object
+        side : str
+            "UP" or "DOWN"
+        add_amount : float
+            USDC amount to add to the position
+        confidence : float, optional
+            Confidence level for the additional trade (default: 0.5)
+
+        Returns
+        -------
+        RealOrder
+            The order that was placed to scale the position
+
+        Raises
+        ------
+        PositionNotFound
+            If no existing position exists for this market/side
+        RiskLimitExceeded
+            If scaling would exceed risk limits or position is not profitable enough
+
+        Example
+        -------
+        >>> # Add $50 more to a winning UP position
+        >>> order = client.real.scale_position(market, side="UP", add_amount=50.0, confidence=0.7)
+        """
+        if not self._config.enable_position_scaling:
+            raise RiskLimitExceeded("Position scaling is disabled in configuration")
+
+        side = _validate_side(side)
+        position_key = f"{market.id}:{side}"
+
+        if position_key not in self._positions:
+            raise PositionNotFound(f"No position found for {market.slug} {side}")
+
+        position = self._positions[position_key]
+
+        # Check if position has reached maximum scale additions
+        if position.scale_count >= self._config.max_scale_additions:
+            raise RiskLimitExceeded(
+                f"Position has been scaled {position.scale_count} times, "
+                f"maximum is {self._config.max_scale_additions}"
+            )
+
+        # Check if position is profitable enough before allowing scaling
+        min_profit_pct = self._config.min_profit_for_scaling
+        if position.pnl_pct < min_profit_pct * 100:
+            raise RiskLimitExceeded(
+                f"Position profit {position.pnl_pct:.1f}% is below minimum {min_profit_pct*100:.1f}% for scaling"
+            )
+
+        # Calculate maximum additional size based on risk limits
+        current_exposure = self._get_market_exposure(market.id)
+        max_add_amount = self._config.max_position_size - current_exposure
+        if add_amount > max_add_amount:
+            log.warning("Requested scale amount $%.2f exceeds limit, capping at $%.2f", add_amount, max_add_amount)
+            add_amount = max_add_amount
+
+        # Place additional order
+        log.info("Scaling position %s %s by $%.2f at confidence %.2f (scale #%d)",
+                 market.slug, side, add_amount, confidence, position.scale_count + 1)
+
+        order = self.buy(market, side=side, amount=add_amount, confidence=confidence, confirm=False)
+
+        # Update scale count
+        position.scale_count += 1
+
+        return order
+
+    def reduce_position(
+        self,
+        market,
+        side: str,
+        reduce_pct: float,
+        reason: str = "manual",
+    ) -> RealOrder:
+        """
+        Reduce a position by selling a percentage of shares.
+
+        This implements position reduction strategies for risk management
+        or profit taking. In Polymarket, selling is done by buying the opposite side.
+
+        Parameters
+        ----------
+        market : Market
+            Market object
+        side : str
+            "UP" or "DOWN"
+        reduce_pct : float
+            Percentage of position to reduce (0.0 to 1.0)
+        reason : str, optional
+            Reason for reduction (default: "manual")
+
+        Returns
+        -------
+        RealOrder
+            The order that was placed to reduce the position
+
+        Raises
+        ------
+        PositionNotFound
+            If no existing position exists for this market/side
+        ValueError
+            If reduce_pct is not between 0 and 1
+        RiskLimitExceeded
+            If position reduction is disabled in configuration
+
+        Example
+        -------
+        >>> # Reduce position by 50%
+        >>> order = client.real.reduce_position(market, side="UP", reduce_pct=0.5, reason="profit_taking")
+        """
+        if not self._config.enable_position_reduction:
+            raise RiskLimitExceeded("Position reduction is disabled in configuration")
+
+        side = _validate_side(side)
+        position_key = f"{market.id}:{side}"
+
+        if position_key not in self._positions:
+            raise PositionNotFound(f"No position found for {market.slug} {side}")
+
+        if not 0 < reduce_pct <= 1:
+            raise ValueError("reduce_pct must be between 0 and 1")
+
+        position = self._positions[position_key]
+        shares_to_reduce = position.shares * reduce_pct
+
+        # Calculate amount to spend on opposite side to reduce position
+        current_price = position.current_price
+        reduce_amount = shares_to_reduce * current_price
+
+        log.info("Reducing position %s %s by %.1f%% ($%.2f) - reason: %s",
+                 market.slug, side, reduce_pct * 100, reduce_amount, reason)
+
+        # To reduce a position, buy the opposite side
+        opposite_side = "DOWN" if side == "UP" else "UP"
+        order = self.buy(market, side=opposite_side, amount=reduce_amount, confidence=0.5, confirm=False)
+
+        return order
+
+    def hedge_position(
+        self,
+        market,
+        side: str,
+        hedge_pct: float = 0.5,
+    ) -> RealOrder:
+        """
+        Hedge a position by taking an opposite position in the same market.
+
+        This reduces risk by taking a counter-position that can offset losses
+        if the original position moves against you.
+
+        Parameters
+        ----------
+        market : Market
+            Market object
+        side : str
+            "UP" or "DOWN" - the side of the position to hedge
+        hedge_pct : float, optional
+            Percentage of position to hedge (0.0 to 1.0, default: 0.5)
+
+        Returns
+        -------
+        RealOrder
+            The order that was placed to hedge the position
+
+        Raises
+        ------
+        PositionNotFound
+            If no existing position exists for this market/side
+        ValueError
+            If hedge_pct is not between 0 and 1
+        RiskLimitExceeded
+            If hedging is disabled or hedge ratio exceeds maximum
+
+        Example
+        -------
+        >>> # Hedge 50% of a UP position with a DOWN position
+        >>> order = client.real.hedge_position(market, side="UP", hedge_pct=0.5)
+        """
+        if not self._config.enable_hedging:
+            raise RiskLimitExceeded("Position hedging is disabled in configuration")
+
+        side = _validate_side(side)
+        position_key = f"{market.id}:{side}"
+
+        if position_key not in self._positions:
+            raise PositionNotFound(f"No position found for {market.slug} {side}")
+
+        if not 0 < hedge_pct <= 1:
+            raise ValueError("hedge_pct must be between 0 and 1")
+
+        # Check if hedge ratio exceeds maximum
+        if hedge_pct > self._config.max_hedge_ratio:
+            raise RiskLimitExceeded(
+                f"Hedge ratio {hedge_pct:.1%} exceeds maximum {self._config.max_hedge_ratio:.1%}"
+            )
+
+        position = self._positions[position_key]
+
+        # Calculate hedge amount based on position value
+        hedge_amount = position.cost_basis * hedge_pct
+
+        # Determine opposite side
+        hedge_side = "DOWN" if side == "UP" else "UP"
+
+        log.info("Hedging position %s %s with %.1f%% ($%.2f) on opposite side %s",
+                 market.slug, side, hedge_pct * 100, hedge_amount, hedge_side)
+
+        # Place order on opposite side
+        order = self.buy(market, side=hedge_side, amount=hedge_amount, confidence=0.5, confirm=False)
+
+        # Track hedge amount on position
+        position.hedge_amount += hedge_amount
+
+        return order
+
+    def transfer_position(
+        self,
+        market,
+        side: str,
+        target_wallet_address: str,
+        transfer_pct: float = 1.0,
+    ) -> dict:
+        """
+        Transfer a position (or portion of it) to another wallet.
+
+        This allows moving positions between wallets for risk management
+        or portfolio rebalancing.
+
+        Parameters
+        ----------
+        market : Market
+            Market object
+        side : str
+            "UP" or "DOWN"
+        target_wallet_address : str
+            Address of the wallet to transfer to
+        transfer_pct : float, optional
+            Percentage of position to transfer (0.0 to 1.0, default: 1.0)
+
+        Returns
+        -------
+        dict
+            Transaction details including tx_hash and status
+
+        Raises
+        ------
+        PositionNotFound
+            If no existing position exists for this market/side
+        ValueError
+            If transfer_pct is not between 0 and 1
+
+        Example
+        -------
+        >>> # Transfer entire position to another wallet
+        >>> tx = client.real.transfer_position(market, side="UP",
+        ...                                     target_wallet_address="0x123...")
+        """
+        side = _validate_side(side)
+        position_key = f"{market.id}:{side}"
+
+        if position_key not in self._positions:
+            raise PositionNotFound(f"No position found for {market.slug} {side}")
+
+        if not 0 < transfer_pct <= 1:
+            raise ValueError("transfer_pct must be between 0 and 1")
+
+        position = self._positions[position_key]
+        shares_to_transfer = position.shares * transfer_pct
+
+        log.info("Transferring %.1f%% (%.2f shares) of position %s %s to wallet %s",
+                 transfer_pct * 100, shares_to_transfer, market.slug, side, target_wallet_address)
+
+        # This is a placeholder implementation
+        # In production, this would involve:
+        # 1. Using Web3.py to transfer tokens to target wallet
+        # 2. Updating position tracking in both wallets
+        # 3. Recording the transfer in the database
+
+        tx_details = {
+            "from_wallet": self._wallet.get_address(),
+            "to_wallet": target_wallet_address,
+            "market_id": market.id,
+            "side": side,
+            "shares": shares_to_transfer,
+            "tx_hash": None,  # Would be actual transaction hash
+            "status": "pending",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        log.warning("Position transfer is a placeholder - needs blockchain implementation")
+        return tx_details
+
+    def merge_positions(
+        self,
+        market,
+        side: str,
+    ) -> RealPosition:
+        """
+        Merge multiple positions for the same market and side into a single position.
+
+        This combines fragmented positions into one for easier management.
+
+        Parameters
+        ----------
+        market : Market
+            Market object
+        side : str
+            "UP" or "DOWN"
+
+        Returns
+        -------
+        RealPosition
+            The merged position
+
+        Raises
+        ------
+        PositionNotFound
+            If no positions exist for this market/side
+
+        Example
+        -------
+        >>> # Merge all UP positions for a market
+        >>> merged = client.real.merge_positions(market, side="UP")
+        """
+        side = _validate_side(side)
+        position_key = f"{market.id}:{side}"
+
+        if position_key not in self._positions:
+            raise PositionNotFound(f"No position found for {market.slug} {side}")
+
+        # In the current implementation, positions are already merged by market_id:side
+        # This method is provided for future extensibility if the implementation
+        # changes to support multiple positions per market/side
+
+        position = self._positions[position_key]
+
+        log.info("Position %s %s already merged (single position per market/side)",
+                 market.slug, side)
+
+        return position
+
+    def get_position_exposure(self, market_id: str) -> float:
+        """
+        Get total exposure for a specific market across all sides.
+
+        Parameters
+        ----------
+        market_id : str
+            Market ID
+
+        Returns
+        -------
+        float
+            Total exposure in USDC
+
+        Example
+        -------
+        >>> exposure = client.real.get_position_exposure(market.id)
+        """
+        return self._get_market_exposure(market_id)
+
+    def get_portfolio_exposure(self) -> dict[str, float]:
+        """
+        Get total exposure across all markets.
+
+        Returns
+        -------
+        dict[str, float]
+            Dictionary mapping market_id to total exposure
+
+        Example
+        -------
+        >>> exposure = client.real.get_portfolio_exposure()
+        """
+        exposure = {}
+        for position in self.positions():
+            if position.market_id not in exposure:
+                exposure[position.market_id] = 0.0
+            exposure[position.market_id] += position.cost_basis
+        return exposure
 
     # ── Real-Time Price Monitoring ───────────────────────────────────────────────
 

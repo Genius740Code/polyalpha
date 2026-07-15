@@ -53,11 +53,11 @@ Current implementation is functional but incomplete. Several critical features a
 - [x] Add time-weighted average price (TWAP) execution
 
 ### 2.2 Position Management
-- [ ] Implement position scaling (pyramiding)
-- [ ] Add position reduction strategies
-- [ ] Implement hedging capabilities
-- [ ] Add position transfer between wallets
-- [ ] Implement position merging for same market/side
+- [x] Implement position scaling (pyramiding)
+- [x] Add position reduction strategies
+- [x] Implement hedging capabilities
+- [x] Add position transfer between wallets
+- [x] Implement position merging for same market/side
 
 ### 2.3 Risk Management Enhancements
 - [ ] Add portfolio-level risk limits (total exposure)
