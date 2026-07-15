@@ -38,7 +38,7 @@ import tempfile
 import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
 from .charts import build_charts
 from .html_template import generate_html
@@ -55,6 +55,7 @@ from .terminal import render_terminal
 
 if TYPE_CHECKING:
     from ..trading.paper import PaperEngine
+    from ..trading.real import RealTradingEngine
 
 log = logging.getLogger(__name__)
 
@@ -67,27 +68,27 @@ class ReportEngine:
 
     Parameters
     ----------
-    paper : PaperEngine
-        The paper trading engine to report on.
+    engine : Union[PaperEngine, RealTradingEngine]
+        The trading engine (paper or real) to report on.
     risk_free_rate : float
         Annual risk-free rate used for Sharpe / Sortino (default 0.0).
     """
 
-    def __init__(self, paper: "PaperEngine", risk_free_rate: float = 0.0) -> None:
-        self._paper           = paper
+    def __init__(self, engine: Union["PaperEngine", "RealTradingEngine"], risk_free_rate: float = 0.0) -> None:
+        self._engine          = engine
         self._risk_free_rate  = risk_free_rate
 
     # ── Core extraction ───────────────────────────────────────────────────────
 
     def trades(self) -> list[TradeRecord]:
         """
-        Return all resolved trades extracted from the attached PaperEngine.
+        Return all resolved trades extracted from the attached trading engine.
 
         Returns
         -------
         list[TradeRecord]  sorted chronologically.
         """
-        return extract_trades(self._paper)
+        return extract_trades(self._engine)
 
     # ── Terminal output ───────────────────────────────────────────────────────
 
@@ -353,6 +354,29 @@ class ReportEngine:
         """
         delete_preset(name)
 
+    # ── Real Trading / Special Reports ────────────────────────────────────────
+
+    def risk_exposure(self) -> str:
+        """
+        Return the Risk Exposure report as a string.
+        """
+        from .real_reports import generate_risk_exposure
+        return generate_risk_exposure(self._engine)
+
+    def tax_report(self, path: str) -> str:
+        """
+        Export Tax Report to the given CSV path.
+        """
+        from .real_reports import export_tax_report
+        return export_tax_report(self._engine, path)
+
+    def audit_trail(self, path: str) -> str:
+        """
+        Export Audit Trail to the given JSON path.
+        """
+        from .real_reports import export_audit_trail
+        return export_audit_trail(self._engine, path)
+
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     def _initial_balance(self, trades: list[TradeRecord]) -> float:
@@ -360,4 +384,4 @@ class ReportEngine:
         Reconstruct the initial balance from current balance + net PnL of all trades.
         """
         net_pnl = sum(t.pnl for t in trades)
-        return self._paper._balance - net_pnl
+        return self._engine._balance - net_pnl

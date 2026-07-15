@@ -54,6 +54,9 @@ from ..core import (
 from .clob_client import ClobClient
 from .alchemy_client import AlchemyClient
 
+from ..report.engine import ReportEngine
+
+
 log = logging.getLogger(__name__)
 
 
@@ -1395,6 +1398,9 @@ class RealTradingEngine:
         self._db_enabled: bool = False
         if db_path:
             self.enable_database(db_path)
+
+        # Reporting
+        self.report = ReportEngine(self)
 
         # Emergency mode
         self._emergency_mode: bool = False

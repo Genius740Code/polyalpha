@@ -23,10 +23,11 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
 if TYPE_CHECKING:
     from ..trading.paper import PaperEngine
+    from ..trading.real import RealTradingEngine
 
 
 @dataclass
@@ -85,17 +86,17 @@ class TradeRecord:
 
 # ── Extractor ──────────────────────────────────────────────────────────────────
 
-def extract_trades(engine: "PaperEngine") -> list[TradeRecord]:
+def extract_trades(engine: Union["PaperEngine", "RealTradingEngine"]) -> list[TradeRecord]:
     """
-    Walk the PaperEngine's positions and orders to build a list of TradeRecords.
+    Walk the PaperEngine or RealTradingEngine's positions and orders to build a list of TradeRecords.
 
     Only *resolved* positions (outcome WON / LOST / CLOSED) are returned.
     Open positions are ignored — they have no exit price yet.
 
     Parameters
     ----------
-    engine : PaperEngine
-        The paper trading engine to extract trades from.
+    engine : Union[PaperEngine, RealTradingEngine]
+        The trading engine to extract trades from.
 
     Returns
     -------
