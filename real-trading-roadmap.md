@@ -60,22 +60,22 @@ Current implementation is functional but incomplete. Several critical features a
 - [x] Implement position merging for same market/side
 
 ### 2.3 Risk Management Enhancements
-- [ ] Add portfolio-level risk limits (total exposure)
-- [ ] Implement correlation-based position limits
-- [ ] Add volatility-based position sizing
-- [ ] Implement drawdown-based position reduction
-- [ ] Add market-specific risk parameters
+- [ x] Add portfolio-level risk limits (total exposure)
+- [ x] Implement correlation-based position limits
+- [ x] Add volatility-based position sizing
+- [ x] Implement drawdown-based position reduction
+- [ x] Add market-specific risk parameters
 
 ---
 
 ## Priority 3: Portfolio & Analytics
 
 ### 3.1 Portfolio Analytics
-- [ ] Implement portfolio-level P&L tracking
-- [ ] Add performance metrics (Sharpe ratio, max drawdown, etc.)
-- [ ] Implement trade history analytics
-- [ ] Add win rate and profit factor calculations
-- [ ] Implement time-based performance analysis (daily/weekly/monthly)
+- [x] Implement portfolio-level P&L tracking
+- [x] Add performance metrics (Sharpe ratio, max drawdown, etc.)
+- [x] Implement trade history analytics
+- [x] Add win rate and profit factor calculations
+- [x] Implement time-based performance analysis (daily/weekly/monthly)
 
 ### 3.2 Reporting
 - [ ] Create portfolio summary reports
