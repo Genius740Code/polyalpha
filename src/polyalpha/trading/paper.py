@@ -547,6 +547,9 @@ class PaperEngine:
         
         # Portfolio analytics engine (lazy-initialized)
         self._portfolio_analytics: Optional["PortfolioAnalytics"] = None
+        
+        # Reporting engine (lazy-initialized)
+        self._reporting: Optional["ReportingEngine"] = None
 
     @property
     def report(self) -> "ReportEngine":
@@ -571,6 +574,14 @@ class PaperEngine:
             from ..report.portfolio_analytics import PortfolioAnalytics
             self._portfolio_analytics = PortfolioAnalytics(self)
         return self._portfolio_analytics
+
+    @property
+    def reporting(self) -> "ReportingEngine":
+        """Comprehensive reporting engine. Access via ``client.paper.reporting``."""
+        if self._reporting is None:
+            from ..report.reporting import ReportingEngine
+            self._reporting = ReportingEngine(self)
+        return self._reporting
 
     def set_auto_redeem_config(self, config: "AutoRedeemConfig") -> None:
         """Set a custom auto-redeem configuration."""
