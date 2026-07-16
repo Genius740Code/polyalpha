@@ -60,3 +60,39 @@ class RiskLimitExceeded(PolyalphaError):
 
 class OrderCancelled(PolyalphaError):
     """Order cancelled by user or system."""
+
+
+class CircuitBreakerOpenError(PolyalphaError):
+    """Circuit breaker is open and blocking requests."""
+
+
+class ManualInterventionRequiredError(PolyalphaError):
+    """Manual intervention required to recover from error."""
+
+
+class TransactionRollbackError(PolyalphaError):
+    """Failed to rollback transaction."""
+
+
+class BackupError(PolyalphaError):
+    """Backup or restore operation failed."""
+
+
+class ConfigurationError(PolyalphaError):
+    """Invalid configuration provided."""
+
+
+class AuthenticationError(PolyalphaError):
+    """Authentication failed."""
+
+
+class RateLimitExceeded(PolyalphaError):
+    """API rate limit exceeded."""
+
+
+class GasEstimationError(PolyalphaError):
+    """Failed to estimate gas for transaction."""
+
+
+class TransactionRebroadcastError(PolyalphaError):
+    """Failed to re-broadcast transaction."""

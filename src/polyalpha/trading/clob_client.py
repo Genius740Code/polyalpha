@@ -42,7 +42,7 @@ import logging
 import time
 from typing import Optional
 
-from ..core import NetworkError, OrderRejected, OrderTimeout, TransientError
+from ..core import NetworkError, OrderRejected, OrderTimeout, TransientError, RateLimitExceeded
 
 log = logging.getLogger(__name__)
 
@@ -222,6 +222,13 @@ class ClobClient:
             except Exception as e:
                 last_error = e
                 if attempt < self.retry_attempts - 1:
+                    # Check for rate limit errors
+                    if hasattr(e, 'response') and hasattr(e.response, 'status_code'):
+                        if e.response.status_code == 429:
+                            log.warning("Rate limit exceeded. Backing off...")
+                            time.sleep(self.retry_delay * (2 ** attempt) * 2)  # Extra delay for rate limit
+                            continue
+
                     log.warning(
                         "Request attempt %d failed: %s. Retrying in %.1fs...",
                         attempt + 1, e, self.retry_delay
@@ -229,6 +236,16 @@ class ClobClient:
                     time.sleep(self.retry_delay * (2 ** attempt))
                 else:
                     log.error("All %d request attempts failed", self.retry_attempts)
+                    
+                    # Check for specific error types
+                    if hasattr(e, 'response') and hasattr(e.response, 'status_code'):
+                        if e.response.status_code == 429:
+                            raise RateLimitExceeded(f"Rate limit exceeded after {self.retry_attempts} attempts")
+                        elif e.response.status_code == 401:
+                            raise NetworkError(f"Authentication failed: {e}")
+                        elif e.response.status_code == 403:
+                            raise NetworkError(f"Authorization failed: {e}")
+                    
                     raise NetworkError(f"Request failed after {self.retry_attempts} attempts: {e}")
 
         raise NetworkError(f"Request failed: {last_error}")
