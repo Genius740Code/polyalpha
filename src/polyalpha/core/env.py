@@ -91,3 +91,90 @@ def get_env_config() -> dict[str, Any]:
         "openrouter_api_key": _get("OPENROUTER_API_KEY", var_type=str),
         "db_path": _get("DB_PATH", var_type=str),
     }
+
+
+def get_paper_config_from_env() -> dict[str, Any]:
+    """
+    Load paper trading configuration from environment variables.
+    
+    Returns
+    -------
+    dict[str, Any]
+        Dictionary containing paper trading configuration values from environment.
+    
+    Notes
+    -----
+    This function loads the following paper trading environment variables:
+    
+    Fee Configuration:
+    - POLYALPHA_PAPER_FEE_MODE: Fee mode ("polymarket", "custom", "zero", default: "custom")
+    - POLYALPHA_PAPER_MARKET_CATEGORY: Market category for polymarket fees (default: "crypto")
+    - POLYALPHA_PAPER_CUSTOM_FEE_RATE: Custom fee rate (default: 0.02)
+    - POLYALPHA_PAPER_MAKER_FEE_RATE: Maker fee rate (default: 0.0)
+    
+    Fee Rebate Configuration:
+    - POLYALPHA_PAPER_ENABLE_REBATES: Enable fee rebates (bool, default: True)
+    - POLYALPHA_PAPER_MAKER_REBATE_PCT: Maker rebate percentage (default: 0.25)
+    
+    Execution Simulation:
+    - POLYALPHA_PAPER_EXECUTION_DELAY_MS: Execution delay in milliseconds (default: 0)
+    - POLYALPHA_PAPER_DELAY_RANDOMNESS: Delay randomness 0-1 (default: 0.0)
+    - POLYALPHA_PAPER_SLIPPAGE_PCT: Slippage percentage (default: 0.0)
+    - POLYALPHA_PAPER_SLIPPAGE_RANDOMNESS: Slippage randomness 0-1 (default: 0.0)
+    - POLYALPHA_PAPER_MAX_SLIPPAGE_NO_FILL: Max slippage before no fill 0-1 (default: 0.10)
+    - POLYALPHA_PAPER_FILL_PROBABILITY: Fill probability 0-1 (default: 1.0)
+    - POLYALPHA_PAPER_CHECK_MODE: Condition check mode (default: "continuous")
+    
+    Risk Management:
+    - POLYALPHA_PAPER_ENABLE_RISK_MANAGEMENT: Enable risk checks (bool, default: True)
+    - POLYALPHA_PAPER_MAX_DAILY_LOSS: Maximum daily loss (default: 500.0)
+    - POLYALPHA_PAPER_MAX_TRADES_PER_DAY: Maximum trades per day (default: 100)
+    - POLYALPHA_PAPER_MAX_ORDER_SIZE: Maximum order size (default: 1000.0)
+    - POLYALPHA_PAPER_MAX_POSITION_SIZE: Maximum position size (default: 2000.0)
+    - POLYALPHA_PAPER_MAX_OPEN_POSITIONS: Maximum open positions (default: 10)
+    - POLYALPHA_PAPER_MAX_RISK_PER_TRADE: Maximum risk per trade 0-1 (default: 0.02)
+    """
+    def _get(name: str, default: Any = None, var_type: type = str) -> Any:
+        """Helper to get env var with type conversion."""
+        env_name = f"POLYALPHA_PAPER_{name}"
+        value = os.environ.get(env_name)
+        if value is None:
+            return default
+        if var_type == bool:
+            return value.lower() in ("true", "1", "yes", "on")
+        if var_type == int:
+            return int(value)
+        if var_type == float:
+            return float(value)
+        return value
+    
+    # Parse check_mode - could be string or integer
+    check_mode = _get("CHECK_MODE", default="continuous", var_type=str)
+    if check_mode not in ("continuous", "once"):
+        try:
+            check_mode = int(check_mode)
+        except ValueError:
+            check_mode = "continuous"
+    
+    return {
+        "fee_mode": _get("FEE_MODE", default="custom", var_type=str),
+        "market_category": _get("MARKET_CATEGORY", default="crypto", var_type=str),
+        "custom_fee_rate": _get("CUSTOM_FEE_RATE", default=0.02, var_type=float),
+        "maker_fee_rate": _get("MAKER_FEE_RATE", default=0.0, var_type=float),
+        "enable_rebates": _get("ENABLE_REBATES", default=True, var_type=bool),
+        "maker_rebate_pct": _get("MAKER_REBATE_PCT", default=0.25, var_type=float),
+        "execution_delay_ms": _get("EXECUTION_DELAY_MS", default=0, var_type=int),
+        "delay_randomness": _get("DELAY_RANDOMNESS", default=0.0, var_type=float),
+        "slippage_pct": _get("SLIPPAGE_PCT", default=0.0, var_type=float),
+        "slippage_randomness": _get("SLIPPAGE_RANDOMNESS", default=0.0, var_type=float),
+        "max_slippage_no_fill": _get("MAX_SLIPPAGE_NO_FILL", default=0.10, var_type=float),
+        "fill_probability": _get("FILL_PROBABILITY", default=1.0, var_type=float),
+        "check_mode": check_mode,
+        "enable_risk_management": _get("ENABLE_RISK_MANAGEMENT", default=True, var_type=bool),
+        "max_daily_loss": _get("MAX_DAILY_LOSS", default=500.0, var_type=float),
+        "max_trades_per_day": _get("MAX_TRADES_PER_DAY", default=100, var_type=int),
+        "max_order_size": _get("MAX_ORDER_SIZE", default=1000.0, var_type=float),
+        "max_position_size": _get("MAX_POSITION_SIZE", default=2000.0, var_type=float),
+        "max_open_positions": _get("MAX_OPEN_POSITIONS", default=10, var_type=int),
+        "max_risk_per_trade": _get("MAX_RISK_PER_TRADE", default=0.02, var_type=float),
+    }

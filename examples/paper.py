@@ -12,6 +12,10 @@ Usage
     
     # Load configuration from .env file
     python examples/paper.py --from-env
+    
+    # Use a configuration preset
+    python examples/paper.py --preset REALISTIC
+    python examples/paper.py --preset list
 """
 
 import argparse
@@ -40,7 +44,16 @@ parser.add_argument("--enable-rebates", action="store_true", help="Enable fee re
 parser.add_argument("--disable-rebates", action="store_true", help="Disable fee rebate tracking")
 parser.add_argument("--custom-rebate-tiers", type=str, help="Custom rebate tiers as JSON string (e.g., '{\"0\":0.0,\"1000\":0.15,\"5000\":0.20}')")
 parser.add_argument("--from-env", action="store_true", help="Load configuration from .env file")
+parser.add_argument("--preset", type=str, help="Use a configuration preset (or 'list' to see available presets)")
 args = parser.parse_args()
+
+# Handle preset listing
+if args.preset == "list":
+    from polyalpha.trading.paper_config import list_presets
+    print("Available configuration presets:")
+    for preset in list_presets():
+        print(f"  - {preset}")
+    sys.exit(0)
 
 # Load from environment if requested
 if args.from_env:
@@ -55,39 +68,49 @@ if args.from_env:
 # Create paper trading configuration
 from polyalpha.trading.paper import PaperConfig
 
-# Parse check_mode - could be string or integer
-check_mode = args.check_mode
-if check_mode not in ("continuous", "once"):
+# Handle preset loading
+if args.preset and args.preset != "list":
+    from polyalpha.trading.paper_config import get_paper_config_from_preset
     try:
-        check_mode = int(check_mode)
-    except ValueError:
-        check_mode = "continuous"
+        config = get_paper_config_from_preset(args.preset)
+        print(f"Using preset: {args.preset.upper()}")
+    except ValueError as e:
+        print(f"Error loading preset: {e}")
+        sys.exit(1)
+else:
+    # Parse check_mode - could be string or integer
+    check_mode = args.check_mode
+    if check_mode not in ("continuous", "once"):
+        try:
+            check_mode = int(check_mode)
+        except ValueError:
+            check_mode = "continuous"
 
-# Parse custom rebate tiers if provided
-rebate_tiers = None
-if args.custom_rebate_tiers:
-    import json
-    try:
-        rebate_tiers = json.loads(args.custom_rebate_tiers)
-    except json.JSONDecodeError:
-        print(f"Invalid JSON for custom-rebate-tiers: {args.custom_rebate_tiers}")
-        print("Using default rebate tiers")
-        rebate_tiers = None
+    # Parse custom rebate tiers if provided
+    rebate_tiers = None
+    if args.custom_rebate_tiers:
+        import json
+        try:
+            rebate_tiers = json.loads(args.custom_rebate_tiers)
+        except json.JSONDecodeError:
+            print(f"Invalid JSON for custom-rebate-tiers: {args.custom_rebate_tiers}")
+            print("Using default rebate tiers")
+            rebate_tiers = None
 
-# Determine if rebates are enabled
-enable_rebates = not args.disable_rebates
+    # Determine if rebates are enabled
+    enable_rebates = not args.disable_rebates
 
-config = PaperConfig(
-    fee_mode=args.fee_mode,
-    market_category=args.category,
-    custom_fee_rate=args.custom_fee,
-    execution_delay_ms=args.delay,
-    slippage_pct=args.slippage,
-    fill_probability=args.fill_prob,
-    check_mode=check_mode,
-    enable_rebates=enable_rebates,
-    rebate_tiers=rebate_tiers,
-)
+    config = PaperConfig(
+        fee_mode=args.fee_mode,
+        market_category=args.category,
+        custom_fee_rate=args.custom_fee,
+        execution_delay_ms=args.delay,
+        slippage_pct=args.slippage,
+        fill_probability=args.fill_prob,
+        check_mode=check_mode,
+        enable_rebates=enable_rebates,
+        rebate_tiers=rebate_tiers,
+    )
 
 client = polyalpha.Client(balance=args.balance, log_level="INFO", rate_limit=args.rate_limit, paper_config=config)
 

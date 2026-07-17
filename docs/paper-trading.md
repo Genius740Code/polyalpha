@@ -52,6 +52,158 @@ client = polyalpha.Client(balance=500.0, paper_config=config)
 
 ---
 
+## Configuration from Environment Variables
+
+You can load paper trading configuration from environment variables for easy configuration without code changes:
+
+```python
+import polyalpha
+from polyalpha.core.env import load_env_file
+
+# Load from .env file
+load_env_file()
+
+# Create client with config from environment
+client = polyalpha.Client(balance=500.0, paper_config_from_env=True)
+```
+
+### Available Environment Variables
+
+**Fee Configuration:**
+- `POLYALPHA_PAPER_FEE_MODE`: Fee mode ("polymarket", "custom", "zero", default: "custom")
+- `POLYALPHA_PAPER_MARKET_CATEGORY`: Market category for polymarket fees (default: "crypto")
+- `POLYALPHA_PAPER_CUSTOM_FEE_RATE`: Custom fee rate (default: 0.02)
+- `POLYALPHA_PAPER_MAKER_FEE_RATE`: Maker fee rate (default: 0.0)
+
+**Fee Rebate Configuration:**
+- `POLYALPHA_PAPER_ENABLE_REBATES`: Enable fee rebates (bool, default: True)
+- `POLYALPHA_PAPER_MAKER_REBATE_PCT`: Maker rebate percentage (default: 0.25)
+
+**Execution Simulation:**
+- `POLYALPHA_PAPER_EXECUTION_DELAY_MS`: Execution delay in milliseconds (default: 0)
+- `POLYALPHA_PAPER_DELAY_RANDOMNESS`: Delay randomness 0-1 (default: 0.0)
+- `POLYALPHA_PAPER_SLIPPAGE_PCT`: Slippage percentage (default: 0.0)
+- `POLYALPHA_PAPER_SLIPPAGE_RANDOMNESS`: Slippage randomness 0-1 (default: 0.0)
+- `POLYALPHA_PAPER_MAX_SLIPPAGE_NO_FILL`: Max slippage before no fill 0-1 (default: 0.10)
+- `POLYALPHA_PAPER_FILL_PROBABILITY`: Fill probability 0-1 (default: 1.0)
+- `POLYALPHA_PAPER_CHECK_MODE`: Condition check mode (default: "continuous")
+
+**Risk Management:**
+- `POLYALPHA_PAPER_ENABLE_RISK_MANAGEMENT`: Enable risk checks (bool, default: True)
+- `POLYALPHA_PAPER_MAX_DAILY_LOSS`: Maximum daily loss (default: 500.0)
+- `POLYALPHA_PAPER_MAX_TRADES_PER_DAY`: Maximum trades per day (default: 100)
+- `POLYALPHA_PAPER_MAX_ORDER_SIZE`: Maximum order size (default: 1000.0)
+- `POLYALPHA_PAPER_MAX_POSITION_SIZE`: Maximum position size (default: 2000.0)
+- `POLYALPHA_PAPER_MAX_OPEN_POSITIONS`: Maximum open positions (default: 10)
+- `POLYALPHA_PAPER_MAX_RISK_PER_TRADE`: Maximum risk per trade 0-1 (default: 0.02)
+
+### Example .env File
+
+```bash
+# Paper Trading Configuration
+POLYALPHA_PAPER_FEE_MODE=polymarket
+POLYALPHA_PAPER_MARKET_CATEGORY=crypto
+POLYALPHA_PAPER_EXECUTION_DELAY_MS=2000
+POLYALPHA_PAPER_SLIPPAGE_PCT=0.03
+POLYALPHA_PAPER_FILL_PROBABILITY=0.85
+POLYALPHA_PAPER_ENABLE_REBATES=true
+POLYALPHA_PAPER_ENABLE_RISK_MANAGEMENT=true
+POLYALPHA_PAPER_MAX_DAILY_LOSS=500.0
+POLYALPHA_PAPER_MAX_RISK_PER_TRADE=0.02
+```
+
+---
+
+## Configuration Presets
+
+Paper trading includes pre-configured presets for common trading strategies:
+
+```python
+from polyalpha.trading.paper_config import get_paper_config_from_preset, list_presets
+
+# List available presets
+print(list_presets())
+# Output: ['CONSERVATIVE', 'REALISTIC', 'AGGRESSIVE', 'ZERO_FEE', 'HIGH_LATENCY', 'LIQUIDITY_PROVIDER', 'SCALPER', 'TEST']
+
+# Use a preset
+config = get_paper_config_from_preset("REALISTIC")
+client = polyalpha.Client(balance=1000.0, paper_config=config)
+```
+
+### Available Presets
+
+- **CONSERVATIVE**: Low risk, low slippage, realistic fees. Good for testing strategies safely.
+- **REALISTIC**: Balanced configuration matching typical Polymarket conditions.
+- **AGGRESSIVE**: Higher risk tolerance, higher slippage, more trades allowed.
+- **ZERO_FEE**: No fees for testing strategy logic without cost impact.
+- **HIGH_LATENCY**: Simulates slow execution with high delays and slippage.
+- **LIQUIDITY_PROVIDER**: Maker-focused configuration with enhanced rebates.
+- **SCALPER**: Fast execution, low slippage, high trade frequency for scalping strategies.
+- **TEST**: No restrictions, no fees, unlimited trades for testing and development.
+
+### Preset Details
+
+**CONSERVATIVE:**
+- Fees: Polymarket realistic
+- Execution delay: 500ms ±10%
+- Slippage: 1% ±5%
+- Max daily loss: $100
+- Max trades per day: 20
+- Max risk per trade: 1%
+
+**REALISTIC:**
+- Fees: Polymarket realistic
+- Execution delay: 2000ms ±20%
+- Slippage: 3% ±10%
+- Max daily loss: $500
+- Max trades per day: 100
+- Max risk per trade: 2%
+
+**AGGRESSIVE:**
+- Fees: Custom 2%
+- Execution delay: 100ms ±30%
+- Slippage: 5% ±20%
+- Max daily loss: $1000
+- Max trades per day: 200
+- Max risk per trade: 5%
+
+**ZERO_FEE:**
+- Fees: None
+- Execution delay: 0ms
+- Slippage: 0%
+- Fill probability: 100%
+- Risk management: Enabled
+
+**HIGH_LATENCY:**
+- Fees: Custom 2%
+- Execution delay: 5000ms ±50%
+- Slippage: 8% ±30%
+- Max daily loss: $500
+- Max trades per day: 50
+
+**LIQUIDITY_PROVIDER:**
+- Fees: Custom 1%
+- Enhanced rebates: 35% maker bonus
+- Execution delay: 1000ms ±15%
+- Slippage: 2% ±5%
+- Max trades per day: 150
+
+**SCALPER:**
+- Fees: Custom 2%
+- Execution delay: 50ms ±10%
+- Slippage: 2% ±5%
+- Max trades per day: 500
+- Max risk per trade: 0.5%
+
+**TEST:**
+- Fees: None
+- Execution delay: 0ms
+- Slippage: 0%
+- Risk management: Disabled
+- Unlimited trades and positions
+
+---
+
 ## Fee Rebate System
 
 The paper trading engine includes a comprehensive fee rebate system that tracks and rewards trading volume. Rebates reduce your effective trading costs based on your cumulative trading volume and order type.

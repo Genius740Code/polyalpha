@@ -28,6 +28,7 @@ from .trading.paper import PaperConfig
 from .trading.real import RealTradingConfig
 from .trading.auto_redeem import AutoRedeemConfig
 from .orderbook import ClobBookClient, OrderBookFeed
+from .core.env import get_paper_config_from_env
 
 
 class Client:
@@ -42,6 +43,7 @@ class Client:
     log_level          : Python logging level string, e.g. "DEBUG", "INFO", "WARNING".
     rate_limit         : Max API requests per second (default None = unlimited).
     paper_config       : PaperConfig for paper trading realism options (default None).
+    paper_config_from_env : Load paper trading config from environment variables (default False).
     db_path            : Path to SQLite database file for trade persistence (default None).
     openrouter_api_key : OpenRouter API key for AI features (default None = disabled).
     private_key        : Private key for real trading wallet (default None = disabled).
@@ -72,6 +74,7 @@ class Client:
         log_level: str   = "WARNING",
         rate_limit: int | None = None,
         paper_config: PaperConfig | None = None,
+        paper_config_from_env: bool = False,
         db_path: str | None = None,
         openrouter_api_key: str | None = None,
         private_key: str | None = None,
@@ -82,6 +85,11 @@ class Client:
         # Configure library-specific logger without affecting global logging
         self._log = logging.getLogger("polyalpha")
         self._log.setLevel(getattr(logging, log_level.upper(), logging.WARNING))
+
+        # Load paper config from environment if requested
+        if paper_config_from_env and paper_config is None:
+            env_config = get_paper_config_from_env()
+            paper_config = PaperConfig(**env_config)
 
         self.markets = MarketClient(timeout=timeout, retries=retries, rate_limit=rate_limit)
         self.paper   = PaperEngine(balance=balance, config=paper_config, db_path=db_path)
