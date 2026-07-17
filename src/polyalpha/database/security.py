@@ -34,6 +34,12 @@ try:
 except ImportError:
     JWT_AVAILABLE = False
 
+try:
+    import bcrypt
+    BCRYPT_AVAILABLE = True
+except ImportError:
+    BCRYPT_AVAILABLE = False
+
 log = logging.getLogger(__name__)
 
 
@@ -424,8 +430,15 @@ class AuthenticationManager:
         return self._users.get(user_id)
     
     def _hash_api_key(self, api_key: str) -> str:
-        """Hash an API key for storage."""
-        return hashlib.sha256(api_key.encode()).hexdigest()
+        """Hash an API key for storage using bcrypt."""
+        if not BCRYPT_AVAILABLE:
+            raise ImportError(
+                "bcrypt library is required for secure password hashing. "
+                "Install it with: pip install bcrypt"
+            )
+        salt = bcrypt.gensalt(rounds=12)
+        hashed = bcrypt.hashpw(api_key.encode(), salt)
+        return hashed.decode('utf-8')
     
     def generate_api_key(self) -> str:
         """Generate a random API key."""
@@ -448,8 +461,18 @@ class AuthenticationManager:
         if self._method != AuthMethod.API_KEY:
             return None
         
-        api_key_hash = self._hash_api_key(api_key)
-        return self._api_keys.get(api_key_hash)
+        if not BCRYPT_AVAILABLE:
+            raise ImportError(
+                "bcrypt library is required for secure password hashing. "
+                "Install it with: pip install bcrypt"
+            )
+        
+        # Check against all stored hashes
+        for stored_hash, user_id in self._api_keys.items():
+            if bcrypt.checkpw(api_key.encode(), stored_hash.encode('utf-8')):
+                return user_id
+        
+        return None
     
     def generate_jwt_token(self, user_id: str, payload: Optional[Dict[str, Any]] = None) -> str:
         """
