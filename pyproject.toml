@@ -63,10 +63,10 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/polyalpha"
-Documentation = "https://github.com/yourusername/polyalpha#readme"
-Repository = "https://github.com/yourusername/polyalpha"
-Issues = "https://github.com/yourusername/polyalpha/issues"
+Homepage = "https://github.com/Genius740Code/polyalpha"
+Documentation = "https://github.com/Genius740Code/polyalpha#readme"
+Repository = "https://github.com/Genius740Code/polyalpha"
+Issues = "https://github.com/Genius740Code/polyalpha/issues"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
