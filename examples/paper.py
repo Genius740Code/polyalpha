@@ -9,6 +9,9 @@ Usage
     python examples/paper.py --rate-limit 10
     python examples/paper.py --fee-mode polymarket --category crypto
     python examples/paper.py --delay 2000 --slippage 0.05
+    
+    # Load configuration from .env file
+    python examples/paper.py --from-env
 """
 
 import argparse
@@ -36,7 +39,18 @@ parser.add_argument("--check-mode", default="continuous", help="Condition check 
 parser.add_argument("--enable-rebates", action="store_true", help="Enable fee rebate tracking (default: enabled)")
 parser.add_argument("--disable-rebates", action="store_true", help="Disable fee rebate tracking")
 parser.add_argument("--custom-rebate-tiers", type=str, help="Custom rebate tiers as JSON string (e.g., '{\"0\":0.0,\"1000\":0.15,\"5000\":0.20}')")
+parser.add_argument("--from-env", action="store_true", help="Load configuration from .env file")
 args = parser.parse_args()
+
+# Load from environment if requested
+if args.from_env:
+    polyalpha.load_env_file()
+    config = polyalpha.get_env_config()
+    # Override args with env values
+    if config["balance"] != 100.0:
+        args.balance = config["balance"]
+    if config["rate_limit"] is not None:
+        args.rate_limit = config["rate_limit"]
 
 # Create paper trading configuration
 from polyalpha.trading.paper import PaperConfig

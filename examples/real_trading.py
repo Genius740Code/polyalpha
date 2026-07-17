@@ -5,9 +5,33 @@ This example demonstrates how to set up and use the real trading engine
 for actual fund execution via Polymarket CLOB.
 
 IMPORTANT: This uses real money. Use with caution and start with small amounts.
+
+Usage
+-----
+    # Using environment variables (recommended)
+    python examples/real_trading.py --from-env
+    
+    # Using command line arguments
+    python examples/real_trading.py --private-key YOUR_KEY --rpc-url YOUR_RPC
 """
 
+import argparse
 import polyalpha
+
+parser = argparse.ArgumentParser(description="polyalpha real trading")
+parser.add_argument("--from-env", action="store_true", help="Load credentials from .env file")
+parser.add_argument("--private-key", type=str, help="Wallet private key")
+parser.add_argument("--rpc-url", type=str, help="Polygon RPC URL")
+parser.add_argument("--api-key", type=str, help="Polymarket API key")
+args = parser.parse_args()
+
+# Load from environment if requested
+if args.from_env:
+    polyalpha.load_env_file()
+    config = polyalpha.get_env_config()
+    args.private_key = config["private_key"]
+    args.rpc_url = config["rpc_url"]
+    args.api_key = config["polymarket_api_key"]
 
 # ── Basic Real Trading Setup ─────────────────────────────────────────────────────
 
@@ -16,9 +40,9 @@ def basic_real_trading():
 
     # Initialize client with real trading credentials
     client = polyalpha.Client(
-        private_key="your-private-key-here",  # Your wallet private key
-        rpc_url="https://polygon-rpc.com",  # Polygon RPC URL
-        polymarket_api_key="your-polymarket-api-key",  # Polymarket API key
+        private_key=args.private_key or "your-private-key-here",  # Your wallet private key
+        rpc_url=args.rpc_url or "https://polygon-rpc.com",  # Polygon RPC URL
+        polymarket_api_key=args.api_key or "your-polymarket-api-key",  # Polymarket API key
         real_config=polyalpha.RealTradingConfig(
             # Safety settings
             require_confirmation=True,  # Always confirm orders

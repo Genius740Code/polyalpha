@@ -42,6 +42,84 @@ stream.start()  # blocks until the market closes
 
 ---
 
+## Environment Configuration
+
+Polyalpha supports loading configuration from `.env` files for security and convenience. This is especially useful for sensitive credentials like private keys and API keys.
+
+### Setup
+
+1. Copy the example `.env` file:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Edit `.env` with your configuration:
+   ```bash
+   # Paper trading
+   POLYALPHA_BALANCE=500.0
+   POLYALPHA_LOG_LEVEL=INFO
+   POLYALPHA_RATE_LIMIT=10
+
+   # Real trading (optional - only if using real money)
+   POLYALPHA_PRIVATE_KEY=your_private_key_here
+   POLYALPHA_RPC_URL=https://polygon-rpc.com
+   POLYALPHA_POLYMARKET_API_KEY=your_api_key_here
+
+   # AI features (optional)
+   POLYALPHA_OPENROUTER_API_KEY=your_openrouter_key_here
+   ```
+
+### Usage
+
+```python
+import polyalpha
+
+# Load environment variables from .env file
+polyalpha.load_env_file()
+
+# Get configuration as a dictionary
+config = polyalpha.get_env_config()
+
+# Use the configuration
+client = polyalpha.Client(
+    balance=config["balance"],
+    log_level=config["log_level"],
+    rate_limit=config["rate_limit"],
+    private_key=config["private_key"],  # for real trading
+    rpc_url=config["rpc_url"],
+    polymarket_api_key=config["polymarket_api_key"],
+)
+```
+
+### Available Environment Variables
+
+| Variable | Type | Default | Description |
+|---|---|---|---|
+| `POLYALPHA_BALANCE` | float | 100.0 | Paper trading starting balance |
+| `POLYALPHA_LOG_LEVEL` | str | "WARNING" | Logging level (DEBUG/INFO/WARNING/ERROR) |
+| `POLYALPHA_RATE_LIMIT` | int | None | Max API requests per second |
+| `POLYALPHA_TIMEOUT` | int | 10 | HTTP request timeout in seconds |
+| `POLYALPHA_RETRIES` | int | 3 | Number of HTTP retries on 5xx errors |
+| `POLYALPHA_PRIVATE_KEY` | str | None | Wallet private key for real trading |
+| `POLYALPHA_RPC_URL` | str | "https://polygon-rpc.com" | Polygon RPC URL |
+| `POLYALPHA_POLYMARKET_API_KEY` | str | None | Polymarket CLOB API key |
+| `POLYALPHA_OPENROUTER_API_KEY` | str | None | OpenRouter API key for AI features |
+| `POLYALPHA_DB_PATH` | str | None | Path to SQLite database file |
+
+### Example Scripts
+
+The example scripts support `--from-env` flag:
+
+```bash
+# Paper trading with environment variables
+python examples/paper.py --from-env
+
+# Real trading with environment variables (recommended for security)
+python examples/real_trading.py --from-env
+```
+
+---
+
 ## The Client
 
 `polyalpha.Client` is the single entry point for everything.

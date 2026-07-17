@@ -27,6 +27,7 @@ Quick start
 
 from .client import Client
 from .core import Market
+from .core.env import load_env_file, get_env_config
 from .stream import Stream
 from .trading import PaperEngine, RealTradingEngine
 from .trading.paper import PaperConfig
@@ -93,6 +94,9 @@ __all__ = [
     # Data objects
     "Market",
     "Stream",
+    # Environment
+    "load_env_file",
+    "get_env_config",
     # Paper trading
     "PaperEngine",
     "PaperConfig",
