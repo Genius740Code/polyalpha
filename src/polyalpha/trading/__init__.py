@@ -14,6 +14,14 @@ from .auto_redeem import (
     RedeemResult,
 )
 from .retry import retry_on_error, retry_with_jitter
+from .real_config import (
+    PRESETS as REAL_PRESETS,
+    list_presets as list_real_presets,
+    get_preset as get_real_preset,
+    print_preset as print_real_preset,
+    add_preset as add_real_preset,
+    get_real_config_from_preset,
+)
 
 __all__ = [
     "PaperEngine",
@@ -31,4 +39,10 @@ __all__ = [
     "RedeemResult",
     "retry_on_error",
     "retry_with_jitter",
+    "REAL_PRESETS",
+    "list_real_presets",
+    "get_real_preset",
+    "print_real_preset",
+    "add_real_preset",
+    "get_real_config_from_preset",
 ]
