@@ -520,9 +520,6 @@ class PaperEngine:
     """
 
     def __init__(self, balance: float = 100.0, config: Optional[PaperConfig] = None, db_path: Optional[str] = None):
-        self._balance:   float                       = float(balance)
-        self._orders:    dict[str, PaperOrder]       = {}
-        self._positions: dict[str, PaperPosition]    = {}   # key: "{market_id}:{side}"
         self._config:    PaperConfig                  = config or PaperConfig()
         # Lazy-initialised in the report property to avoid circular imports
         self._report: Optional["ReportEngine"] = None
@@ -531,6 +528,15 @@ class PaperEngine:
         self._db_enabled: bool = False
         if db_path:
             self.enable_database(db_path)
+        
+        # Multi-wallet support
+        self._wallet_manager: Optional["WalletManager"] = None
+        self._use_multi_wallet: bool = False
+        
+        # Initialize single-wallet mode for backward compatibility
+        self._balance:   float                       = float(balance)
+        self._orders:    dict[str, PaperOrder]       = {}
+        self._positions: dict[str, PaperPosition]    = {}   # key: "{market_id}:{side}"
         # Risk management
         self._risk_manager: RiskManager = RiskManager(self._config, self._balance)
         # Fee rebate tracking
@@ -588,11 +594,87 @@ class PaperEngine:
         from .auto_redeem import AutoRedeemEngine
         self._auto_redeem = AutoRedeemEngine(self, config)
 
+    # ── Multi-Wallet Support ─────────────────────────────────────────────────────
+
+    def enable_multi_wallet(self, wallet_manager: "WalletManager") -> None:
+        """
+        Enable multi-wallet mode with a custom wallet manager.
+        
+        Parameters
+        ----------
+        wallet_manager : WalletManager
+            Pre-configured wallet manager with multiple wallets.
+        
+        Example
+        -------
+        >>> from polyalpha.trading.wallet import WalletManager, PaperWallet
+        >>> wm = WalletManager()
+        >>> wm.add_wallet(PaperWallet("wallet1", balance=100.0))
+        >>> wm.add_wallet(PaperWallet("wallet2", balance=200.0))
+        >>> client.paper.enable_multi_wallet(wm)
+        """
+        from .wallet import WalletManager
+        if not isinstance(wallet_manager, WalletManager):
+            raise TypeError("wallet_manager must be a WalletManager instance")
+        if not wallet_manager.wallets:
+            raise ValueError("wallet_manager must have at least one wallet")
+        
+        self._wallet_manager = wallet_manager
+        self._use_multi_wallet = True
+        log.info("PaperEngine: multi-wallet mode enabled with %d wallets", len(wallet_manager.wallets))
+
+    def disable_multi_wallet(self) -> None:
+        """Disable multi-wallet mode and return to single-wallet mode."""
+        self._wallet_manager = None
+        self._use_multi_wallet = False
+        log.info("PaperEngine: returned to single-wallet mode")
+
+    @property
+    def wallets(self) -> Optional["WalletManager"]:
+        """
+        Get the wallet manager if multi-wallet mode is enabled.
+        
+        Returns None if in single-wallet mode.
+        
+        Example
+        -------
+        >>> if client.paper.wallets:
+        ...     summary = client.paper.wallets.get_aggregated_summary()
+        ...     print(f"Total balance: ${summary['total_balance']}")
+        """
+        return self._wallet_manager
+
+    @property
+    def is_multi_wallet(self) -> bool:
+        """Check if multi-wallet mode is enabled."""
+        return self._use_multi_wallet
+
+    def _get_active_wallet(self) -> "PaperWallet":
+        """
+        Get the active wallet for trading operations.
+        
+        In single-wallet mode, returns a virtual wallet wrapping the engine's state.
+        In multi-wallet mode, uses the wallet manager's selection strategy.
+        """
+        if not self._use_multi_wallet:
+            # Return a virtual wallet for backward compatibility
+            from .wallet import PaperWallet
+            # Create a virtual wallet that wraps the engine's state
+            virtual_wallet = PaperWallet(wallet_id="default", balance=self._balance, config=self._config)
+            virtual_wallet._orders = self._orders
+            virtual_wallet._positions = self._positions
+            virtual_wallet._risk_manager = self._risk_manager
+            return virtual_wallet
+        else:
+            return self._wallet_manager.select_wallet()
+
     # ── Balance ────────────────────────────────────────────────────────────────
 
     @property
     def balance(self) -> float:
         """Current paper USDC balance."""
+        if self._use_multi_wallet and self._wallet_manager:
+            return self._wallet_manager.get_aggregated_summary()["total_balance"]
         return self._balance
 
     @property
@@ -1117,6 +1199,9 @@ class PaperEngine:
         side   = _validate_side(side)
         amount = _validate_positive(float(amount), "amount")
 
+        # Get active wallet
+        wallet = self._get_active_wallet()
+
         price = market.up_price if side == "UP" else market.down_price
         if price <= 0:
             price = FALLBACK_PRICE  # safe fallback before first WS price arrives
@@ -1137,7 +1222,7 @@ class PaperEngine:
             )
 
         # Validate against risk limits
-        self._risk_manager.validate_order(amount, self._balance, market.id, self._positions)
+        wallet.risk_manager.validate_order(amount, wallet.balance, market.id, wallet._positions)
 
         # Apply execution delay if configured
         self._apply_execution_delay()
@@ -1163,10 +1248,10 @@ class PaperEngine:
                 time_window_start=time_window_start,
                 time_window_end=time_window_end,
             )
-            self._orders[order_id] = order
+            wallet._orders[order_id] = order
             return order
 
-        order = self._fill(market, side, actual_price, amount, is_limit=False)
+        order = self._fill(market, side, actual_price, amount, is_limit=False, wallet=wallet)
         order.time_window_start = time_window_start
         order.time_window_end = time_window_end
         return order
@@ -1208,9 +1293,12 @@ class PaperEngine:
         price  = _validate_price(float(price), "price")
         amount = _validate_positive(float(amount), "amount")
 
-        if amount > self._balance:
+        # Get active wallet
+        wallet = self._get_active_wallet()
+
+        if amount > wallet.balance:
             raise InsufficientBalance(
-                f"Order amount ${amount:.2f} exceeds balance ${self._balance:.2f}"
+                f"Order amount ${amount:.2f} exceeds balance ${wallet.balance:.2f}"
             )
 
         # Run pre-trade checks
@@ -1221,7 +1309,7 @@ class PaperEngine:
             )
 
         # Validate against risk limits
-        self._risk_manager.validate_order(amount, self._balance, market.id, self._positions)
+        wallet.risk_manager.validate_order(amount, wallet.balance, market.id, wallet._positions)
 
         order_id = _new_id()
         order = PaperOrder(
@@ -1238,11 +1326,11 @@ class PaperEngine:
             time_window_start=time_window_start,
             time_window_end=time_window_end,
         )
-        self._orders[order_id] = order
-        self._balance -= amount  # reserve
+        wallet._orders[order_id] = order
+        wallet.balance -= amount  # reserve
         log.info(
             "Paper: limit %s @ %.3f $%.2f reserved — balance $%.2f",
-            side, price, amount, self._balance,
+            side, price, amount, wallet.balance,
         )
         return order
 
@@ -1259,6 +1347,25 @@ class PaperEngine:
         -------
         >>> client.paper.cancel(order.id)
         """
+        # Find the order across all wallets if in multi-wallet mode
+        if self._use_multi_wallet and self._wallet_manager:
+            for wallet in self._wallet_manager.get_all_wallets():
+                order = wallet._orders.get(order_id)
+                if order is not None:
+                    if order.status != "open":
+                        raise ValueError(
+                            f"Cannot cancel order with status='{order.status}' (must be 'open')"
+                        )
+                    order.status = "cancelled"
+                    wallet.balance += order.amount  # refund
+                    log.info(
+                        "Paper: cancelled order %s in wallet %s — $%.2f refunded, balance $%.2f",
+                        order_id[:8], wallet.wallet_id, order.amount, wallet.balance,
+                    )
+                    return order
+            raise OrderNotFound(f"No order found: {order_id}")
+        
+        # Single wallet mode
         order = self._orders.get(order_id)
         if order is None:
             raise OrderNotFound(f"No order found: {order_id}")
@@ -1761,18 +1868,38 @@ class PaperEngine:
 
     def open(self) -> list[PaperOrder]:
         """Return all open (pending) limit orders."""
+        if self._use_multi_wallet and self._wallet_manager:
+            all_orders = []
+            for wallet in self._wallet_manager.get_all_wallets():
+                all_orders.extend([o for o in wallet._orders.values() if o.status == "open"])
+            return all_orders
         return [o for o in self._orders.values() if o.status == "open"]
 
     def orders(self) -> list[PaperOrder]:
         """Return all orders (open, filled, and cancelled)."""
+        if self._use_multi_wallet and self._wallet_manager:
+            all_orders = []
+            for wallet in self._wallet_manager.get_all_wallets():
+                all_orders.extend(list(wallet._orders.values()))
+            return all_orders
         return list(self._orders.values())
 
     def positions(self) -> list[PaperPosition]:
         """Return all live (unresolved) positions."""
+        if self._use_multi_wallet and self._wallet_manager:
+            all_positions = []
+            for wallet in self._wallet_manager.get_all_wallets():
+                all_positions.extend([p for p in wallet._positions.values() if not p.resolved])
+            return all_positions
         return [p for p in self._positions.values() if not p.resolved]
 
     def all_positions(self) -> list[PaperPosition]:
         """Return all positions including resolved ones."""
+        if self._use_multi_wallet and self._wallet_manager:
+            all_positions = []
+            for wallet in self._wallet_manager.get_all_wallets():
+                all_positions.extend(list(wallet._positions.values()))
+            return all_positions
         return list(self._positions.values())
 
     def show_positions(self, show_all: bool = False, verbose: bool = True) -> None:
@@ -1878,20 +2005,39 @@ class PaperEngine:
         if outcome not in ("UP", "DOWN"):
             raise ValueError(f"outcome must be 'UP' or 'DOWN', got '{outcome}'")
 
-        for pos in self._positions.values():
-            if pos.market_id == market.id and not pos.resolved:
-                pos.resolved = True
-                pos.outcome  = "WON" if pos.side == outcome else "LOST"
-                payout = pos.shares if pos.outcome == "WON" else 0.0
-                self._balance += payout
-                # Record P&L with risk manager
-                self._risk_manager.record_trade(pos.pnl)
-                log.info(
-                    "Paper: resolved %s → %s  payout=$%.2f  balance=$%.2f",
-                    pos.slug, pos.outcome, payout, self._balance,
-                )
-                # Save trade to database if enabled
-                self._save_trade_to_db(pos)
+        # Get positions from all wallets if in multi-wallet mode
+        if self._use_multi_wallet and self._wallet_manager:
+            for wallet in self._wallet_manager.get_all_wallets():
+                for pos in wallet._positions.values():
+                    if pos.market_id == market.id and not pos.resolved:
+                        pos.resolved = True
+                        pos.outcome  = "WON" if pos.side == outcome else "LOST"
+                        payout = pos.shares if pos.outcome == "WON" else 0.0
+                        wallet.balance += payout
+                        # Record P&L with risk manager
+                        wallet.risk_manager.record_trade(pos.pnl)
+                        log.info(
+                            "Paper: resolved %s in wallet %s → %s  payout=$%.2f  balance=$%.2f",
+                            pos.slug, wallet.wallet_id, pos.outcome, payout, wallet.balance,
+                        )
+                        # Save trade to database if enabled
+                        self._save_trade_to_db(pos)
+        else:
+            # Single wallet mode
+            for pos in self._positions.values():
+                if pos.market_id == market.id and not pos.resolved:
+                    pos.resolved = True
+                    pos.outcome  = "WON" if pos.side == outcome else "LOST"
+                    payout = pos.shares if pos.outcome == "WON" else 0.0
+                    self._balance += payout
+                    # Record P&L with risk manager
+                    self._risk_manager.record_trade(pos.pnl)
+                    log.info(
+                        "Paper: resolved %s → %s  payout=$%.2f  balance=$%.2f",
+                        pos.slug, pos.outcome, payout, self._balance,
+                    )
+                    # Save trade to database if enabled
+                    self._save_trade_to_db(pos)
 
     # ── Stream integration ─────────────────────────────────────────────────────
 
@@ -2248,11 +2394,15 @@ class PaperEngine:
         price:    float,
         amount:   float,
         is_limit: bool,
+        wallet: Optional[PaperWallet] = None,
     ) -> PaperOrder:
         """Execute a simulated fill and update the position book."""
-        if amount > self._balance:
+        if wallet is None:
+            wallet = self._get_active_wallet()
+            
+        if amount > wallet.balance:
             raise InsufficientBalance(
-                f"Order amount ${amount:.2f} exceeds balance ${self._balance:.2f}"
+                f"Order amount ${amount:.2f} exceeds balance ${wallet.balance:.2f}"
             )
 
         # Validate price is positive
@@ -2274,7 +2424,7 @@ class PaperEngine:
         net = amount - fee + rebate_amount  # Net cost after fee and rebate
         shares = round(net / price, SHARE_ROUNDING) if price > 0 else 0.0
 
-        self._balance -= amount
+        wallet.balance -= amount
         
         # Track fee and rebate statistics
         self._track_fee_and_rebate(fee, rebate_amount, fee_type, amount)
@@ -2295,12 +2445,12 @@ class PaperEngine:
             rebate_amount = rebate_amount,
             rebate_rate = rebate_rate,
         )
-        self._orders[order.id] = order
+        wallet._orders[order.id] = order
 
-        self._upsert_position(market.id, market.slug, market.question, side, shares, price, order.id)
+        self._upsert_position(market.id, market.slug, market.question, side, shares, price, order.id, wallet=wallet)
         log.info(
             "Paper: filled %s %.4f shares @ %.3f  fee=$%.4f  rebate=$%.4f  balance=$%.2f",
-            side, shares, price, fee, rebate_amount, self._balance,
+            side, shares, price, fee, rebate_amount, wallet.balance,
         )
         return order
 
@@ -2385,11 +2535,15 @@ class PaperEngine:
         shares:    float,
         price:     float,
         order_id:  str,
+        wallet: Optional[PaperWallet] = None,
     ) -> None:
         """Merge *shares* into an existing position or create a new one."""
+        if wallet is None:
+            wallet = self._get_active_wallet()
+            
         key = f"{market_id}:{side}"
-        if key in self._positions:
-            pos         = self._positions[key]
+        if key in wallet._positions:
+            pos         = wallet._positions[key]
             total       = pos.shares + shares
             pos.avg_price = round(
                 (pos.shares * pos.avg_price + shares * price) / total, PRICE_ROUNDING
@@ -2397,7 +2551,7 @@ class PaperEngine:
             pos.shares  = total
             pos.order_ids.append(order_id)
         else:
-            self._positions[key] = PaperPosition(
+            wallet._positions[key] = PaperPosition(
                 market_id     = market_id,
                 slug          = slug,
                 question      = question,
