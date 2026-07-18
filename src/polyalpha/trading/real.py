@@ -90,7 +90,8 @@ class RealTradingConfig:
     max_order_size: float = 1000.0  # Maximum USDC per order
     max_daily_loss: float = 500.0  # Stop trading if daily loss exceeds this
     max_position_size: float = 2000.0  # Maximum position size
-    max_open_positions: int = 10  # Maximum concurrent positions
+    max_open_positions: int = 10  # Maximum concurrent positions (global)
+    max_positions_per_market: int = 1  # Maximum concurrent positions per individual market (None = no limit)
 
     # Position sizing strategy
     position_sizing: str = "fixed"  # "fixed", "percentage", "kelly"
@@ -150,6 +151,8 @@ class RealTradingConfig:
             raise ValueError(f"max_position_size must be >= 0, got {self.max_position_size}")
         if self.max_open_positions < 1:
             raise ValueError(f"max_open_positions must be >= 1, got {self.max_open_positions}")
+        if self.max_positions_per_market < 0:
+            raise ValueError(f"max_positions_per_market must be >= 0, got {self.max_positions_per_market}")
         if not 0 <= self.default_stop_loss_pct <= 1:
             raise ValueError(
                 f"default_stop_loss_pct must be between 0 and 1, "
@@ -730,12 +733,20 @@ class RiskManager:
                 f"Position would exceed maximum size ${self.config.max_position_size:.2f}"
             )
 
-        # Check max open positions
+        # Check max open positions (global)
         open_positions = [p for p in positions.values() if not p.resolved]
         if len(open_positions) >= self.config.max_open_positions:
             raise RiskLimitExceeded(
                 f"Maximum open positions ({self.config.max_open_positions}) reached"
             )
+
+        # Check max positions per market
+        if self.config.max_positions_per_market > 0:
+            market_positions = [p for p in positions.values() if not p.resolved and p.market_id == market.id]
+            if len(market_positions) >= self.config.max_positions_per_market:
+                raise RiskLimitExceeded(
+                    f"Maximum positions per market ({self.config.max_positions_per_market}) reached for market {market.id}"
+                )
 
         # Check daily loss limit
         if self.daily_pnl < -self.config.max_daily_loss:

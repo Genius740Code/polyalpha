@@ -55,6 +55,7 @@ PRESETS = {
         "max_order_size": 200.0,
         "max_position_size": 500.0,
         "max_open_positions": 5,
+        "max_positions_per_market": 1,
         "max_risk_per_trade": 0.01,
     },
     "REALISTIC": {
@@ -84,6 +85,7 @@ PRESETS = {
         "max_order_size": 1000.0,
         "max_position_size": 2000.0,
         "max_open_positions": 10,
+        "max_positions_per_market": 1,
         "max_risk_per_trade": 0.02,
     },
     "AGGRESSIVE": {
@@ -113,6 +115,7 @@ PRESETS = {
         "max_order_size": 2000.0,
         "max_position_size": 5000.0,
         "max_open_positions": 20,
+        "max_positions_per_market": 1,
         "max_risk_per_trade": 0.05,
     },
     "ZERO_FEE": {
@@ -136,6 +139,7 @@ PRESETS = {
         "max_order_size": 1000.0,
         "max_position_size": 2000.0,
         "max_open_positions": 10,
+        "max_positions_per_market": 1,
         "max_risk_per_trade": 0.02,
     },
     "HIGH_LATENCY": {
@@ -165,6 +169,7 @@ PRESETS = {
         "max_order_size": 500.0,
         "max_position_size": 1000.0,
         "max_open_positions": 5,
+        "max_positions_per_market": 1,
         "max_risk_per_trade": 0.01,
     },
     "LIQUIDITY_PROVIDER": {
@@ -194,6 +199,7 @@ PRESETS = {
         "max_order_size": 1500.0,
         "max_position_size": 3000.0,
         "max_open_positions": 15,
+        "max_positions_per_market": 1,
         "max_risk_per_trade": 0.015,
     },
     "SCALPER": {
@@ -223,6 +229,7 @@ PRESETS = {
         "max_order_size": 100.0,
         "max_position_size": 300.0,
         "max_open_positions": 3,
+        "max_positions_per_market": 1,
         "max_risk_per_trade": 0.005,
     },
     "TEST": {
@@ -246,6 +253,7 @@ PRESETS = {
         "max_order_size": 10000.0,
         "max_position_size": 10000.0,
         "max_open_positions": 100,
+        "max_positions_per_market": 100,
         "max_risk_per_trade": 1.0,
     },
 }

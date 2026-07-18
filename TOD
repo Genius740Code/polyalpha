@@ -2,3 +2,11 @@ MULTI WALLET SUPPORT FOR REAL TRADING
 
 WALLET TRACKER
 
+Make buy() price-aware of an attached stream. Either auto-use the live streamed price when a stream is attached, or raise/warn if the passed market object is stale relative to end_time/last-known price. Right now it's a silent correctness footgun.
+
+max_open_positions is global, not per-asset/per-market. There's no native "max 1 open position per underlying market" — if you want that, you still have to track it yourself, which is what my locked_assets set was doing. A max_positions_per_market or 
+max_positions_per_asset config option would remove that need.
+
+No Market.refresh() method. Given Market is immutable, an explicit market.refresh() (re-fetch and return updated prices/closed status) would be a natural complement to client.markets.get() and would make the stale-price bug obvious rather than silent.
+
+Real trading module (trading/real.py) and wallet module currently fail to import — the CircuitBreakerOpenError import error I hit means polyalpha.Client can't even be constructed right now without patching core/errors.py or core/__init__.py. Worth checking if that's a broken branch/WIP commit, since it blocks paper trading too (it's imported transitively via client.py).

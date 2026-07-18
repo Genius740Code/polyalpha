@@ -54,6 +54,13 @@ from .errors import (
     OrderCancelled,
     PolyalphaError,
     StreamDisconnected,
+    CircuitBreakerOpenError,
+    ManualInterventionRequiredError,
+    TransactionRollbackError,
+    BackupError,
+    GasEstimationError,
+    TransactionRebroadcastError,
+    RateLimitExceeded,
 )
 from .market import Market
 from .market_sessions import (
@@ -122,6 +129,13 @@ __all__ = [
     "OrderCancelled",
     "PolyalphaError",
     "StreamDisconnected",
+    "CircuitBreakerOpenError",
+    "ManualInterventionRequiredError",
+    "TransactionRollbackError",
+    "BackupError",
+    "GasEstimationError",
+    "TransactionRebroadcastError",
+    "RateLimitExceeded",
     "Market",
     "MarketSession",
     "MARKET_SESSIONS",

@@ -95,6 +95,7 @@ client = polyalpha.Client(balance=500.0, paper_config_from_env=True)
 - `POLYALPHA_PAPER_MAX_ORDER_SIZE`: Maximum order size (default: 1000.0)
 - `POLYALPHA_PAPER_MAX_POSITION_SIZE`: Maximum position size (default: 2000.0)
 - `POLYALPHA_PAPER_MAX_OPEN_POSITIONS`: Maximum open positions (default: 10)
+- `POLYALPHA_PAPER_MAX_POSITIONS_PER_MARKET`: Maximum positions per market (default: 1)
 - `POLYALPHA_PAPER_MAX_RISK_PER_TRADE`: Maximum risk per trade 0-1 (default: 0.02)
 
 ### Example .env File
@@ -689,7 +690,8 @@ config = PaperConfig(
     max_trades_per_day=100,       # Maximum 100 trades per day
     max_order_size=1000.0,        # Maximum $1000 per order
     max_position_size=2000.0,     # Maximum $2000 position per market
-    max_open_positions=10,        # Maximum 10 concurrent positions
+    max_open_positions=10,        # Maximum 10 concurrent positions (global)
+    max_positions_per_market=1,   # Maximum 1 position per individual market
     max_risk_per_trade=0.02,      # Maximum 2% of balance per trade
 )
 
@@ -704,7 +706,8 @@ The following risk limits are enforced:
 - **Max Trades Per Day**: Limits the number of orders you can place per calendar day
 - **Max Order Size**: Prevents placing orders larger than this amount
 - **Max Position Size**: Limits total exposure to a single market
-- **Max Open Positions**: Limits the number of concurrent open positions
+- **Max Open Positions**: Limits the number of concurrent open positions (global across all markets)
+- **Max Positions Per Market**: Limits the number of concurrent positions per individual market (set to 0 for no limit)
 - **Max Risk Per Trade**: Limits each order to a percentage of your current balance
 
 ### Monitoring Risk
@@ -785,6 +788,7 @@ If no configuration is provided, these defaults are used:
 - `max_order_size`: $1000.0
 - `max_position_size`: $2000.0
 - `max_open_positions`: 10
+- `max_positions_per_market`: 1
 - `max_risk_per_trade`: 2% (0.02)
 
 ---

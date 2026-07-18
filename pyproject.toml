@@ -10,7 +10,7 @@ readme = "README.md"
 license = {file = "License.md"}
 requires-python = ">=3.9,<4.0"
 authors = [
-    {name = "polyalpha contributors"}
+    {name = "Genius740Code"}
 ]
 keywords = ["polymarket", "prediction markets", "trading", "api", "websocket"]
 classifiers = [
