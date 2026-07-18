@@ -128,3 +128,59 @@ def test_markets_default_initialization():
     assert client._timeout == 10
     assert client._retries == 3
     assert client._rate_limiter is None
+
+
+def test_market_refresh():
+    """Test Market.refresh() method re-fetches market data."""
+    from polyalpha.core import Market
+    
+    # Create a mock market
+    market = Market(
+        id="test-id",
+        question="Test question",
+        description="Test description",
+        slug="btc-updown-5m-1751234700",
+        active=True,
+        closed=False,
+        archived=False,
+        start_time="2024-01-01T00:00:00Z",
+        end_time="2024-01-01T05:00:00Z",
+        volume=1000.0,
+        liquidity=500.0,
+        outcomes=["UP", "DOWN"],
+        prices=[0.55, 0.45],
+        tokens=["token-up", "token-down"],
+    )
+    
+    # Mock client.get() to return a different market (simulating updated data)
+    class MockClient:
+        def get(self, slug: str) -> Market:
+            return Market(
+                id="test-id-updated",
+                question="Test question",
+                description="Test description",
+                slug=slug,
+                active=True,
+                closed=False,
+                archived=False,
+                start_time="2024-01-01T00:00:00Z",
+                end_time="2024-01-01T05:00:00Z",
+                volume=2000.0,  # Updated volume
+                liquidity=800.0,  # Updated liquidity
+                outcomes=["UP", "DOWN"],
+                prices=[0.60, 0.40],  # Updated prices
+                tokens=["token-up", "token-down"],
+            )
+    
+    mock_client = MockClient()
+    updated = market.refresh(mock_client)
+    
+    # Verify refresh returns new instance with updated data
+    assert updated.volume == 2000.0
+    assert updated.liquidity == 800.0
+    assert updated.prices == [0.60, 0.40]
+    assert updated.slug == market.slug  # Slug remains the same
+    
+    # Verify original market is unchanged (immutable)
+    assert market.volume == 1000.0
+    assert market.prices == [0.55, 0.45]

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from polyalpha.markets import MarketClient
 
 
 @dataclass
@@ -88,6 +92,31 @@ class Market:
     def json(self, indent: int = 2) -> str:
         """Return a pretty JSON string of the market."""
         return json.dumps(self.dump(), indent=indent)
+
+    # ── Refresh ─────────────────────────────────────────────────────────────────
+
+    def refresh(self, client: MarketClient) -> "Market":
+        """
+        Re-fetch this market from the Gamma API.
+
+        Returns a new Market instance with updated prices, closed status,
+        volume, and liquidity. The original instance remains unchanged.
+
+        Parameters
+        ----------
+        client : MarketClient - The client instance to use for re-fetching.
+
+        Raises
+        ------
+        MarketNotFound  if the market no longer exists.
+        MarketClosed    if the market has closed since last fetch.
+
+        Example
+        -------
+        >>> market = client.markets.latest("BTC", "5m")
+        >>> updated = market.refresh(client)
+        """
+        return client.get(self.slug)
 
     # ── Display ────────────────────────────────────────────────────────────────
 
