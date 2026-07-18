@@ -1437,6 +1437,20 @@ class TradeDatabase:
         conn = self._get_connection()
         cursor = conn.cursor()
         
+        # Validate index name using whitelist to prevent SQL injection
+        valid_indexes = {
+            "idx_market_slug": "CREATE INDEX idx_market_slug ON trades(market_slug)",
+            "idx_market_id": "CREATE INDEX idx_market_id ON trades(market_id)",
+            "idx_side": "CREATE INDEX idx_side ON trades(side)",
+            "idx_outcome": "CREATE INDEX idx_outcome ON trades(outcome)",
+            "idx_timestamp": "CREATE INDEX idx_timestamp ON trades(timestamp)",
+            "idx_duplicate_check": "CREATE INDEX idx_duplicate_check ON trades(market_id, side, timestamp)",
+            "idx_market_session": "CREATE INDEX idx_market_session ON trades(market_session)"
+        }
+        
+        if index_name not in valid_indexes:
+            raise ValueError(f"Invalid index name '{index_name}'. Valid options: {sorted(valid_indexes.keys())}")
+        
         # Check if index exists
         cursor.execute("""
             SELECT name FROM sqlite_master 
@@ -1446,22 +1460,12 @@ class TradeDatabase:
         if not cursor.fetchone():
             raise ValueError(f"Index '{index_name}' does not exist")
         
-        # Rebuild by dropping and recreating
+        # Rebuild by dropping and recreating using validated index name
+        # SQLite doesn't support parameterized identifiers, but whitelist validation ensures safety
         cursor.execute(f"DROP INDEX IF EXISTS {index_name}")
         
         # Recreate based on the index type
-        if index_name == "idx_market_slug":
-            cursor.execute("CREATE INDEX idx_market_slug ON trades(market_slug)")
-        elif index_name == "idx_market_id":
-            cursor.execute("CREATE INDEX idx_market_id ON trades(market_id)")
-        elif index_name == "idx_side":
-            cursor.execute("CREATE INDEX idx_side ON trades(side)")
-        elif index_name == "idx_outcome":
-            cursor.execute("CREATE INDEX idx_outcome ON trades(outcome)")
-        elif index_name == "idx_timestamp":
-            cursor.execute("CREATE INDEX idx_timestamp ON trades(timestamp)")
-        elif index_name == "idx_duplicate_check":
-            cursor.execute("CREATE INDEX idx_duplicate_check ON trades(market_id, side, timestamp)")
+        cursor.execute(valid_indexes[index_name])
         
         conn.commit()
         log.info("Index '%s' rebuilt", index_name)
@@ -1822,8 +1826,25 @@ class TradeDatabase:
         if sort_order not in ("asc", "desc"):
             raise ValueError(f"sort_order must be 'asc' or 'desc', got '{sort_order}'")
         
-        # Add ORDER BY clause
-        query += f" ORDER BY {sort_by} {sort_order.upper()}"
+        # Add ORDER BY clause using whitelist to prevent SQL injection
+        sort_field_map = {
+            "timestamp": "timestamp",
+            "pnl": "pnl",
+            "amount": "amount",
+            "entry_price": "entry_price",
+            "shares": "shares",
+            "fee": "fee",
+            "market_slug": "market_slug",
+            "side": "side",
+            "outcome": "outcome"
+        }
+        safe_sort_by = sort_field_map.get(sort_by)
+        if not safe_sort_by:
+            raise ValueError(
+                f"Invalid sort_by field '{sort_by}'. "
+                f"Valid options: {sorted(valid_sort_fields)}"
+            )
+        query += f" ORDER BY {safe_sort_by} {sort_order.upper()}"
         
         # Add LIMIT and OFFSET for pagination
         if limit is not None:

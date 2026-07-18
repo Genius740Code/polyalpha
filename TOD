@@ -3,6 +3,3 @@ MULTI WALLET SUPPORT FOR REAL TRADING
 WALLET TRACKER
 
 
-
-
-Real trading module (trading/real.py) and wallet module currently fail to import — the CircuitBreakerOpenError import error I hit means polyalpha.Client can't even be constructed right now without patching core/errors.py or core/__init__.py. Worth checking if that's a broken branch/WIP commit, since it blocks paper trading too (it's imported transitively via client.py).
