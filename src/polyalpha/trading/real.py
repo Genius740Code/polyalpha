@@ -56,6 +56,8 @@ from ..core import (
     BackupError,
     GasEstimationError,
     TransactionRebroadcastError,
+    PRICE_STALENESS_THRESHOLD,
+    FALLBACK_PRICE,
 )
 from .clob_client import ClobClient
 from .alchemy_client import AlchemyClient
@@ -1435,6 +1437,9 @@ class RealTradingEngine:
 
         # Emergency mode
         self._emergency_mode: bool = False
+        
+        # Stream tracking for price-aware trading
+        self._attached_streams: dict[str, "Stream"] = {}  # market_id -> Stream
 
         # Auto-redeem engine (lazy-initialized)
         self._auto_redeem: Optional[AutoRedeemEngine] = None
@@ -1887,9 +1892,9 @@ class RealTradingEngine:
                 f"Order amount ${amount:.2f} exceeds balance ${self._balance:.2f}"
             )
 
-        # 5. Get price
+        # 5. Get price with stream awareness (prefers live stream price if available)
         if price is None:
-            price = market.up_price if side == "UP" else market.down_price
+            price, price_source = self._get_price_for_side(market, side)
 
         # 6. Calculate shares and fee
         shares, fee = self._calculate_shares_and_fee(amount, price)
@@ -3056,6 +3061,64 @@ class RealTradingEngine:
             exposure[position.market_id] += position.cost_basis
         return exposure
 
+    def _get_price_for_side(self, market, side: str) -> tuple[float, str]:
+        """
+        Get the best available price for a side, preferring live stream prices.
+        
+        Returns a tuple of (price, source) where source indicates where the price came from:
+        - "stream": Live price from attached stream
+        - "market": Price from market object (may be stale)
+        - "fallback": Fallback price when no valid price available
+        
+        Parameters
+        ----------
+        market : Market object
+        side   : "UP" or "DOWN"
+        
+        Returns
+        -------
+        tuple[float, str] - (price, source)
+        """
+        # Check if there's an attached running stream for this market
+        stream = self._attached_streams.get(market.id)
+        if stream and stream.running:
+            # Use live stream price
+            price = stream.up if side == "UP" else stream.down
+            if price > 0:
+                log.debug("Real: using live stream price %.4f for %s %s", price, market.slug, side)
+                return price, "stream"
+            else:
+                log.warning("Real: stream attached but price is 0, falling back to market price")
+        
+        # Fall back to market price
+        price = market.up_price if side == "UP" else market.down_price
+        
+        # Check if market price is stale
+        if hasattr(market, 'end_time') and market.end_time:
+            try:
+                from datetime import datetime, timezone
+                end_time = datetime.fromisoformat(market.end_time.replace('Z', '+00:00'))
+                now = datetime.now(timezone.utc)
+                time_until_close = (end_time - now).total_seconds()
+                
+                # If market is closed or very close to closing, price is likely stale
+                if time_until_close <= 0:
+                    log.warning("Real: market %s is closed, price may be stale", market.slug)
+                elif time_until_close < PRICE_STALENESS_THRESHOLD:
+                    log.warning(
+                        "Real: market %s closes in %.1fs, using potentially stale price %.4f",
+                        market.slug, time_until_close, price
+                    )
+            except (ValueError, TypeError):
+                pass  # If we can't parse end_time, skip staleness check
+        
+        if price <= 0:
+            log.warning("Real: market price is invalid (%.4f), using fallback", price)
+            return FALLBACK_PRICE, "fallback"
+        
+        log.debug("Real: using market price %.4f for %s %s", price, market.slug, side)
+        return price, "market"
+
     # ── Real-Time Price Monitoring ───────────────────────────────────────────────
 
     def attach_stream(self, stream, market) -> None:
@@ -3064,6 +3127,9 @@ class RealTradingEngine:
 
         This method integrates price streams with the RealTradingEngine for automatic
         price updates, stop loss/take profit execution, and trailing stop management.
+
+        Also enables price-aware trading: buy() will automatically use live
+        streamed prices when a stream is attached and running.
 
         Example
         -------
@@ -3075,6 +3141,9 @@ class RealTradingEngine:
         if not hasattr(market, 'id') or not hasattr(market, 'slug'):
             raise ValueError("Invalid market object")
 
+        # Store stream reference for price-aware trading
+        self._attached_streams[market.id] = stream
+
         @stream.on("price")
         def _on_price(up: float, down: float) -> None:
             self._on_price_update(market.id, up, down)
@@ -3085,6 +3154,8 @@ class RealTradingEngine:
                 "Real: stream closed for %s — market resolved",
                 market.slug,
             )
+            # Remove stream reference when closed
+            self._attached_streams.pop(market.id, None)
 
         log.info("Real: stream attached for %s", market.slug)
 

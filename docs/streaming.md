@@ -253,6 +253,60 @@ def on_price(up, down):
 stream.start()
 ```
 
+---
+
+## Price-aware trading with attached streams
+
+When you attach a stream to the paper or real trading engine, `buy()` automatically uses live streamed prices instead of stale market prices. This prevents silent correctness issues where you might execute orders at outdated prices.
+
+### Automatic price selection
+
+```python
+market = client.markets.latest("BTC", "5m")
+stream = client.stream(market)
+
+# Attach the stream to enable price-aware trading
+client.paper.attach_stream(stream, market)
+stream.start(background=True)
+
+# This buy() will automatically use the live stream price
+order = client.paper.buy(market, side="UP", amount=10.0)
+```
+
+**Price selection priority:**
+1. **Live stream price** (if stream is attached and running) - most accurate
+2. **Market price** (from API) - may be stale if market is near closing
+3. **Fallback price** (0.5) - only if no valid price is available
+
+### Staleness warnings
+
+The engine automatically detects and warns about potentially stale prices:
+
+- **Market closing soon** (< 30 seconds): Warns that market price may be stale
+- **Market closed**: Warns that market is closed and price may be invalid
+- **Stream not running**: Falls back to market price with appropriate logging
+
+### Manual price control
+
+If you need explicit control over prices (e.g., for limit orders), you can still specify prices directly:
+
+```python
+# Limit order with explicit price - ignores stream
+order = client.paper.limit(market, side="UP", price=0.60, amount=10.0)
+```
+
+### Real trading
+
+The same price-aware behavior applies to real trading:
+
+```python
+# Real trading also uses live stream prices when available
+client.real.attach_stream(stream, market)
+stream.start(background=True)
+
+order = client.real.buy(market, side="UP", confidence=0.7)
+```
+
 ### Multiple markets in parallel
 
 ```python

@@ -567,6 +567,9 @@ class PaperEngine:
         
         # Reporting engine (lazy-initialized)
         self._reporting: Optional["ReportingEngine"] = None
+        
+        # Stream tracking for price-aware trading
+        self._attached_streams: dict[str, "Stream"] = {}  # market_id -> Stream
 
     @property
     def report(self) -> "ReportEngine":
@@ -1176,6 +1179,64 @@ class PaperEngine:
         
         return random.random() < self._config.fill_probability
 
+    def _get_price_for_side(self, market, side: str) -> tuple[float, str]:
+        """
+        Get the best available price for a side, preferring live stream prices.
+        
+        Returns a tuple of (price, source) where source indicates where the price came from:
+        - "stream": Live price from attached stream
+        - "market": Price from market object (may be stale)
+        - "fallback": Fallback price when no valid price available
+        
+        Parameters
+        ----------
+        market : Market object
+        side   : "UP" or "DOWN"
+        
+        Returns
+        -------
+        tuple[float, str] - (price, source)
+        """
+        # Check if there's an attached running stream for this market
+        stream = self._attached_streams.get(market.id)
+        if stream and stream.running:
+            # Use live stream price
+            price = stream.up if side == "UP" else stream.down
+            if price > 0:
+                log.debug("Paper: using live stream price %.4f for %s %s", price, market.slug, side)
+                return price, "stream"
+            else:
+                log.warning("Paper: stream attached but price is 0, falling back to market price")
+        
+        # Fall back to market price
+        price = market.up_price if side == "UP" else market.down_price
+        
+        # Check if market price is stale
+        if hasattr(market, 'end_time') and market.end_time:
+            try:
+                from datetime import datetime, timezone
+                end_time = datetime.fromisoformat(market.end_time.replace('Z', '+00:00'))
+                now = datetime.now(timezone.utc)
+                time_until_close = (end_time - now).total_seconds()
+                
+                # If market is closed or very close to closing, price is likely stale
+                if time_until_close <= 0:
+                    log.warning("Paper: market %s is closed, price may be stale", market.slug)
+                elif time_until_close < PRICE_STALENESS_THRESHOLD:
+                    log.warning(
+                        "Paper: market %s closes in %.1fs, using potentially stale price %.4f",
+                        market.slug, time_until_close, price
+                    )
+            except (ValueError, TypeError):
+                pass  # If we can't parse end_time, skip staleness check
+        
+        if price <= 0:
+            log.warning("Paper: market price is invalid (%.4f), using fallback", price)
+            return FALLBACK_PRICE, "fallback"
+        
+        log.debug("Paper: using market price %.4f for %s %s", price, market.slug, side)
+        return price, "market"
+
     # ── Orders ─────────────────────────────────────────────────────────────────
 
     def buy(self, market, side: str, amount: float, time_window_start: Optional[datetime] = None, time_window_end: Optional[datetime] = None) -> PaperOrder:
@@ -1213,9 +1274,8 @@ class PaperEngine:
         # Get active wallet
         wallet = self._get_active_wallet()
 
-        price = market.up_price if side == "UP" else market.down_price
-        if price <= 0:
-            price = FALLBACK_PRICE  # safe fallback before first WS price arrives
+        # Get price with stream awareness (prefers live stream price if available)
+        price, price_source = self._get_price_for_side(market, side)
 
         # Check time window if set
         if time_window_start is not None or time_window_end is not None:
@@ -2260,6 +2320,9 @@ class PaperEngine:
         """
         Wire *stream* so positions auto-update and limits auto-fill.
 
+        Also enables price-aware trading: buy() will automatically use live
+        streamed prices when a stream is attached and running.
+
         Example
         -------
         >>> stream = client.stream(market)
@@ -2267,6 +2330,9 @@ class PaperEngine:
         >>> stream.start(background=True)
         """
         _validate_market(market)
+        
+        # Store stream reference for price-aware trading
+        self._attached_streams[market.id] = stream
         
         @stream.on("price")
         def _on_price(up: float, down: float) -> None:
@@ -2278,6 +2344,8 @@ class PaperEngine:
                 "Paper: stream closed for %s — call paper.resolve(market, outcome)",
                 market.slug,
             )
+            # Remove stream reference when closed
+            self._attached_streams.pop(market.id, None)
 
         log.info("Paper: stream attached for %s", market.slug)
 
