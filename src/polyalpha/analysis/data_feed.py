@@ -4,6 +4,7 @@ Data feed management for technical analysis.
 Supports multiple data sources:
 - Binance: Free API with extensive historical data
 - Chainlink: Oracle data (matches Polymarket)
+- Scraping: Polymarket WebSocket with configurable delay (default source)
 - Custom: User-provided data sources
 - WebSocket: Cache from existing Stream
 
@@ -18,6 +19,8 @@ Usage
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 import time
@@ -67,7 +70,7 @@ class DataFeedConfig:
     Parameters
     ----------
     source : str
-        Data source: "binance" | "chainlink" | "custom" | "websocket"
+        Data source: "binance" | "chainlink" | "scraping" | "custom" | "websocket"
     asset_map : dict
         Mapping of Polymarket assets to data source symbols.
     timeframe : str
@@ -87,9 +90,17 @@ class DataFeedConfig:
         Example: "https://eth.llamarpc.com" or "https://mainnet.infura.io/v3/YOUR_KEY"
     chainlink_contracts : dict
         Mapping of assets to Chainlink oracle contract addresses.
+    scraping_ws_url : str
+        WebSocket URL for scraping data source (default: "wss://ws-live-data.polymarket.com").
+    scraping_delay : float
+        Delay in seconds between price collections for scraping (default: 2.0).
+    scraping_symbol_map : dict
+        Mapping of assets to WebSocket symbols for scraping.
+    scraping_timeout : int
+        WebSocket timeout in seconds for scraping (default: 90).
     """
 
-    source: str = "binance"
+    source: str = "scraping"
     asset_map: dict = field(default_factory=lambda: {
         "BTC": "BTCUSDT",
         "ETH": "ETHUSDT",
@@ -117,9 +128,21 @@ class DataFeedConfig:
         "DOGE": "0x8FbbF1933BFE539e4e6C4518A533941AF5B4C918",  # DOGE/USD
     })
 
+    # Scraping specific
+    scraping_ws_url: str = "wss://ws-live-data.polymarket.com"
+    scraping_delay: float = 2.0  # Delay in seconds between price collections
+    scraping_symbol_map: dict = field(default_factory=lambda: {
+        "BTC": "btc/usd",
+        "ETH": "eth/usd",
+        "SOL": "sol/usd",
+        "XRP": "xrp/usd",
+        "DOGE": "doge/usd",
+    })
+    scraping_timeout: int = 90  # WebSocket timeout in seconds
+
     def __post_init__(self):
         """Validate configuration."""
-        valid_sources = ["binance", "chainlink", "custom", "websocket"]
+        valid_sources = ["binance", "chainlink", "custom", "websocket", "scraping"]
         if self.source not in valid_sources:
             raise ValueError(
                 f"Invalid source '{self.source}'. Must be one of: {valid_sources}"
@@ -234,6 +257,8 @@ class DataFeed:
             data = self._fetch_custom(asset)
         elif self.config.source == "websocket":
             data = self._fetch_websocket_cache(asset)
+        elif self.config.source == "scraping":
+            data = self._fetch_scraping(asset)
         else:
             raise ValueError(f"Unsupported source: {self.config.source}")
 
@@ -639,6 +664,132 @@ class DataFeed:
         df = self._normalize_ohlcv(df)
 
         return df
+
+    def _fetch_scraping(self, asset: str) -> pd.DataFrame:
+        """
+        Fetch data from Polymarket WebSocket with scraping.
+
+        Connects to Polymarket WebSocket, subscribes to crypto prices,
+        and collects price ticks with configurable delay.
+        """
+        try:
+            import websockets
+        except ImportError:
+            self._log.warning(
+                "websockets not installed. Install with: pip install websockets>=12.0. "
+                "Falling back to Binance."
+            )
+            return self._fetch_binance(asset)
+
+        if asset not in self.config.scraping_symbol_map:
+            self._log.warning(
+                f"Asset '{asset}' not in scraping_symbol_map. "
+                f"Supported: {list(self.config.scraping_symbol_map.keys())}. "
+                "Falling back to Binance."
+            )
+            return self._fetch_binance(asset)
+
+        # Run async WebSocket connection
+        try:
+            data = asyncio.run(self._fetch_scraping_async(asset))
+            return data
+        except Exception as exc:
+            self._log.error(f"Scraping WebSocket error: {exc}")
+            self._log.warning("Falling back to Binance.")
+            return self._fetch_binance(asset)
+
+    async def _fetch_scraping_async(self, asset: str) -> pd.DataFrame:
+        """Async implementation of scraping WebSocket data fetch."""
+        try:
+            import websockets
+        except ImportError:
+            raise ImportError("websockets library not installed")
+
+        symbol = self.config.scraping_symbol_map[asset]
+        ticks = []
+
+        async with websockets.connect(
+            self.config.scraping_ws_url,
+            additional_headers={
+                "User-Agent": "Mozilla/5.0",
+                "Origin": "https://polymarket.com"
+            },
+            open_timeout=10,
+        ) as ws:
+            # Subscribe to crypto prices
+            await ws.send(json.dumps({
+                "action": "subscribe",
+                "subscriptions": [{
+                    "topic": "crypto_prices_chainlink",
+                    "type": "update"
+                }]
+            }))
+
+            # Collect price ticks
+            start_time = time.time()
+            target_duration = self.config.lookback_periods * self._get_timeframe_seconds()
+
+            while time.time() - start_time < target_duration:
+                try:
+                    raw = await asyncio.wait_for(
+                        ws.recv(),
+                        timeout=self.config.scraping_timeout
+                    )
+                except asyncio.TimeoutError:
+                    self._log.warning("WebSocket timeout during scraping")
+                    break
+
+                try:
+                    msg = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+
+                payload = msg.get("payload", {})
+                if payload.get("symbol") == symbol:
+                    timestamp = datetime.fromtimestamp(
+                        payload["timestamp"] / 1000,
+                        tz=timezone.utc
+                    )
+                    price = float(payload["value"])
+                    ticks.append({"timestamp": timestamp, "price": price})
+
+                    # Apply delay between collections
+                    await asyncio.sleep(self.config.scraping_delay)
+
+                # Stop if we have enough data
+                if len(ticks) >= self.config.lookback_periods:
+                    break
+
+        if not ticks:
+            raise ValueError(f"No price data collected for {asset}")
+
+        # Convert to DataFrame and aggregate into OHLCV
+        df = pd.DataFrame(ticks)
+        df.set_index("timestamp", inplace=True)
+
+        # Resample to target timeframe
+        rule = TIMEFRAME_MAP[self.config.timeframe]
+        resampled = df.resample(rule).agg({
+            "price": ["first", "max", "min", "last"]
+        }).dropna()
+
+        resampled.columns = ["open", "high", "low", "close"]
+        resampled["volume"] = 0  # No volume data from WebSocket
+        resampled.reset_index(inplace=True)
+
+        return self._normalize_ohlcv(resampled)
+
+    def _get_timeframe_seconds(self) -> int:
+        """Get timeframe duration in seconds."""
+        timeframe_seconds = {
+            "1m": 60,
+            "5m": 300,
+            "15m": 900,
+            "1h": 3600,
+            "4h": 14400,
+            "1d": 86400,
+        }
+        return timeframe_seconds.get(self.config.timeframe, 300)
 
     def _fetch_websocket_cache(self, asset: str) -> pd.DataFrame:
         """
