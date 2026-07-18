@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import threading
 import time
 from collections import defaultdict
@@ -52,6 +53,8 @@ from .core import (
     WS_MAX_RETRIES,
     WS_PING_INTERVAL,
     WS_RETRY_DELAY,
+    WS_BACKOFF_FACTOR,
+    WS_JITTER,
     CLOB_WS,
     DEFAULT_RATE_LIMIT_MAX_REQUESTS,
     DEFAULT_RATE_LIMIT_PERIOD,
@@ -62,6 +65,7 @@ from .core import (
     StreamDisconnected,
 )
 from .markets import RateLimiter
+from .trading.error_handling import CircuitBreaker
 
 log = logging.getLogger(__name__)
 
@@ -92,6 +96,7 @@ class Stream:
         retries:     int   = WS_MAX_RETRIES,
         retry_delay: float = WS_RETRY_DELAY,
         price_threshold: float = DEFAULT_PRICE_THRESHOLD,
+        enable_circuit_breaker: bool = True,
     ):
         try:
             import websocket as _ws_module  # websocket-client
@@ -106,6 +111,7 @@ class Stream:
         self.retries     = retries
         self.retry_delay = retry_delay
         self._price_threshold = price_threshold
+        self._enable_circuit_breaker = enable_circuit_breaker
 
         self._handlers: dict[str, list[Callable]] = defaultdict(list)
         self._ws:          object | None           = None
@@ -128,6 +134,25 @@ class Stream:
 
         # Mid-price per token ID (populated from WS events)
         self._token_prices: dict[str, float] = {}
+
+        # Circuit breaker to prevent cascading failures
+        if self._enable_circuit_breaker:
+            self._circuit_breaker = CircuitBreaker(
+                name=f"ws-{market.slug}",
+                failure_threshold=5,
+                recovery_timeout=60,
+                success_threshold=2,
+                expected_exception=(StreamDisconnected,)
+            )
+        else:
+            self._circuit_breaker = None
+
+        # Connection quality monitoring
+        self._last_ping_time: float = 0
+        self._last_pong_time: float = 0
+        self._ping_count: int = 0
+        self._pong_count: int = 0
+        self._connection_quality: float = 1.0  # 0.0 to 1.0
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -190,6 +215,18 @@ class Stream:
         """True while the background thread is alive."""
         return self._thread is not None and self._thread.is_alive()
 
+    @property
+    def connection_quality(self) -> float:
+        """Current connection quality (0.0 to 1.0, where 1.0 is excellent)."""
+        return self._connection_quality
+
+    @property
+    def circuit_breaker_state(self) -> str | None:
+        """Current circuit breaker state, or None if disabled."""
+        if self._circuit_breaker:
+            return self._circuit_breaker.state.value
+        return None
+
     # ── Retry loop ─────────────────────────────────────────────────────────────
 
     def _run_with_retry(self) -> None:
@@ -197,8 +234,17 @@ class Stream:
         consecutive_failures = 0
 
         while not self._stop.is_set():
+            # Check circuit breaker before attempting connection
+            if self._circuit_breaker and self._circuit_breaker.is_open:
+                log.warning("Stream: circuit breaker is open, blocking connection attempt")
+                time.sleep(5)  # Wait before checking again
+                continue
+
             try:
-                self._connect()
+                if self._circuit_breaker:
+                    self._circuit_breaker.call(self._connect)
+                else:
+                    self._connect()
                 # _connect() returns only on a clean stop or market_resolved
                 return
 
@@ -209,9 +255,13 @@ class Stream:
                     self._emit("error", exc)
                     return
 
-                delay = self.retry_delay * consecutive_failures
+                # Calculate exponential backoff with jitter
+                base_delay = self.retry_delay * (WS_BACKOFF_FACTOR ** (consecutive_failures - 1))
+                jitter_amount = base_delay * WS_JITTER * (random.random() * 2 - 1)
+                delay = max(0, base_delay + jitter_amount)
+                
                 log.warning(
-                    "Stream: disconnected (attempt %d/%d) — retrying in %.1fs",
+                    "Stream: disconnected (attempt %d/%d) — retrying in %.1fs (with jitter)",
                     consecutive_failures, self.retries, delay,
                 )
                 time.sleep(delay)
@@ -271,6 +321,8 @@ class Stream:
             if self._stop.is_set():
                 break
             try:
+                self._last_ping_time = time.time()
+                self._ping_count += 1
                 ws.send("PING")
                 log.debug("Stream: → PING")
             except Exception:
@@ -286,8 +338,24 @@ class Stream:
                 pass
             return
 
-        # Ignore heartbeats / empty frames
-        if raw in ("PONG", "[]", ""):
+        # Track PONG responses for connection quality
+        if raw == "PONG":
+            self._last_pong_time = time.time()
+            self._pong_count += 1
+            # Calculate round-trip time
+            if self._last_ping_time > 0:
+                rtt = self._last_pong_time - self._last_ping_time
+                # Update connection quality (exponential moving average)
+                if rtt < 1.0:  # Good: < 1 second
+                    self._connection_quality = min(1.0, self._connection_quality * 0.9 + 0.1)
+                elif rtt < 3.0:  # Acceptable: < 3 seconds
+                    self._connection_quality = max(0.5, self._connection_quality * 0.95)
+                else:  # Poor: >= 3 seconds
+                    self._connection_quality = max(0.0, self._connection_quality * 0.8 - 0.1)
+            return
+
+        # Ignore empty frames
+        if raw in ("[]", ""):
             return
 
         # Apply rate limiting to message processing

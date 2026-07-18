@@ -43,6 +43,8 @@ WS_PING_INTERVAL  = 10    # seconds — must text-PING before server drops us
 WS_PING_TIMEOUT   = 5     # seconds to wait for PONG before marking stale
 WS_RETRY_DELAY    = 3.0   # base back-off in seconds (multiplied by attempt #)
 WS_MAX_RETRIES    = 10    # attempts before giving up entirely
+WS_BACKOFF_FACTOR = 2.0   # exponential backoff multiplier
+WS_JITTER         = 0.2   # jitter factor (±20% random variation) to prevent thundering herd
 
 # ── Data Feed ───────────────────────────────────────────────────────────────────
 
