@@ -49,6 +49,8 @@ import time
 from collections import defaultdict
 from typing import Callable
 
+from .utils.logging_utils import mask_transaction_hash
+
 from .core import (
     WS_MAX_RETRIES,
     WS_PING_INTERVAL,
@@ -295,7 +297,7 @@ class Stream:
             raise StreamDisconnected("WebSocket closed unexpectedly")
 
     def _on_open(self, ws, token_ids: list[str]) -> None:
-        log.info("Stream: connected — subscribing to %d token(s)", len(token_ids))
+        log.info("Stream: connected — subscribing to %d token(s)", len([mask_transaction_hash(t) for t in token_ids]))
 
         ws.send(json.dumps({
             "type":                  "market",

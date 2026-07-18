@@ -14,6 +14,8 @@ from enum import Enum
 from typing import Optional, Dict, List, Any, Callable
 from threading import Lock
 
+from ..utils.logging_utils import mask_address
+
 try:
     from eth_account import Account
     from eth_account.messages import encode_defunct
@@ -329,7 +331,7 @@ class TransactionSigner:
             self._nonce_cache[address] = nonce
             return nonce
         except Exception as e:
-            log.warning("Failed to get nonce for %s: %s", address, e)
+            log.warning("Failed to get nonce for %s: %s", mask_address(address), e)
             return 0
     
     def _sign_with_private_key(self, transaction_dict: Dict[str, Any]) -> SigningResult:

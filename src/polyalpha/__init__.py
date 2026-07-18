@@ -25,6 +25,25 @@ Quick start
     client.paper.summary()
 """
 
+import logging
+
+# Set up sensitive data filtering for all logs using a custom formatter
+from .utils.logging_utils import SensitiveDataFormatter
+
+# Get the root logger and configure it with sensitive data formatter
+_root_logger = logging.getLogger()
+# Remove any existing handlers to avoid duplicates
+_root_logger.handlers.clear()
+
+# Create a handler with the sensitive data formatter
+_handler = logging.StreamHandler()
+_handler.setFormatter(SensitiveDataFormatter(redact_file_paths=False))
+_root_logger.addHandler(_handler)
+
+# Set default level if not already configured
+if not _root_logger.level:
+    _root_logger.setLevel(logging.INFO)
+
 from .client import Client
 from .core import Market
 from .core.env import load_env_file, get_env_config

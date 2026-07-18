@@ -3,6 +3,8 @@ import requests
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
+from ..utils.logging_utils import mask_transaction_hash
+
 log = logging.getLogger(__name__)
 
 class AlchemyClient:
@@ -96,5 +98,5 @@ class AlchemyClient:
                 if res.status_code == 200:
                     metadata[token_id] = res.json()
             except Exception as e:
-                log.warning(f"Failed to fetch metadata for token {token_id}: {e}")
+                log.warning(f"Failed to fetch metadata for token {mask_transaction_hash(token_id)}: {e}")
         return metadata

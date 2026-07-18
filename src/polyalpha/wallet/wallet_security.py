@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any
 from threading import Lock
 
+from ..utils.logging_utils import mask_address
+
 try:
     from cryptography.fernet import Fernet
     from cryptography.hazmat.primitives import hashes
@@ -276,10 +278,10 @@ class WalletSecurity:
                 credentials.access_count += 1
                 self._save_wallet(wallet_address, credentials)
                 
-                log.info("Accessed wallet: %s (access count: %d)", wallet_address, credentials.access_count)
+                log.info("Accessed wallet: %s (access count: %d)", mask_address(wallet_address), credentials.access_count)
                 return private_key
             except Exception as e:
-                log.error("Failed to decrypt private key for wallet %s: %s", wallet_address, e)
+                log.error("Failed to decrypt private key for wallet %s: %s", mask_address(wallet_address), e)
                 raise ValueError("Invalid password or corrupted data") from e
     
     def remove_wallet(self, wallet_address: str) -> None:
@@ -429,7 +431,7 @@ class WalletSecurity:
                 credentials = WalletCredentials.from_dict(data)
                 self._wallets[wallet_address] = credentials
             except Exception as e:
-                log.warning("Failed to load wallet from %s: %s", wallet_file, e)
+                log.warning("Failed to load wallet from %s: %s", wallet_file.name, e)
     
     def _delete_wallet(self, wallet_address: str) -> None:
         """Delete wallet from storage."""
@@ -480,7 +482,7 @@ class WalletSecurity:
             encrypted_export = export_cipher.encrypt(json.dumps(export_data).encode())
             export_path.write_bytes(encrypted_export)
             
-            log.info("Exported wallet: %s to %s", wallet_address, export_path)
+            log.info("Exported wallet: %s to %s", mask_address(wallet_address), export_path.name)
     
     def import_wallet(self, import_path: Path, password: str) -> str:
         """
@@ -526,7 +528,7 @@ class WalletSecurity:
             self._wallets[wallet_address] = credentials
             self._save_wallet(wallet_address, credentials)
             
-            log.info("Imported wallet: %s from %s", wallet_address, import_path)
+            log.info("Imported wallet: %s from %s", mask_address(wallet_address), import_path.name)
             return wallet_address
 
 

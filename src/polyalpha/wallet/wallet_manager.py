@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any, Union
 from threading import Lock
 
+from ..utils.logging_utils import mask_address
 from .wallet_security import WalletSecurity, WalletStorageType, WalletCredentials
 from .hardware_wallet import (
     HardwareWallet,
@@ -216,7 +217,7 @@ class WalletManager:
             if set_as_default:
                 self._default_wallet = address
             
-            log.info("Added hardware wallet: %s (%s)", address, hardware_type.value)
+            log.info("Added hardware wallet: %s (%s)", mask_address(address), hardware_type.value)
     
     def add_multisig_wallet(
         self,
@@ -263,7 +264,7 @@ class WalletManager:
             if set_as_default:
                 self._default_wallet = address
             
-            log.info("Added multi-sig wallet: %s (required weight: %d)", address, required_weight)
+            log.info("Added multi-sig wallet: %s (required weight: %d)", mask_address(address), required_weight)
     
     def get_private_key(self, address: str, password: Optional[str] = None) -> str:
         """
@@ -609,7 +610,7 @@ class WalletManager:
         if address in self._wallets:
             self._wallets[address].password = new_password
         
-        log.info("Rotated password for wallet: %s", address)
+        log.info("Rotated password for wallet: %s", mask_address(address))
     
     def shutdown(self) -> None:
         """Shutdown wallet manager and disconnect hardware wallets."""

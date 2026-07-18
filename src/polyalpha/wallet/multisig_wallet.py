@@ -15,6 +15,8 @@ from enum import Enum
 from typing import Optional, Dict, List, Set, Any
 from threading import Lock
 
+from ..utils.logging_utils import mask_address, mask_transaction_hash
+
 try:
     from eth_account import Account
     from eth_account.messages import encode_defunct
@@ -65,7 +67,7 @@ class MultiSigTransaction:
     def add_signature(self, signer_address: str, signature: str, weight: int = 1) -> None:
         """Add a signature to the transaction."""
         if signer_address in self.signatures:
-            log.warning("Signer %s already signed transaction %s", signer_address, self.tx_id)
+            log.warning("Signer %s already signed transaction %s", mask_address(signer_address), mask_transaction_hash(self.tx_id))
             return
         
         self.signatures[signer_address] = signature
@@ -73,7 +75,7 @@ class MultiSigTransaction:
         
         if self.current_weight >= self.required_weight:
             self.status = MultiSigStatus.APPROVED
-            log.info("Transaction %s approved with weight %d/%d", self.tx_id, self.current_weight, self.required_weight)
+            log.info("Transaction %s approved with weight %d/%d", mask_transaction_hash(self.tx_id), self.current_weight, self.required_weight)
     
     def is_approved(self) -> bool:
         """Check if transaction has enough signatures."""
@@ -238,7 +240,7 @@ class MultiSigWallet:
             )
             
             self._transactions[tx_id] = tx
-            log.info("Proposed transaction %s by %s", tx_id, proposer)
+            log.info("Proposed transaction %s by %s", mask_transaction_hash(tx_id), mask_address(proposer))
             return tx
     
     def sign_transaction(
@@ -375,7 +377,7 @@ class MultiSigWallet:
             tx.executed_at = datetime.now(timezone.utc)
             tx.execution_tx_hash = execution_tx_hash
             
-            log.info("Executed transaction %s with hash %s", tx_id, execution_tx_hash)
+            log.info("Executed transaction %s with hash %s", mask_transaction_hash(tx_id), mask_transaction_hash(execution_tx_hash))
             return tx
     
     def cancel_transaction(self, tx_id: str, canceller: str) -> MultiSigTransaction:
@@ -407,7 +409,7 @@ class MultiSigWallet:
                 raise ValueError(f"Only proposer can cancel transaction")
             
             tx.status = MultiSigStatus.CANCELLED
-            log.info("Cancelled transaction %s by %s", tx_id, canceller)
+            log.info("Cancelled transaction %s by %s", mask_transaction_hash(tx_id), mask_address(canceller))
             return tx
     
     def reject_transaction(self, tx_id: str, rejecter: str) -> MultiSigTransaction:
@@ -438,7 +440,7 @@ class MultiSigWallet:
                 raise ValueError(f"Rejecter {rejecter} is not authorized")
             
             tx.status = MultiSigStatus.REJECTED
-            log.info("Rejected transaction %s by %s", tx_id, rejecter)
+            log.info("Rejected transaction %s by %s", mask_transaction_hash(tx_id), mask_address(rejecter))
             return tx
     
     def update_required_weight(self, new_weight: int) -> None:

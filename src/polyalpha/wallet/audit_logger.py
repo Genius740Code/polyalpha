@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any
 from threading import Lock
 
+from ..utils.logging_utils import mask_address, mask_transaction_hash
+
 log = logging.getLogger(__name__)
 
 
@@ -367,7 +369,7 @@ class AuditLogger:
         with open(export_path, 'w') as f:
             json.dump(export_data, f, indent=2)
         
-        log.info("Exported %d audit events to %s", len(events), export_path)
+        log.info("Exported %d audit events to %s", len(events), export_path.name)
     
     def clear_old_events(self, days_to_keep: int = 90) -> int:
         """

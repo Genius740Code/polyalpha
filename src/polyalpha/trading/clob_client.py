@@ -43,6 +43,7 @@ import time
 from typing import Optional
 
 from ..core import NetworkError, OrderRejected, OrderTimeout, TransientError, RateLimitExceeded
+from ..utils.logging_utils import mask_transaction_hash
 
 log = logging.getLogger(__name__)
 
@@ -459,13 +460,13 @@ class ClobClient:
         NetworkError
             If request fails
         """
-        log.debug("Getting orderbook for token: %s", token_id)
+        log.debug("Getting orderbook for token: %s", mask_transaction_hash(token_id))
 
         try:
             response = self._make_request("GET", f"/orderbook/{token_id}")
             return response
         except Exception as e:
-            log.error("Failed to get orderbook for %s: %s", token_id, e)
+            log.error("Failed to get orderbook for %s: %s", mask_transaction_hash(token_id), e)
             raise NetworkError(f"Failed to get orderbook: {e}")
 
     def get_balance(self) -> dict:
