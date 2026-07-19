@@ -1,0 +1,3 @@
+"""
+Markets module unit tests.
+"""
