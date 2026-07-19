@@ -51,6 +51,7 @@ from .stream import Stream
 from .trading import PaperEngine, RealTradingEngine
 from .trading.paper import PaperConfig
 from .trading.real import RealTradingConfig, RealOrder, RealPosition, WalletManager
+from .trading.auto_redeem import AutoRedeemConfig
 from .report import ReportPreset
 from .bots import Sniper, Tracker
 from .analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator
@@ -119,6 +120,7 @@ __all__ = [
     # Paper trading
     "PaperEngine",
     "PaperConfig",
+    "AutoRedeemConfig",
     # Real trading
     "RealTradingEngine",
     "RealTradingConfig",
