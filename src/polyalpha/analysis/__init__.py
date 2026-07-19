@@ -56,12 +56,14 @@ For best accuracy, use Chainlink data when available.
 """
 
 from .data_feed import DataFeed, DataFeedConfig
+from .delta import DeltaCalculator
 from .indicators import IndicatorCalculator
 from .signals import SignalGenerator
 
 __all__ = [
     "DataFeed",
     "DataFeedConfig",
+    "DeltaCalculator",
     "IndicatorCalculator",
     "SignalGenerator",
 ]
