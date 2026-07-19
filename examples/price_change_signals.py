@@ -70,13 +70,31 @@ def main():
         else:
             print("✗ Price change less than 0.5% from last candle")
         
-        # Example 6: Check price change from 3 candles ago
+        # Example 6: Only trade if price is up by at least 0.3%
+        if signals.price_up_by_percent(0.3):
+            print("✓ Price is up by at least 0.3% from last candle")
+        else:
+            print("✗ Price is not up by 0.3% from last candle")
+        
+        # Example 7: Only trade if price is down by at least 0.3%
+        if signals.price_down_by_percent(0.3):
+            print("✓ Price is down by at least 0.3% from last candle")
+        else:
+            print("✗ Price is not down by 0.3% from last candle")
+        
+        # Example 8: Check price change from 3 candles ago
         if signals.price_change_above(100, candles_back=3):
             print("✓ Price changed by at least $100 from 3 candles ago")
         else:
             print("✗ Price change less than $100 from 3 candles ago")
         
-        # Example 7: Only trade if price is down (for DOWN side)
+        # Example 9: Check percentage change from 3 candles ago
+        if signals.price_change_percent_above(1.0, candles_back=3):
+            print("✓ Price changed by at least 1.0% from 3 candles ago")
+        else:
+            print("✗ Price change less than 1.0% from 3 candles ago")
+        
+        # Example 10: Only trade if price is down (for DOWN side)
         if signals.price_down():
             print("✓ Price is down from last candle (good for DOWN trades)")
         else:
@@ -109,6 +127,28 @@ def main():
             print("✓ STRONG SELL SIGNAL: Price down + significant move + RSI OK")
         else:
             print("✗ No sell signal - conditions not met")
+        
+        print("\n" + "="*60)
+        print("Percentage-Based Strategy Example")
+        print("="*60)
+        
+        # Example: Percentage-based strategy for UP trades
+        # Only buy UP if:
+        # - Price is up by at least 0.3%
+        # - RSI is not overbought
+        if (signals.price_up_by_percent(0.3) and signals.rsi_below(70)):
+            print("✓ PERCENTAGE BUY SIGNAL: Price up 0.3% + RSI OK")
+        else:
+            print("✗ No percentage buy signal - conditions not met")
+        
+        # Example: Percentage-based strategy for DOWN trades
+        # Only buy DOWN if:
+        # - Price is down by at least 0.3%
+        # - RSI is not oversold
+        if (signals.price_down_by_percent(0.3) and signals.rsi_above(30)):
+            print("✓ PERCENTAGE SELL SIGNAL: Price down 0.3% + RSI OK")
+        else:
+            print("✗ No percentage sell signal - conditions not met")
         
     except ImportError:
         print("\nNote: Technical analysis requires pandas-ta.")

@@ -895,6 +895,78 @@ class SignalGenerator:
 
         return bool(current_price < past_price)
 
+    def price_up_by_percent(self, min_percent: float, candles_back: int = 1, price: str = "close") -> bool:
+        """
+        Check if price is up by at least a minimum percentage from N candles ago.
+
+        Parameters
+        ----------
+        min_percent : float
+            Minimum upward percentage change required (e.g., 0.5 for 0.5%).
+        candles_back : int
+            Number of candles to look back (default: 1 = previous candle).
+        price : str
+            Price column to use (default: "close").
+
+        Returns
+        -------
+        bool
+            True if (current_price - past_price) / past_price * 100 >= min_percent.
+        """
+        if candles_back < 1:
+            raise ValueError("candles_back must be at least 1")
+
+        if len(self._data) <= candles_back:
+            self._log.warning("Insufficient data for price change check")
+            return False
+
+        current_price = self._data[price].iloc[-1]
+        past_price = self._data[price].iloc[-(candles_back + 1)]
+
+        if past_price == 0:
+            self._log.warning("Past price is zero, cannot calculate percentage")
+            return False
+
+        percent_change = (current_price - past_price) / past_price * 100
+
+        return bool(percent_change >= min_percent)
+
+    def price_down_by_percent(self, min_percent: float, candles_back: int = 1, price: str = "close") -> bool:
+        """
+        Check if price is down by at least a minimum percentage from N candles ago.
+
+        Parameters
+        ----------
+        min_percent : float
+            Minimum downward percentage change required (e.g., 0.5 for 0.5%).
+        candles_back : int
+            Number of candles to look back (default: 1 = previous candle).
+        price : str
+            Price column to use (default: "close").
+
+        Returns
+        -------
+        bool
+            True if (past_price - current_price) / past_price * 100 >= min_percent.
+        """
+        if candles_back < 1:
+            raise ValueError("candles_back must be at least 1")
+
+        if len(self._data) <= candles_back:
+            self._log.warning("Insufficient data for price change check")
+            return False
+
+        current_price = self._data[price].iloc[-1]
+        past_price = self._data[price].iloc[-(candles_back + 1)]
+
+        if past_price == 0:
+            self._log.warning("Past price is zero, cannot calculate percentage")
+            return False
+
+        percent_change = (past_price - current_price) / past_price * 100
+
+        return bool(percent_change >= min_percent)
+
     # ── Custom Signals ───────────────────────────────────────────────────────
 
     def custom(self, condition: Callable[[IndicatorCalculator], bool]) -> bool:
