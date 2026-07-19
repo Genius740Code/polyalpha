@@ -20,6 +20,7 @@ Supported Indicators
 - Momentum: RSI, Stochastic, Williams %R, CCI
 - Volatility: Bollinger Bands, ATR, Keltner Channels
 - Volume: OBV, Volume SMA, Volume ROC
+- Price Change: Absolute and percentage price change detection
 
 Usage
 -----
@@ -38,6 +39,14 @@ Usage
     signals = SignalGenerator(indicators)
     if signals.rsi_above(40) and signals.price_above_sma(20):
         print("BUY signal")
+    
+    # Price change signals
+    if signals.price_change_above(30):  # Only buy if BTC changed by at least $30
+        print("Price change threshold met")
+    if signals.price_up():  # Only buy if price is up from last candle
+        print("Price is up")
+    if signals.price_above_by(30):  # Only buy if price is up by at least $30
+        print("Price is up by threshold")
 
 IMPORTANT NOTICE
 -----------------
