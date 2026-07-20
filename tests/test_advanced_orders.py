@@ -27,6 +27,16 @@ def engine():
 
 
 @pytest.fixture
+def relaxed_engine():
+    """Create a paper engine with relaxed risk limits."""
+    config = PaperConfig(
+        fee_mode="custom", custom_fee_rate=0.02,
+        enable_risk_management=False,
+    )
+    return PaperEngine(balance=1000.0, config=config)
+
+
+@pytest.fixture
 def market():
     """Create a mock market."""
     return MockMarket()
@@ -364,6 +374,156 @@ class TestOrderDump:
         assert "trail_tp_price" in dump
         assert "oco_order_id" in dump
         assert "tp_sl_triggered_by" in dump
+
+
+class TestPercentageSlTp:
+    """Test percentage-based stop-loss and take-profit."""
+
+    def test_buy_with_stop_loss_pct_up(self, relaxed_engine, market):
+        """Test buy with percentage stop-loss for UP position."""
+        order = relaxed_engine.buy_with_tp_sl(
+            market, side="UP", amount=100.0,
+            stop_loss_pct=0.05,
+        )
+        assert order.status == "filled"
+        assert order.stop_loss_pct == 0.05
+        # 5% below entry (0.50) = 0.475
+        assert order.stop_loss == round(0.50 * (1 - 0.05), 4)
+
+    def test_buy_with_stop_loss_pct_down(self, relaxed_engine, market):
+        """Test buy with percentage stop-loss for DOWN position."""
+        order = relaxed_engine.buy_with_tp_sl(
+            market, side="DOWN", amount=100.0,
+            stop_loss_pct=0.05,
+        )
+        assert order.status == "filled"
+        assert order.stop_loss_pct == 0.05
+        # 5% above entry (0.50) = 0.525
+        assert order.stop_loss == round(0.50 * (1 + 0.05), 4)
+
+    def test_buy_with_take_profit_pct_up(self, relaxed_engine, market):
+        """Test buy with percentage take-profit for UP position."""
+        order = relaxed_engine.buy_with_tp_sl(
+            market, side="UP", amount=100.0,
+            take_profit_pct=0.10,
+        )
+        assert order.status == "filled"
+        assert order.take_profit_pct == 0.10
+        # 10% above entry (0.50) = 0.55
+        assert order.take_profit == round(0.50 * (1 + 0.10), 4)
+
+    def test_buy_with_take_profit_pct_down(self, relaxed_engine, market):
+        """Test buy with percentage take-profit for DOWN position."""
+        order = relaxed_engine.buy_with_tp_sl(
+            market, side="DOWN", amount=100.0,
+            take_profit_pct=0.10,
+        )
+        assert order.status == "filled"
+        assert order.take_profit_pct == 0.10
+        # 10% below entry (0.50) = 0.45
+        assert order.take_profit == round(0.50 * (1 - 0.10), 4)
+
+    def test_buy_with_both_pcts(self, relaxed_engine, market):
+        """Test buy with both SL and TP as percentages."""
+        order = relaxed_engine.buy_with_tp_sl(
+            market, side="UP", amount=100.0,
+            stop_loss_pct=0.05, take_profit_pct=0.10,
+        )
+        assert order.stop_loss_pct == 0.05
+        assert order.take_profit_pct == 0.10
+        assert order.stop_loss < order.price < order.take_profit
+
+    def test_buy_convenience_with_pcts(self, relaxed_engine, market):
+        """Test buy() convenience method with pcts."""
+        order = relaxed_engine.buy(
+            market, side="UP", amount=100.0,
+            stop_loss_pct=0.05, take_profit_pct=0.10,
+        )
+        assert order.stop_loss_pct == 0.05
+        assert order.take_profit_pct == 0.10
+        assert order.status == "filled"
+
+    def test_set_stop_loss_pct(self, relaxed_engine, market):
+        """Test set_stop_loss_pct on existing position."""
+        relaxed_engine.buy(market, side="UP", amount=100.0)
+        relaxed_engine.set_stop_loss_pct(market, side="UP", sl_pct=0.05)
+        pos = relaxed_engine.positions()[0]
+        assert pos.stop_loss_pct == 0.05
+        assert pos.stop_loss == round(0.50 * (1 - 0.05), 4)
+
+    def test_set_take_profit_pct(self, relaxed_engine, market):
+        """Test set_take_profit_pct on existing position."""
+        relaxed_engine.buy(market, side="UP", amount=100.0)
+        relaxed_engine.set_take_profit_pct(market, side="UP", tp_pct=0.10)
+        pos = relaxed_engine.positions()[0]
+        assert pos.take_profit_pct == 0.10
+        assert pos.take_profit == round(0.50 * (1 + 0.10), 4)
+
+    def test_stop_loss_pct_trigger_up(self, relaxed_engine, market):
+        """Test percentage SL triggers for UP position."""
+        order = relaxed_engine.buy_with_tp_sl(
+            market, side="UP", amount=100.0,
+            stop_loss_pct=0.05,
+        )
+        relaxed_engine.check_limits(market.id, up_price=0.47, down_price=0.53)
+        assert order.tp_sl_triggered_by == "sl"
+
+    def test_take_profit_pct_trigger_up(self, relaxed_engine, market):
+        """Test percentage TP triggers for UP position."""
+        order = relaxed_engine.buy_with_tp_sl(
+            market, side="UP", amount=100.0,
+            take_profit_pct=0.10,
+        )
+        relaxed_engine.check_limits(market.id, up_price=0.56, down_price=0.44)
+        assert order.tp_sl_triggered_by == "tp"
+
+    def test_absolute_price_takes_precedence(self, relaxed_engine, market):
+        """Test absolute price SL/TP takes precedence over pct when both given."""
+        order = relaxed_engine.buy_with_tp_sl(
+            market, side="UP", amount=100.0,
+            stop_loss=0.40, stop_loss_pct=0.05,
+        )
+        # Absolute price (0.40) should be used, not pct-based (0.475)
+        assert order.stop_loss == 0.40
+        assert order.stop_loss_pct == 0.05
+
+    def test_dump_includes_pct_fields(self, relaxed_engine, market):
+        """Test dump includes percentage fields."""
+        order = relaxed_engine.buy_with_tp_sl(
+            market, side="UP", amount=100.0,
+            stop_loss_pct=0.05, take_profit_pct=0.10,
+        )
+        d = order.dump()
+        assert "stop_loss_pct" in d
+        assert "take_profit_pct" in d
+        assert d["stop_loss_pct"] == 0.05
+        assert d["take_profit_pct"] == 0.10
+
+    def test_position_dump_includes_pct_fields(self, relaxed_engine, market):
+        """Test position dump includes percentage fields."""
+        relaxed_engine.buy(market, side="UP", amount=100.0)
+        relaxed_engine.set_stop_loss_pct(market, side="UP", sl_pct=0.05)
+        relaxed_engine.set_take_profit_pct(market, side="UP", tp_pct=0.10)
+        pos = relaxed_engine.positions()[0]
+        pd = pos.dump()
+        assert "stop_loss_pct" in pd
+        assert "take_profit_pct" in pd
+
+    def test_invalid_stop_loss_pct(self, relaxed_engine, market):
+        """Test invalid percentage stop-loss is rejected."""
+        with pytest.raises(ValueError, match="stop_loss_pct must be > 0"):
+            relaxed_engine.buy_with_tp_sl(
+                market, side="UP", amount=100.0,
+                stop_loss_pct=-0.05,
+            )
+
+    def test_invalid_take_profit_pct(self, relaxed_engine, market):
+        """Test invalid percentage take-profit is rejected."""
+        with pytest.raises(ValueError, match="take_profit_pct must be > 0"):
+            relaxed_engine.buy_with_tp_sl(
+                market, side="UP", amount=100.0,
+                take_profit_pct=-0.10,
+            )
 
 
 if __name__ == "__main__":

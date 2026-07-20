@@ -401,8 +401,10 @@ class PaperOrder:
     rebate_rate: float = 0.0  # Rebate rate applied (as decimal)
     
     # Advanced order management
-    stop_loss: Optional[float] = None           # SL price trigger
-    take_profit: Optional[float] = None         # TP price trigger
+    stop_loss: Optional[float] = None           # SL price trigger (absolute)
+    take_profit: Optional[float] = None         # TP price trigger (absolute)
+    stop_loss_pct: Optional[float] = None       # SL as % of entry (e.g., 0.05 for 5%)
+    take_profit_pct: Optional[float] = None     # TP as % of entry (e.g., 0.10 for 10%)
     trail_sl: Optional[float] = None            # Trailing SL distance
     trail_tp: Optional[float] = None            # Trailing TP distance
     trail_sl_price: Optional[float] = None       # Current trailing SL price
@@ -434,6 +436,8 @@ class PaperOrder:
             "rebate_rate": self.rebate_rate,
             "stop_loss": self.stop_loss,
             "take_profit": self.take_profit,
+            "stop_loss_pct": self.stop_loss_pct,
+            "take_profit_pct": self.take_profit_pct,
             "trail_sl": self.trail_sl,
             "trail_tp": self.trail_tp,
             "trail_sl_price": self.trail_sl_price,
@@ -466,9 +470,12 @@ class PaperPosition:
     outcome:       Optional[str]       = None   # "WON" | "LOST"
     order_ids:     list[str]           = field(default_factory=list)
     
-    # Risk management
-    stop_loss:     Optional[float]      = None
-    take_profit:   Optional[float]      = None
+    # Risk management — absolute price triggers
+    stop_loss:       Optional[float]      = None
+    take_profit:     Optional[float]      = None
+    # Risk management — percentage-based triggers (e.g., 0.05 for 5%)
+    stop_loss_pct:   Optional[float]      = None
+    take_profit_pct: Optional[float]      = None
 
     # ── Computed ───────────────────────────────────────────────────────────────
 
@@ -507,8 +514,10 @@ class PaperPosition:
             "pnl_pct":       round(self.pnl_pct,       DISPLAY_ROUNDING_PNL_PCT),
             "resolved":      self.resolved,
             "outcome":       self.outcome,
-            "stop_loss":     self.stop_loss,
-            "take_profit":   self.take_profit,
+            "stop_loss":       self.stop_loss,
+            "take_profit":     self.take_profit,
+            "stop_loss_pct":   self.stop_loss_pct,
+            "take_profit_pct": self.take_profit_pct,
         }
 
 
@@ -1237,7 +1246,11 @@ class PaperEngine:
 
     # ── Orders ─────────────────────────────────────────────────────────────────
 
-    def buy(self, market, side: str, amount: float, time_window_start: Optional[datetime] = None, time_window_end: Optional[datetime] = None) -> PaperOrder:
+    def buy(self, market, side: str, amount: float,
+            stop_loss_pct: float | None = None,
+            take_profit_pct: float | None = None,
+            time_window_start: Optional[datetime] = None,
+            time_window_end: Optional[datetime] = None) -> PaperOrder:
         """
         Simulated market buy — fills immediately at the current market price.
 
@@ -1246,6 +1259,8 @@ class PaperEngine:
         market : Market object
         side   : "UP" or "DOWN"
         amount : USDC to spend
+        stop_loss_pct : SL as % of entry (e.g., 0.05 for 5% loss, optional)
+        take_profit_pct : TP as % of entry (e.g., 0.10 for 10% gain, optional)
         time_window_start : datetime, optional
             Only allow execution after this time (UTC)
         time_window_end : datetime, optional
@@ -1258,13 +1273,19 @@ class PaperEngine:
         Example
         -------
         >>> order = client.paper.buy(market, side="UP", amount=10.0)
-        >>> # Only buy within 1 minute of market close
-        >>> from datetime import datetime, timezone, timedelta
-        >>> end_time = datetime.fromisoformat(market.end_time)
         >>> order = client.paper.buy(market, side="UP", amount=10.0,
-        ...     time_window_start=end_time - timedelta(minutes=1),
-        ...     time_window_end=end_time)
+        ...     stop_loss_pct=0.05, take_profit_pct=0.10)
         """
+        # Route to buy_with_tp_sl if percentage SL/TP provided
+        if stop_loss_pct is not None or take_profit_pct is not None:
+            return self.buy_with_tp_sl(
+                market, side=side, amount=amount,
+                stop_loss_pct=stop_loss_pct,
+                take_profit_pct=take_profit_pct,
+                time_window_start=time_window_start,
+                time_window_end=time_window_end,
+            )
+
         _validate_market(market)
         side   = _validate_side(side)
         amount = _validate_positive(float(amount), "amount")
@@ -1460,6 +1481,8 @@ class PaperEngine:
         amount: float,
         stop_loss: float | None = None,
         take_profit: float | None = None,
+        stop_loss_pct: float | None = None,
+        take_profit_pct: float | None = None,
         trail_sl: float | None = None,
         trail_tp: float | None = None,
         time_window_start: Optional[datetime] = None,
@@ -1473,8 +1496,10 @@ class PaperEngine:
         market : Market object
         side   : "UP" or "DOWN"
         amount : USDC to spend
-        stop_loss : SL price trigger (optional)
-        take_profit : TP price trigger (optional)
+        stop_loss : SL price trigger (absolute, optional)
+        take_profit : TP price trigger (absolute, optional)
+        stop_loss_pct : SL as percentage of entry (e.g., 0.05 for 5%, optional)
+        take_profit_pct : TP as percentage of entry (e.g., 0.10 for 10%, optional)
         trail_sl : Trailing SL distance as percentage (e.g., 0.05 for 5%)
         trail_tp : Trailing TP distance as percentage (e.g., 0.10 for 10%)
         time_window_start : datetime, optional
@@ -1482,24 +1507,29 @@ class PaperEngine:
         time_window_end : datetime, optional
             Only allow execution before this time (UTC)
 
+        Notes
+        -----
+        - Absolute triggers (stop_loss / take_profit) take precedence over
+          percentage triggers (stop_loss_pct / take_profit_pct).
+        - Percentage triggers are computed relative to the fill price:
+          UP:  SL = price * (1 - pct),  TP = price * (1 + pct)
+          DOWN: SL = price * (1 + pct),  TP = price * (1 - pct)
+
         Returns
         -------
         PaperOrder with TP/SL set
 
         Example
         -------
+        # Absolute prices
         >>> order = client.paper.buy_with_tp_sl(
         ...     market, side="UP", amount=10.0,
         ...     stop_loss=0.45, take_profit=0.55
         ... )
-        >>> # Only buy within 1 minute of market close
-        >>> from datetime import datetime, timezone, timedelta
-        >>> end_time = datetime.fromisoformat(market.end_time)
+        # Percentage-based
         >>> order = client.paper.buy_with_tp_sl(
         ...     market, side="UP", amount=10.0,
-        ...     stop_loss=0.45, take_profit=0.55,
-        ...     time_window_start=end_time - timedelta(minutes=1),
-        ...     time_window_end=end_time
+        ...     stop_loss_pct=0.05, take_profit_pct=0.10
         ... )
         """
         _validate_market(market)
@@ -1535,6 +1565,10 @@ class PaperEngine:
             stop_loss = _validate_price(float(stop_loss), "stop_loss")
         if take_profit is not None:
             take_profit = _validate_price(float(take_profit), "take_profit")
+        if stop_loss_pct is not None:
+            stop_loss_pct = _validate_positive(float(stop_loss_pct), "stop_loss_pct")
+        if take_profit_pct is not None:
+            take_profit_pct = _validate_positive(float(take_profit_pct), "take_profit_pct")
         if trail_sl is not None:
             trail_sl = _validate_positive(float(trail_sl), "trail_sl")
         if trail_tp is not None:
@@ -1559,15 +1593,29 @@ class PaperEngine:
                 is_limit=False,
                 filled_at=_now(),
             )
-            self._orders[order_id] = order
+            wallet._orders[order_id] = order
             return order
 
         # Execute the fill
-        order = self._fill(market, side, actual_price, amount, is_limit=False)
+        order = self._fill(market, side, actual_price, amount, is_limit=False, wallet=wallet)
+
+        # Resolve percentage triggers to absolute prices
+        if stop_loss_pct is not None and stop_loss is None:
+            if side == "UP":
+                stop_loss = round(actual_price * (1 - stop_loss_pct), PRICE_ROUNDING)
+            else:
+                stop_loss = round(actual_price * (1 + stop_loss_pct), PRICE_ROUNDING)
+        if take_profit_pct is not None and take_profit is None:
+            if side == "UP":
+                take_profit = round(actual_price * (1 + take_profit_pct), PRICE_ROUNDING)
+            else:
+                take_profit = round(actual_price * (1 - take_profit_pct), PRICE_ROUNDING)
 
         # Set TP/SL on the order
         order.stop_loss = stop_loss
         order.take_profit = take_profit
+        order.stop_loss_pct = stop_loss_pct
+        order.take_profit_pct = take_profit_pct
         order.trail_sl = trail_sl
         order.trail_tp = trail_tp
         order.time_window_start = time_window_start
@@ -1580,8 +1628,9 @@ class PaperEngine:
             order.trail_tp_price = actual_price * (1 + trail_tp) if side == "UP" else actual_price * (1 - trail_tp)
 
         log.info(
-            "Paper: buy_with_tp_sl %s @ %.3f SL=%.3f TP=%.3f trail_SL=%.3f trail_TP=%.3f",
-            side, actual_price, stop_loss or 0, take_profit or 0, trail_sl or 0, trail_tp or 0,
+            "Paper: buy_with_tp_sl %s @ %.3f SL=%.3f TP=%.3f SL_pct=%.3f TP_pct=%.3f trail_SL=%.3f trail_TP=%.3f",
+            side, actual_price, stop_loss or 0, take_profit or 0,
+            stop_loss_pct or 0, take_profit_pct or 0, trail_sl or 0, trail_tp or 0,
         )
         return order
 
@@ -1889,6 +1938,104 @@ class PaperEngine:
         position.trail_sl_price = position.current_price - trail_distance if side == "UP" else position.current_price + trail_distance
         
         log.info("Trailing stop set at %.4f distance for %s %s", trail_distance, market.slug, side)
+
+    def set_stop_loss_pct(
+        self,
+        market,
+        side: str,
+        sl_pct: float,
+    ) -> None:
+        """
+        Set stop loss for a position as a percentage of the entry price.
+
+        Parameters
+        ----------
+        market : Market
+            Market object
+        side : str
+            "UP" or "DOWN"
+        sl_pct : float
+            Stop loss as percentage (e.g., 0.05 for 5% below entry for UP)
+
+        Example
+        -------
+        >>> client.paper.set_stop_loss_pct(market, side="UP", sl_pct=0.05)
+        """
+        _validate_market(market)
+        side = _validate_side(side)
+        sl_pct = _validate_positive(float(sl_pct), "sl_pct")
+        position_key = f"{market.id}:{side}"
+
+        if position_key not in self._positions:
+            raise PositionNotFound(f"No position found for {market.slug} {side}")
+
+        position = self._positions[position_key]
+        position.stop_loss_pct = sl_pct
+        if side == "UP":
+            position.stop_loss = round(position.avg_price * (1 - sl_pct), PRICE_ROUNDING)
+        else:
+            position.stop_loss = round(position.avg_price * (1 + sl_pct), PRICE_ROUNDING)
+
+        # Also update the underlying orders
+        for oid in position.order_ids:
+            order = self._orders.get(oid)
+            if order:
+                order.stop_loss_pct = sl_pct
+                order.stop_loss = position.stop_loss
+
+        log.info(
+            "Stop loss set at %.2f%% ($%.4f) for %s %s",
+            sl_pct * 100, position.stop_loss, market.slug, side,
+        )
+
+    def set_take_profit_pct(
+        self,
+        market,
+        side: str,
+        tp_pct: float,
+    ) -> None:
+        """
+        Set take profit for a position as a percentage of the entry price.
+
+        Parameters
+        ----------
+        market : Market
+            Market object
+        side : str
+            "UP" or "DOWN"
+        tp_pct : float
+            Take profit as percentage (e.g., 0.10 for 10% above entry for UP)
+
+        Example
+        -------
+        >>> client.paper.set_take_profit_pct(market, side="UP", tp_pct=0.10)
+        """
+        _validate_market(market)
+        side = _validate_side(side)
+        tp_pct = _validate_positive(float(tp_pct), "tp_pct")
+        position_key = f"{market.id}:{side}"
+
+        if position_key not in self._positions:
+            raise PositionNotFound(f"No position found for {market.slug} {side}")
+
+        position = self._positions[position_key]
+        position.take_profit_pct = tp_pct
+        if side == "UP":
+            position.take_profit = round(position.avg_price * (1 + tp_pct), PRICE_ROUNDING)
+        else:
+            position.take_profit = round(position.avg_price * (1 - tp_pct), PRICE_ROUNDING)
+
+        # Also update the underlying orders
+        for oid in position.order_ids:
+            order = self._orders.get(oid)
+            if order:
+                order.take_profit_pct = tp_pct
+                order.take_profit = position.take_profit
+
+        log.info(
+            "Take profit set at %.2f%% ($%.4f) for %s %s",
+            tp_pct * 100, position.take_profit, market.slug, side,
+        )
 
     def oco_order(
        self,
@@ -2261,7 +2408,9 @@ class PaperEngine:
             if order.status != "filled" or order.market_id != market_id:
                 continue
             
-            if order.stop_loss is None and order.take_profit is None and order.trail_sl is None and order.trail_tp is None:
+            if (order.stop_loss is None and order.take_profit is None
+                    and order.stop_loss_pct is None and order.take_profit_pct is None
+                    and order.trail_sl is None and order.trail_tp is None):
                 continue
             
             # Skip if already triggered
@@ -2297,6 +2446,18 @@ class PaperEngine:
                         order.trail_tp_price = new_trail_tp
                         log.debug("Paper: trailing TP moved down to %.3f for order %s", new_trail_tp, order.id[:8])
             
+            # Resolve percentage-based triggers to absolute prices
+            if order.stop_loss_pct is not None and order.stop_loss is None:
+                if order.side == "UP":
+                    order.stop_loss = round(order.price * (1 - order.stop_loss_pct), PRICE_ROUNDING)
+                else:
+                    order.stop_loss = round(order.price * (1 + order.stop_loss_pct), PRICE_ROUNDING)
+            if order.take_profit_pct is not None and order.take_profit is None:
+                if order.side == "UP":
+                    order.take_profit = round(order.price * (1 + order.take_profit_pct), PRICE_ROUNDING)
+                else:
+                    order.take_profit = round(order.price * (1 - order.take_profit_pct), PRICE_ROUNDING)
+
             # Check stop-loss trigger
             sl_trigger = order.stop_loss if order.stop_loss is not None else order.trail_sl_price
             if sl_trigger is not None:
