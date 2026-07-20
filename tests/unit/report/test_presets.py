@@ -180,8 +180,8 @@ class TestReportEngine:
         ib = engine.report._initial_balance(trades)
         assert ib == pytest.approx(engine._balance - net, abs=1e-6)
 
-    def test_html_requires_plotly(self, monkeypatch, tmp_path):
-        """Test html() raises ImportError when plotly absent."""
+    def test_html_without_plotly(self, monkeypatch, tmp_path):
+        """Test html() works without plotly (uses CDN)."""
         import builtins
         real_import = builtins.__import__
 
@@ -194,12 +194,16 @@ class TestReportEngine:
         out = tmp_path / "report.html"
 
         monkeypatch.setattr(builtins, "__import__", mock_import)
-        with pytest.raises(ImportError, match="plotly"):
-            engine.report.html(
-                preset="quick",
-                path=str(out),
-                open_browser=False,
-            )
+        result = engine.report.html(
+            preset="quick",
+            path=str(out),
+            open_browser=False,
+        )
+        assert result == str(out)
+        assert out.exists()
+        assert out.stat().st_size > 0
+        content = out.read_text(encoding="utf-8")
+        assert "plotly" in content.lower() or "polyalpha" in content.lower()
 
     def test_save_and_list_preset(self, tmp_path, monkeypatch):
         """Test save and list preset through engine."""

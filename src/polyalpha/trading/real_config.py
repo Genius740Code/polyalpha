@@ -367,7 +367,7 @@ def add_preset(name: str, config: dict) -> None:
     PRESETS[name.upper()] = config
 
 
-def get_real_config_from_preset(name: str):
+def get_real_config_from_preset(name: str, **kwargs):
     """
     Get a RealTradingConfig object from a preset name.
 
@@ -375,6 +375,9 @@ def get_real_config_from_preset(name: str):
     ----------
     name : str
         The name of the preset to use.
+    **kwargs
+        Additional key-value pairs to override preset defaults
+        or provide required fields like private_key, rpc_url, etc.
 
     Returns
     -------
@@ -389,6 +392,7 @@ def get_real_config_from_preset(name: str):
     from .real import RealTradingConfig
     
     config_dict = get_preset(name)
+    config_dict.update(kwargs)
     return RealTradingConfig(**config_dict)
 
 

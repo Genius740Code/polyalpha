@@ -39,7 +39,8 @@ def make_market():
 @pytest.fixture
 def engine():
     """Create a basic paper trading engine."""
-    return PaperEngine(balance=100.0)
+    config = PaperConfig(enable_risk_management=False)
+    return PaperEngine(balance=100.0, config=config)
 
 
 # ── Order dump tests ───────────────────────────────────────────────────────────
@@ -73,7 +74,7 @@ def test_slug_label():
 @pytest.mark.unit
 def test_fee_mode_zero(make_market):
     """Test zero fee mode."""
-    config = PaperConfig(fee_mode="zero")
+    config = PaperConfig(enable_risk_management=False, fee_mode="zero")
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market()
     order = engine.buy(market, side="UP", amount=10.0)
@@ -83,7 +84,7 @@ def test_fee_mode_zero(make_market):
 @pytest.mark.unit
 def test_fee_mode_custom(make_market):
     """Test custom fee mode."""
-    config = PaperConfig(fee_mode="custom", custom_fee_rate=0.03)
+    config = PaperConfig(enable_risk_management=False, fee_mode="custom", custom_fee_rate=0.03)
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market()
     order = engine.buy(market, side="UP", amount=10.0)
@@ -93,7 +94,7 @@ def test_fee_mode_custom(make_market):
 @pytest.mark.unit
 def test_fee_mode_polymarket_geopolitical(make_market):
     """Test Polymarket fee mode for geopolitical markets."""
-    config = PaperConfig(fee_mode="polymarket", market_category="geopolitical")
+    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="geopolitical")
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market()
     order = engine.buy(market, side="UP", amount=10.0)
@@ -103,7 +104,7 @@ def test_fee_mode_polymarket_geopolitical(make_market):
 @pytest.mark.unit
 def test_fee_mode_polymarket_crypto(make_market):
     """Test Polymarket fee mode for crypto markets."""
-    config = PaperConfig(fee_mode="polymarket", market_category="crypto")
+    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="crypto")
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market()
     order = engine.buy(market, side="UP", amount=10.0)
@@ -114,7 +115,7 @@ def test_fee_mode_polymarket_crypto(make_market):
 @pytest.mark.unit
 def test_fee_mode_polymarket_sports(make_market):
     """Test Polymarket fee mode for sports markets."""
-    config = PaperConfig(fee_mode="polymarket", market_category="sports")
+    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="sports")
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market()
     order = engine.buy(market, side="UP", amount=10.0)
@@ -127,7 +128,7 @@ def test_fee_mode_polymarket_sports(make_market):
 @pytest.mark.unit
 def test_slippage_disabled(make_market):
     """Test slippage disabled."""
-    config = PaperConfig(slippage_pct=0.0)
+    config = PaperConfig(enable_risk_management=False, slippage_pct=0.0)
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market()
     order = engine.buy(market, side="UP", amount=10.0)
@@ -137,7 +138,7 @@ def test_slippage_disabled(make_market):
 @pytest.mark.unit
 def test_slippage_enabled(make_market):
     """Test slippage enabled."""
-    config = PaperConfig(slippage_pct=0.05)
+    config = PaperConfig(enable_risk_management=False, slippage_pct=0.05)
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market(prices=[0.50, 0.50])
     order = engine.buy(market, side="UP", amount=10.0)
@@ -149,7 +150,7 @@ def test_slippage_enabled(make_market):
 @pytest.mark.unit
 def test_slippage_no_fill_threshold(make_market):
     """Test slippage no-fill threshold."""
-    config = PaperConfig(slippage_pct=0.15, max_slippage_no_fill=0.10)
+    config = PaperConfig(enable_risk_management=False, slippage_pct=0.15, max_slippage_no_fill=0.10)
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market(prices=[0.50, 0.50])
     order = engine.buy(market, side="UP", amount=10.0)
@@ -160,7 +161,7 @@ def test_slippage_no_fill_threshold(make_market):
 @pytest.mark.unit
 def test_slippage_down_side(make_market):
     """Test slippage for DOWN side."""
-    config = PaperConfig(slippage_pct=0.05)
+    config = PaperConfig(enable_risk_management=False, slippage_pct=0.05)
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market(prices=[0.50, 0.50])
     order = engine.buy(market, side="DOWN", amount=10.0)
@@ -174,7 +175,7 @@ def test_slippage_down_side(make_market):
 @pytest.mark.unit
 def test_fill_probability_always(make_market):
     """Test fill probability always fills."""
-    config = PaperConfig(fill_probability=1.0)
+    config = PaperConfig(enable_risk_management=False, fill_probability=1.0)
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market()
     engine.limit(market, side="UP", price=0.90, amount=20.0)
@@ -186,7 +187,7 @@ def test_fill_probability_always(make_market):
 @pytest.mark.unit
 def test_fill_probability_never(make_market):
     """Test fill probability never fills."""
-    config = PaperConfig(fill_probability=0.0)
+    config = PaperConfig(enable_risk_management=False, fill_probability=0.0)
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market()
     engine.limit(market, side="UP", price=0.90, amount=20.0)
@@ -210,7 +211,8 @@ def test_set_config(make_market):
 @pytest.mark.unit
 def test_backward_compatibility_no_config(make_market):
     """Test backward compatibility without config."""
-    engine = PaperEngine(balance=100.0)
+    config = PaperConfig(enable_risk_management=False)
+    engine = PaperEngine(balance=100.0, config=config)
     market = make_market()
     order = engine.buy(market, side="UP", amount=10.0)
     assert order.status == "filled"
@@ -223,7 +225,7 @@ def test_backward_compatibility_no_config(make_market):
 @pytest.mark.unit
 def test_rebate_tracking_enabled(make_market):
     """Test that rebates are tracked when enabled."""
-    config = PaperConfig(enable_rebates=True, custom_fee_rate=0.02)
+    config = PaperConfig(enable_risk_management=False, enable_rebates=True, custom_fee_rate=0.02)
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market()
     
@@ -240,7 +242,7 @@ def test_rebate_tracking_enabled(make_market):
 @pytest.mark.unit
 def test_rebate_tracking_disabled(make_market):
     """Test that rebates are not tracked when disabled."""
-    config = PaperConfig(enable_rebates=False, custom_fee_rate=0.02)
+    config = PaperConfig(enable_risk_management=False, enable_rebates=False, custom_fee_rate=0.02)
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market()
     
@@ -256,6 +258,7 @@ def test_rebate_tracking_disabled(make_market):
 def test_volume_based_rebate_tiers(make_market):
     """Test volume-based rebate tier progression."""
     config = PaperConfig(
+        enable_risk_management=False,
         enable_rebates=True,
         custom_fee_rate=0.02,
         rebate_tiers={
@@ -292,6 +295,7 @@ def test_volume_based_rebate_tiers(make_market):
 def test_maker_vs_taker_rebate(make_market):
     """Test that maker orders get additional rebate."""
     config = PaperConfig(
+        enable_risk_management=False,
         enable_rebates=True,
         custom_fee_rate=0.02,
         maker_fee_rate=0.015,  # 1.5% maker fee (lower than taker)
@@ -319,6 +323,7 @@ def test_maker_vs_taker_rebate(make_market):
 def test_rebate_statistics(make_market):
     """Test rebate statistics calculation."""
     config = PaperConfig(
+        enable_risk_management=False,
         enable_rebates=True,
         custom_fee_rate=0.02,
         rebate_tiers={0: 0.10}
@@ -343,7 +348,7 @@ def test_rebate_statistics(make_market):
 @pytest.mark.unit
 def test_fee_summary_output(make_market):
     """Test fee summary method (just ensures it runs without error)."""
-    config = PaperConfig(enable_rebates=True, custom_fee_rate=0.02)
+    config = PaperConfig(enable_risk_management=False, enable_rebates=True, custom_fee_rate=0.02)
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market()
     
@@ -372,6 +377,7 @@ def test_rebate_config_validation():
 def test_rebate_includes_in_summary(make_market):
     """Test that rebates are shown in the summary."""
     config = PaperConfig(
+        enable_risk_management=False,
         enable_rebates=True,
         custom_fee_rate=0.02,
         rebate_tiers={0: 0.10}  # 10% rebate from $0
@@ -392,6 +398,7 @@ def test_rebate_includes_in_summary(make_market):
 def test_polymarket_fee_with_rebates(make_market):
     """Test Polymarket fee mode with rebates."""
     config = PaperConfig(
+        enable_risk_management=False,
         fee_mode="polymarket",
         market_category="crypto",
         enable_rebates=True,
@@ -411,6 +418,7 @@ def test_polymarket_fee_with_rebates(make_market):
 def test_geopolitical_zero_fee_with_rebates(make_market):
     """Test geopolitical markets have zero fee and no rebates."""
     config = PaperConfig(
+        enable_risk_management=False,
         fee_mode="polymarket",
         market_category="geopolitical",
         enable_rebates=True
@@ -429,6 +437,7 @@ def test_geopolitical_zero_fee_with_rebates(make_market):
 def test_rebate_accumulation_across_trades(make_market):
     """Test that rebates accumulate correctly across multiple trades."""
     config = PaperConfig(
+        enable_risk_management=False,
         enable_rebates=True,
         custom_fee_rate=0.02,
         rebate_tiers={0: 0.05}

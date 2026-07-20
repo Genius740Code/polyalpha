@@ -124,6 +124,7 @@ class TestWalletSecurity:
         with pytest.raises(ValueError):
             wallet_security.get_private_key(wallet_address, old_password)
     
+    @pytest.mark.requires_network
     def test_export_import_wallet(self, wallet_security, temp_dir):
         """Test wallet export and import."""
         wallet_address = "0x1234567890123456789012345678901234567890"

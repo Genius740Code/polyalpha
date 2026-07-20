@@ -48,6 +48,7 @@ from typing import Optional, Callable, Dict, List, Any, Type
 from threading import Lock
 from collections import deque
 import hashlib
+import random
 
 from ..core import (
     NetworkError,
@@ -518,7 +519,6 @@ class ErrorRecoveryManager:
                             raise
 
             elif config.strategy == RecoveryStrategy.RETRY_WITH_BACKOFF:
-                import random
                 for attempt in range(config.max_attempts):
                     try:
                         return func(*args, **kwargs)
@@ -539,7 +539,6 @@ class ErrorRecoveryManager:
                             raise
 
             elif config.strategy == RecoveryStrategy.RETRY_WITH_JITTER:
-                import random
                 for attempt in range(config.max_attempts):
                     try:
                         return func(*args, **kwargs)
@@ -550,8 +549,7 @@ class ErrorRecoveryManager:
                                 config.initial_delay * (config.backoff_factor ** attempt),
                                 config.max_delay
                             )
-                            jitter_amount = base_delay * config.jitter * (random.random() * 2 - 1)
-                            delay = max(0, base_delay + jitter_amount)
+                            delay = base_delay + base_delay * config.jitter * random.random()
                             log.warning(
                                 "Retry %d/%d for %s in %.1fs (with jitter)",
                                 attempt + 1, config.max_attempts, retry_e, delay

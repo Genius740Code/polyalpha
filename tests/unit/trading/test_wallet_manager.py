@@ -6,6 +6,7 @@ import pytest
 from polyalpha.trading.real import WalletManager
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_wallet_manager_initialization():
     """Test wallet manager initialization."""
@@ -20,6 +21,7 @@ def test_wallet_manager_initialization():
     assert wallet._allowance == 0.0
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_wallet_manager_get_address():
     """Test getting wallet address."""
@@ -33,6 +35,7 @@ def test_wallet_manager_get_address():
     assert len(address) == 42
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_wallet_manager_get_balance():
     """Test getting wallet balance."""
@@ -45,6 +48,7 @@ def test_wallet_manager_get_balance():
     assert balance == 0.0
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_wallet_manager_get_allowance():
     """Test getting token allowance."""
@@ -62,6 +66,7 @@ def test_wallet_manager_get_allowance():
         pass
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_wallet_manager_approve_spender():
     """Test approving spender."""
@@ -80,6 +85,7 @@ def test_wallet_manager_approve_spender():
         pass
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_wallet_manager_refresh_balance():
     """Test refreshing balance."""
@@ -91,6 +97,7 @@ def test_wallet_manager_refresh_balance():
     # Should not raise any errors
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_wallet_manager_wait_for_transaction():
     """Test waiting for transaction."""

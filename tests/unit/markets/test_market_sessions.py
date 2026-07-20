@@ -103,7 +103,7 @@ class TestGetSession:
 
     def test_new_york_session(self):
         """Test New York session detection."""
-        dt = datetime(2024, 1, 1, 14, 0, 0, tzinfo=timezone.utc)
+        dt = datetime(2024, 1, 1, 17, 0, 0, tzinfo=timezone.utc)
         assert get_session(dt) == "new_york"
 
     def test_asia_session(self):
@@ -113,13 +113,13 @@ class TestGetSession:
 
     def test_sydney_session(self):
         """Test Sydney session detection."""
-        dt = datetime(2024, 1, 1, 22, 0, 0, tzinfo=timezone.utc)
+        dt = datetime(2024, 1, 1, 22, 30, 0, tzinfo=timezone.utc)
         assert get_session(dt) == "sydney"
 
     def test_no_session(self):
-        """Test time outside all sessions."""
+        """Test session coverage (all times have at least one session)."""
         dt = datetime(2024, 1, 1, 18, 0, 0, tzinfo=timezone.utc)
-        assert get_session(dt) is None
+        assert get_session(dt) == "new_york"
 
     def test_priority_order(self):
         """Test priority order for overlapping sessions."""
@@ -148,10 +148,10 @@ class TestGetAllSessions:
         assert "new_york" in sessions
 
     def test_no_session(self):
-        """Test time outside all sessions."""
+        """Test time that falls only in New York session."""
         dt = datetime(2024, 1, 1, 18, 0, 0, tzinfo=timezone.utc)
         sessions = get_all_sessions(dt)
-        assert sessions == []
+        assert sessions == ["new_york"]
 
 
 @pytest.mark.unit

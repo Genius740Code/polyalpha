@@ -303,7 +303,7 @@ class TestDataProcessingPerformance:
         n = 10000
         data = pd.DataFrame({
             "value": [i for i in range(n)],
-            "category": ["A", "B", "C", "D"][i % 4] for i in range(n),
+            "category": [["A", "B", "C", "D"][i % 4] for i in range(n)],
         })
         
         start_time = time.time()

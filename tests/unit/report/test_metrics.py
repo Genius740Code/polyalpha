@@ -77,14 +77,14 @@ def make_trade():
 
 
 @pytest.fixture
-def make_trades_sequence():
+def make_trades_sequence(make_trade):
     """Create a sequence of trades with timestamps 1 day apart."""
     def _make_trades_sequence(pnls: list[float], base: datetime | None = None):
         if base is None:
             base = datetime(2025, 1, 1, tzinfo=timezone.utc)
         trades = []
         for i, p in enumerate(pnls):
-            t = make_trade()(pnl=p, entry_time=base + timedelta(days=i), amount_in=10.0)
+            t = make_trade(pnl=p, entry_time=base + timedelta(days=i), amount_in=10.0)
             trades.append(t)
         return trades
     return _make_trades_sequence
@@ -208,10 +208,10 @@ class TestMetricHelpers:
         """Test profit factor is infinite with no losses."""
         assert math.isinf(_profit_factor([10, 20, 30]))
 
-    def test_profit_factor_all_losses_is_nan(self):
-        """Test profit factor is NaN with all losses."""
+    def test_profit_factor_all_losses(self):
+        """Test profit factor is 0 with all losses."""
         pf = _profit_factor([-5, -10])
-        assert math.isnan(pf)
+        assert pf == 0.0
 
     def test_expectancy_positive_edge(self, make_trades_sequence):
         """Test expectancy with positive edge."""

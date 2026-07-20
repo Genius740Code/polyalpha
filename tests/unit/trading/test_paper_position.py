@@ -39,7 +39,8 @@ def make_market():
 @pytest.fixture
 def engine():
     """Create a basic paper trading engine."""
-    return PaperEngine(balance=100.0)
+    config = PaperConfig(enable_risk_management=False)
+    return PaperEngine(balance=100.0, config=config)
 
 
 # ── Position calculations tests ─────────────────────────────────────────────────

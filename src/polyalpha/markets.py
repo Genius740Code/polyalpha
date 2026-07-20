@@ -11,7 +11,6 @@ the next two so we always catch a market even if the clock is mid-window.
 
 from __future__ import annotations
 
-import asyncio
 import json as _json
 import logging
 import time
@@ -116,31 +115,6 @@ class RateLimiter:
                 
         if wait_time > 0:
             time.sleep(wait_time)
-
-    async def acquire_async(self) -> None:
-        """Async version - wait until a token is available."""
-        wait_time = 0.0
-        with self._lock:
-            now = time.time()
-            elapsed = now - self.last_update
-            
-            # Refill tokens based on elapsed time
-            self.tokens = min(
-                float(self.max_requests),
-                self.tokens + elapsed * (self.max_requests / self.period)
-            )
-            self.last_update = now
-            
-            if self.tokens < 1:
-                # Queue request by allowing tokens to go negative, compute wait
-                wait_time = (1 - self.tokens) * (self.period / self.max_requests)
-                self.tokens -= 1
-            else:
-                self.tokens -= 1
-                
-        if wait_time > 0:
-            await asyncio.sleep(wait_time)
-
 
 # ── MarketClient ───────────────────────────────────────────────────────────────
 
@@ -506,7 +480,7 @@ class MarketClient:
 
     def close(self) -> None:
         """Close the HTTP client and release resources."""
-        if hasattr(self, '_client'):
+        if self._client is not None:
             self._client.close()
 
     def __enter__(self):

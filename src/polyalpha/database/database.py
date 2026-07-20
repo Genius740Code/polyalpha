@@ -313,108 +313,117 @@ class TradeDatabase:
             conn.close()
             with self._pool_lock:
                 self._pool_created -= 1
-    
+
+    @contextmanager
+    def _connection_ctx(self) -> sqlite3.Connection:
+        """Context manager that returns connection to pool on exit."""
+        conn = self._get_connection()
+        try:
+            yield conn
+        finally:
+            self._return_connection(conn)
+
     def _initialize_db(self) -> None:
         """Create database schema if it doesn't exist."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        # Create schema version table for migrations
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS trades (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                market_slug TEXT NOT NULL,
-                market_id TEXT NOT NULL,
-                side TEXT NOT NULL,
-                entry_price REAL NOT NULL,
-                exit_price REAL,
-                amount REAL NOT NULL,
-                shares REAL NOT NULL,
-                fee REAL NOT NULL,
-                outcome TEXT,
-                pnl REAL NOT NULL,
-                timestamp TEXT NOT NULL,
-                market_session TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                order_id TEXT,
-                status TEXT DEFAULT 'pending',
-                filled_shares REAL DEFAULT 0.0,
-                filled_amount REAL DEFAULT 0.0,
-                avg_fill_price REAL DEFAULT 0.0,
-                filled_at TEXT
-            )
-        """)
-        
-        # Create indexes for common queries
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_market_slug 
-            ON trades(market_slug)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_market_id 
-            ON trades(market_id)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_side 
-            ON trades(side)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_outcome 
-            ON trades(outcome)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_timestamp 
-            ON trades(timestamp)
-        """)
-        
-        # Create composite index for duplicate detection
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_duplicate_check 
-            ON trades(market_id, side, timestamp)
-        """)
-        
-        # Create index for market session
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_market_session 
-            ON trades(market_session)
-        """)
-        
-        # Create materialized views for common aggregations
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS trade_statistics_mv (
-                asset TEXT PRIMARY KEY,
-                total_trades INTEGER,
-                wins INTEGER,
-                losses INTEGER,
-                win_rate REAL,
-                total_pnl REAL,
-                avg_pnl REAL,
-                last_updated TEXT
-            )
-        """)
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS daily_summary_mv (
-                date TEXT PRIMARY KEY,
-                total_trades INTEGER,
-                total_pnl REAL,
-                total_fees REAL,
-                win_rate REAL,
-                last_updated TEXT
-            )
-        """)
-        
-        # Initialize schema version if not exists
-        cursor.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (1)")
-        
-        conn.commit()
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
+
+            # Create schema version table for migrations
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS schema_version (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    market_slug TEXT NOT NULL,
+                    market_id TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    entry_price REAL NOT NULL,
+                    exit_price REAL,
+                    amount REAL NOT NULL,
+                    shares REAL NOT NULL,
+                    fee REAL NOT NULL,
+                    outcome TEXT,
+                    pnl REAL NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    market_session TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    order_id TEXT,
+                    status TEXT DEFAULT 'pending',
+                    filled_shares REAL DEFAULT 0.0,
+                    filled_amount REAL DEFAULT 0.0,
+                    avg_fill_price REAL DEFAULT 0.0,
+                    filled_at TEXT
+                )
+            """)
+
+            # Create indexes for common queries
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_market_slug 
+                ON trades(market_slug)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_market_id 
+                ON trades(market_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_side 
+                ON trades(side)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_outcome 
+                ON trades(outcome)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_timestamp 
+                ON trades(timestamp)
+            """)
+
+            # Create composite index for duplicate detection
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_duplicate_check 
+                ON trades(market_id, side, timestamp)
+            """)
+
+            # Create index for market session
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_market_session 
+                ON trades(market_session)
+            """)
+
+            # Create materialized views for common aggregations
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS trade_statistics_mv (
+                    asset TEXT PRIMARY KEY,
+                    total_trades INTEGER,
+                    wins INTEGER,
+                    losses INTEGER,
+                    win_rate REAL,
+                    total_pnl REAL,
+                    avg_pnl REAL,
+                    last_updated TEXT
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS daily_summary_mv (
+                    date TEXT PRIMARY KEY,
+                    total_trades INTEGER,
+                    total_pnl REAL,
+                    total_fees REAL,
+                    win_rate REAL,
+                    last_updated TEXT
+                )
+            """)
+
+            # Initialize schema version if not exists
+            cursor.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (1)")
+
+            conn.commit()
         log.info("Database initialized at %s", self.db_path)
     
     def _validate_trade_data(
@@ -553,36 +562,36 @@ class TradeDatabase:
                     f"side={side}, timestamp={timestamp.isoformat()}"
                 )
         
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        timestamp_str = timestamp.isoformat()
-        
-        cursor.execute("""
-            INSERT INTO trades (
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
+
+            timestamp_str = timestamp.isoformat()
+
+            cursor.execute("""
+                INSERT INTO trades (
+                    market_slug, market_id, side, entry_price, exit_price,
+                    amount, shares, fee, outcome, pnl, timestamp, market_session,
+                    order_id, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
                 market_slug, market_id, side, entry_price, exit_price,
-                amount, shares, fee, outcome, pnl, timestamp, market_session,
+                amount, shares, fee, outcome, pnl, timestamp_str, market_session,
                 order_id, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            market_slug, market_id, side, entry_price, exit_price,
-            amount, shares, fee, outcome, pnl, timestamp_str, market_session,
-            order_id, status
-        ))
-        
-        conn.commit()
-        trade_id = cursor.lastrowid
-        
-        # Invalidate cache on write
-        self._invalidate_cache()
-        
-        # Trigger trade_saved hooks if streaming is enabled
-        if self._streaming_enabled:
-            trade_record = self._row_to_trade_record(cursor.execute(
-                "SELECT * FROM trades WHERE id = ?", (trade_id,)
-            ).fetchone())
-            self._trigger_trade_saved_hooks(trade_record)
-        
+            ))
+
+            conn.commit()
+            trade_id = cursor.lastrowid
+
+            # Invalidate cache on write
+            self._invalidate_cache()
+
+            # Trigger trade_saved hooks if streaming is enabled
+            if self._streaming_enabled:
+                trade_record = self._row_to_trade_record(cursor.execute(
+                    "SELECT * FROM trades WHERE id = ?", (trade_id,)
+                ).fetchone())
+                self._trigger_trade_saved_hooks(trade_record)
+
         log.debug("Trade saved: ID=%d, market=%s, side=%s, pnl=%.2f",
                   trade_id, market_slug, side, pnl)
         return trade_id
@@ -616,89 +625,89 @@ class TradeDatabase:
         if not trades:
             return []
         
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        # Validate all trades first
-        for trade in trades:
-            self._validate_trade_data(
-                market_slug=trade["market_slug"],
-                market_id=trade["market_id"],
-                side=trade["side"],
-                entry_price=trade["entry_price"],
-                exit_price=trade.get("exit_price"),
-                amount=trade["amount"],
-                shares=trade["shares"],
-                fee=trade["fee"],
-                outcome=trade.get("outcome"),
-                pnl=trade["pnl"],
-                timestamp=trade["timestamp"],
-                market_session=trade.get("market_session"),
-            )
-        
-        # Check for duplicates if enabled
-        if check_duplicates:
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
+
+            # Validate all trades first
             for trade in trades:
-                if self.is_duplicate_trade(
+                self._validate_trade_data(
+                    market_slug=trade["market_slug"],
+                    market_id=trade["market_id"],
+                    side=trade["side"],
+                    entry_price=trade["entry_price"],
+                    exit_price=trade.get("exit_price"),
+                    amount=trade["amount"],
+                    shares=trade["shares"],
+                    fee=trade["fee"],
+                    outcome=trade.get("outcome"),
+                    pnl=trade["pnl"],
+                    timestamp=trade["timestamp"],
+                    market_session=trade.get("market_session"),
+                )
+
+            # Check for duplicates if enabled
+            if check_duplicates:
+                for trade in trades:
+                    if self.is_duplicate_trade(
+                        trade["market_id"],
+                        trade["side"],
+                        trade["timestamp"]
+                    ):
+                        raise ValueError(
+                            f"Duplicate trade detected: market_id={trade['market_id']}, "
+                            f"side={trade['side']}, timestamp={trade['timestamp'].isoformat()}"
+                        )
+
+            # Prepare data for bulk insert
+            trade_data = []
+            for trade in trades:
+                trade_data.append((
+                    trade["market_slug"],
                     trade["market_id"],
                     trade["side"],
-                    trade["timestamp"]
-                ):
-                    raise ValueError(
-                        f"Duplicate trade detected: market_id={trade['market_id']}, "
-                        f"side={trade['side']}, timestamp={trade['timestamp'].isoformat()}"
-                    )
-        
-        # Prepare data for bulk insert
-        trade_data = []
-        for trade in trades:
-            trade_data.append((
-                trade["market_slug"],
-                trade["market_id"],
-                trade["side"],
-                trade["entry_price"],
-                trade.get("exit_price"),
-                trade["amount"],
-                trade["shares"],
-                trade["fee"],
-                trade.get("outcome"),
-                trade["pnl"],
-                trade["timestamp"].isoformat(),
-                trade.get("market_session"),
-            ))
-        
-        # Begin transaction
-        cursor.execute("BEGIN TRANSACTION")
-        
-        try:
-            # Bulk insert
-            cursor.executemany("""
-                INSERT INTO trades (
-                    market_slug, market_id, side, entry_price, exit_price,
-                    amount, shares, fee, outcome, pnl, timestamp, market_session
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, trade_data)
-            
-            conn.commit()
-            
-            # Get the inserted IDs by querying back within the transaction
-            cursor.execute("""
-                SELECT id FROM (
-                    SELECT id FROM trades ORDER BY id DESC LIMIT ?
-                ) ORDER BY id
-            """, (len(trades),))
-            trade_ids = [row[0] for row in cursor.fetchall()]
-            
-            # Invalidate cache on write
-            self._invalidate_cache()
-            
-            log.info("Bulk saved %d trades", len(trades))
-            return trade_ids
+                    trade["entry_price"],
+                    trade.get("exit_price"),
+                    trade["amount"],
+                    trade["shares"],
+                    trade["fee"],
+                    trade.get("outcome"),
+                    trade["pnl"],
+                    trade["timestamp"].isoformat(),
+                    trade.get("market_session"),
+                ))
 
-        except Exception as e:
-            conn.rollback()
-            log.error("Bulk insert failed: %s", e)
-            raise
+            # Begin transaction
+            cursor.execute("BEGIN TRANSACTION")
+
+            try:
+                # Bulk insert
+                cursor.executemany("""
+                    INSERT INTO trades (
+                        market_slug, market_id, side, entry_price, exit_price,
+                        amount, shares, fee, outcome, pnl, timestamp, market_session
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, trade_data)
+
+                conn.commit()
+
+                # Get the inserted IDs by querying back within the transaction
+                cursor.execute("""
+                    SELECT id FROM (
+                        SELECT id FROM trades ORDER BY id DESC LIMIT ?
+                    ) ORDER BY id
+                """, (len(trades),))
+                trade_ids = [row[0] for row in cursor.fetchall()]
+
+                # Invalidate cache on write
+                self._invalidate_cache()
+
+                log.info("Bulk saved %d trades", len(trades))
+                return trade_ids
+
+            except Exception as e:
+                conn.rollback()
+                log.error("Bulk insert failed: %s", e)
+                raise
 
     def update_trade_status(
         self,
@@ -732,38 +741,37 @@ class TradeDatabase:
         bool
             True if update was successful, False otherwise
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
 
-        filled_at_str = filled_at.isoformat() if filled_at else None
+            filled_at_str = filled_at.isoformat() if filled_at else None
 
-        try:
-            cursor.execute("""
-                UPDATE trades
-                SET status = ?,
-                    filled_shares = ?,
-                    filled_amount = ?,
-                    avg_fill_price = ?,
-                    filled_at = ?
-                WHERE order_id = ?
-            """, (status, filled_shares, filled_amount, avg_fill_price, filled_at_str, order_id))
+            try:
+                cursor.execute("""
+                    UPDATE trades
+                    SET status = ?,
+                        filled_shares = ?,
+                        filled_amount = ?,
+                        avg_fill_price = ?,
+                        filled_at = ?
+                    WHERE order_id = ?
+                """, (status, filled_shares, filled_amount, avg_fill_price, filled_at_str, order_id))
 
-            conn.commit()
+                conn.commit()
 
-            if cursor.rowcount > 0:
-                log.debug("Trade status updated: order_id=%s, status=%s", order_id, status)
-                # Invalidate cache on update
-                self._invalidate_cache()
-                return True
-            else:
-                log.warning("No trade found with order_id=%s", order_id)
+                if cursor.rowcount > 0:
+                    log.debug("Trade status updated: order_id=%s, status=%s", order_id, status)
+                    self._invalidate_cache()
+                    return True
+                else:
+                    log.warning("No trade found with order_id=%s", order_id)
+                    return False
+
+            except Exception as e:
+                conn.rollback()
+                log.error("Failed to update trade status: %s", e)
                 return False
 
-        except Exception as e:
-            conn.rollback()
-            log.error("Failed to update trade status: %s", e)
-            return False
-    
     def is_duplicate_trade(
         self,
         market_id: str,

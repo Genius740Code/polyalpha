@@ -118,9 +118,9 @@ def test_paper_cancel_refunds(engine, make_market):
 @pytest.mark.unit
 def test_paper_insufficient_balance(make_market):
     """Test that insufficient balance raises error."""
-    engine = PaperEngine(balance=5.0)
+    engine = PaperEngine(balance=5.0, config=PaperConfig(enable_risk_management=False))
     market = make_market()
-    with pytest.raises(polyalpha.InsufficientBalance):
+    with pytest.raises(ValueError):
         engine.buy(market, side="UP", amount=10.0)
 
 

@@ -58,6 +58,7 @@ def engine():
 
 # ── RealTradingEngine tests ────────────────────────────────────────────────────
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_initialization():
     """Test engine initialization."""
@@ -73,6 +74,7 @@ def test_real_engine_initialization():
     assert len(engine._positions) == 0
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_with_config(make_market):
     """Test engine with custom config."""
@@ -95,6 +97,7 @@ def test_real_engine_with_config(make_market):
     assert engine.config.percentage_of_balance == 0.10
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_buy_with_fixed_amount(engine, make_market):
     """Test buy with fixed amount position sizing."""
@@ -108,6 +111,7 @@ def test_real_engine_buy_with_fixed_amount(engine, make_market):
     assert order.is_limit == False
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_buy_with_limit(engine, make_market):
     """Test limit order placement."""
@@ -120,6 +124,7 @@ def test_real_engine_buy_with_limit(engine, make_market):
     assert order.is_limit == True
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_insufficient_allowance(make_market):
     """Test insufficient allowance error."""
@@ -143,6 +148,7 @@ def test_real_engine_insufficient_allowance(make_market):
         engine.buy(market, side="UP", amount=10.0, confirm=False)
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_max_order_size_limit(make_market):
     """Test max order size limit."""
@@ -167,6 +173,7 @@ def test_real_engine_max_order_size_limit(make_market):
         engine.buy(market, side="UP", amount=100.0, confirm=False)
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_max_position_size_limit(make_market):
     """Test max position size limit."""
@@ -194,6 +201,7 @@ def test_real_engine_max_position_size_limit(make_market):
         engine.buy(market, side="UP", amount=30.0, confirm=False)
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_max_open_positions_limit(make_market):
     """Test max open positions limit."""
@@ -224,6 +232,7 @@ def test_real_engine_max_open_positions_limit(make_market):
         engine.buy(market3, side="UP", amount=10.0, confirm=False)
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_max_risk_per_trade(make_market):
     """Test max risk per trade limit."""
@@ -248,6 +257,7 @@ def test_real_engine_max_risk_per_trade(make_market):
         engine.buy(market, side="UP", amount=10.0, confirm=False)
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_position_sizing_fixed(make_market):
     """Test fixed position sizing."""
@@ -274,6 +284,7 @@ def test_real_engine_position_sizing_fixed(make_market):
     assert order.amount == 25.0
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_position_sizing_percentage(make_market):
     """Test percentage position sizing."""
@@ -300,6 +311,7 @@ def test_real_engine_position_sizing_percentage(make_market):
     assert order.amount == 10.0  # 10% of 100
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_position_sizing_kelly(make_market):
     """Test Kelly position sizing."""
@@ -330,6 +342,7 @@ def test_real_engine_position_sizing_kelly(make_market):
     assert order2.amount == 0
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_emergency_stop(engine, make_market):
     """Test emergency stop functionality."""
@@ -344,6 +357,7 @@ def test_real_engine_emergency_stop(engine, make_market):
         engine.buy(market, side="UP", amount=10.0, confirm=False)
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_resume_trading(make_market):
     """Test resume trading functionality."""
@@ -369,6 +383,7 @@ def test_real_engine_resume_trading(make_market):
     assert engine.emergency_mode == False
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_cancel_order(engine, make_market):
     """Test order cancellation."""
@@ -379,6 +394,7 @@ def test_real_engine_cancel_order(engine, make_market):
     assert order.status == "cancelled"
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_cancel_nonexistent_order():
     """Test canceling nonexistent order raises error."""
@@ -391,6 +407,7 @@ def test_real_engine_cancel_nonexistent_order():
         engine.cancel("nonexistent-id")
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_get_order(engine, make_market):
     """Test getting order by ID."""
@@ -402,6 +419,7 @@ def test_real_engine_get_order(engine, make_market):
     assert retrieved.side == "UP"
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_get_nonexistent_order():
     """Test getting nonexistent order raises error."""
@@ -414,6 +432,7 @@ def test_real_engine_get_nonexistent_order():
         engine.get_order("nonexistent-id")
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_open_orders(engine, make_market):
     """Test getting open orders."""
@@ -427,6 +446,7 @@ def test_real_engine_open_orders(engine, make_market):
     assert order2.id in [o.id for o in open_orders]
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_positions(engine, make_market):
     """Test getting positions."""
@@ -438,6 +458,7 @@ def test_real_engine_positions(engine, make_market):
     assert positions[0].side == "UP"
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_get_position(engine, make_market):
     """Test getting position by market ID and side."""
@@ -449,6 +470,7 @@ def test_real_engine_get_position(engine, make_market):
     assert position.market_id == market.id
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_get_nonexistent_position():
     """Test getting nonexistent position raises error."""
@@ -461,6 +483,7 @@ def test_real_engine_get_nonexistent_position():
         engine.get_position("nonexistent-market", "UP")
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_position_aggregation(make_market):
     """Test position aggregation."""
@@ -488,6 +511,7 @@ def test_real_engine_position_aggregation(make_market):
     assert positions[0].shares > 0
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_real_engine_refresh_balance():
     """Test balance refresh."""

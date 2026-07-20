@@ -360,6 +360,10 @@ def test_add_preset():
     # Verify we can retrieve it
     retrieved = get_preset("CUSTOM")
     assert retrieved["max_order_size"] == 250.0
+    
+    # Clean up to avoid polluting other tests
+    from polyalpha.trading.real_config import PRESETS
+    PRESETS.pop("CUSTOM", None)
 
 
 @pytest.mark.unit
@@ -371,12 +375,21 @@ def test_add_preset_uppercase():
     
     # Should be stored as uppercase
     assert "LOWERCASE_NAME" in list_presets()
+    
+    # Clean up to avoid polluting other tests
+    from polyalpha.trading.real_config import PRESETS
+    PRESETS.pop("LOWERCASE_NAME", None)
 
 
 @pytest.mark.unit
 def test_get_real_config_from_preset():
     """Test getting RealTradingConfig from preset."""
-    config = get_real_config_from_preset("CONSERVATIVE")
+    config = get_real_config_from_preset(
+        "CONSERVATIVE",
+        private_key="0x" + "1" * 64,
+        rpc_url="https://polygon-rpc.com",
+        polymarket_api_key="test-api-key",
+    )
     
     assert isinstance(config, RealTradingConfig)
     assert config.require_confirmation is True

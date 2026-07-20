@@ -2,6 +2,7 @@
 Stream module tests — run with: pytest tests/unit/stream/test_stream.py
 """
 
+import time
 import pytest
 from polyalpha.stream import Stream, EVENTS
 from polyalpha.core.constants import (
@@ -752,8 +753,9 @@ def test_stream_pong_updates_quality_good():
     market = make_market()
     stream = Stream(market)
     
-    # Simulate good RTT
-    stream._last_ping_time = 100.0
+    # Simulate good RTT (< 1 second)
+    now = time.time()
+    stream._last_ping_time = now
     stream._on_message(None, "PONG")
     
     # Quality should remain high
@@ -761,13 +763,16 @@ def test_stream_pong_updates_quality_good():
 
 
 @pytest.mark.unit
-def test_stream_pong_updates_quality_poor():
+def test_stream_pong_updates_quality_poor(monkeypatch):
     market = make_market()
     stream = Stream(market)
     
-    # Simulate poor RTT
-    stream._last_ping_time = 0.0
+    # Simulate poor RTT (>= 3 seconds)
+    now = 1000000.0
+    stream._last_ping_time = now
+    # Monkeypatch time.time to return a value 5 seconds after _last_ping_time
+    monkeypatch.setattr(time, "time", lambda: now + 5.0)
     stream._on_message(None, "PONG")
     
     # Quality should be lower
-    assert stream.connection_quality <= 1.0
+    assert stream.connection_quality < 0.9

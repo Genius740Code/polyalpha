@@ -308,7 +308,7 @@ class TestAnalyzeMarket:
             "model": "openai/gpt-4o-mini",
             "choices": [{
                 "message": {
-                    "content": '{"sentiment": "bullish", "confidence": 0.8}'
+                    "content": '{"sentiment": "bullish", "confidence": 0.8, "reasoning": "test reasoning"}'
                 }
             }],
             "usage": {
@@ -374,7 +374,7 @@ class TestAnalyzeMarket:
             "model": "openai/gpt-4o-mini",
             "choices": [{
                 "message": {
-                    "content": '{"sentiment": "neutral", "confidence": 0.5}'
+                    "content": '{"sentiment": "neutral", "confidence": 0.5, "reasoning": "test reasoning"}'
                 }
             }],
             "usage": {
@@ -410,7 +410,7 @@ class TestGenerateTradingSignal:
             "model": "openai/gpt-4o-mini",
             "choices": [{
                 "message": {
-                    "content": '{"signal": "BUY", "confidence": 0.75, "side": "UP"}'
+                    "content": '{"action": "BUY", "confidence": 0.75, "side": "UP", "reasoning": "test reasoning"}'
                 }
             }],
             "usage": {
@@ -431,7 +431,7 @@ class TestGenerateTradingSignal:
         signal = client.generate_trading_signal(market_data)
         
         assert isinstance(signal, TradingSignal)
-        assert signal.signal == "BUY"
+        assert signal.action == "BUY"
         assert signal.confidence == 0.75
         assert signal.side == "UP"
 
@@ -444,7 +444,7 @@ class TestGenerateTradingSignal:
             "model": "openai/gpt-4o-mini",
             "choices": [{
                 "message": {
-                    "content": '{"signal": "HOLD", "confidence": 0.5}'
+                    "content": '{"action": "HOLD", "confidence": 0.5, "reasoning": "test reasoning"}'
                 }
             }],
             "usage": {
@@ -465,7 +465,7 @@ class TestGenerateTradingSignal:
         signal = client.generate_trading_signal(market_data, current_prices)
         
         assert isinstance(signal, TradingSignal)
-        assert signal.signal == "HOLD"
+        assert signal.action == "HOLD"
 
     @patch('polyalpha.ai.client.httpx.Client')
     def test_generate_trading_signal_invalid_json(self, mock_client_class):
@@ -541,9 +541,10 @@ class TestMakeRequestErrors:
     @patch('polyalpha.ai.client.httpx.Client')
     def test_authentication_error_401(self, mock_client_class):
         """Test 401 authentication error."""
+        import httpx
         mock_response = Mock()
         mock_response.status_code = 401
-        mock_response.raise_for_status.side_effect = Exception("401")
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError("401", request=Mock(), response=mock_response)
         mock_client_instance = Mock()
         mock_client_instance.post.return_value = mock_response
         mock_client_class.return_value = mock_client_instance
@@ -556,9 +557,10 @@ class TestMakeRequestErrors:
     @patch('polyalpha.ai.client.httpx.Client')
     def test_quota_exceeded_error_429(self, mock_client_class):
         """Test 429 quota exceeded error."""
+        import httpx
         mock_response = Mock()
         mock_response.status_code = 429
-        mock_response.raise_for_status.side_effect = Exception("429")
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError("429", request=Mock(), response=mock_response)
         mock_client_instance = Mock()
         mock_client_instance.post.return_value = mock_response
         mock_client_class.return_value = mock_client_instance
@@ -571,9 +573,10 @@ class TestMakeRequestErrors:
     @patch('polyalpha.ai.client.httpx.Client')
     def test_model_not_found_error_404(self, mock_client_class):
         """Test 404 model not found error."""
+        import httpx
         mock_response = Mock()
         mock_response.status_code = 404
-        mock_response.raise_for_status.side_effect = Exception("404")
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError("404", request=Mock(), response=mock_response)
         mock_client_instance = Mock()
         mock_client_instance.post.return_value = mock_response
         mock_client_class.return_value = mock_client_instance

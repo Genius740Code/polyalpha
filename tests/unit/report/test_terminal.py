@@ -221,7 +221,7 @@ class TestMetricFormatting:
 class TestRenderPositions:
     """Test position rendering."""
 
-    def _make_position(self, resolved=False, outcome=None, pnl_pct=0.0):
+    def _make_position(self, resolved=False, outcome=None):
         """Helper to create a test position."""
         return PaperPosition(
             market_id="mkt_001",
@@ -234,7 +234,6 @@ class TestRenderPositions:
             resolved=resolved,
             outcome=outcome,
             order_ids=["order_1"],
-            pnl_pct=pnl_pct,
         )
 
     def _make_order(self):
@@ -269,7 +268,7 @@ class TestRenderPositions:
 
     def test_render_closed_positions(self, capsys):
         """Test rendering closed positions."""
-        positions = [self._make_position(resolved=True, outcome="WON", pnl_pct=10.0)]
+        positions = [self._make_position(resolved=True, outcome="WON")]
         orders = {"order_1": self._make_order()}
         render_positions(positions, orders, show_all=True, verbose=True)
         captured = capsys.readouterr()

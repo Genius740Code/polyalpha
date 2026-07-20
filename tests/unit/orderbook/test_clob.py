@@ -243,6 +243,7 @@ def test_clob_client_get_order_status_filled():
 
 # ── ClobClient Get Orderbook Tests ──────────────────────────────────────────────
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_clob_client_get_orderbook():
     client = ClobClient(
@@ -258,6 +259,7 @@ def test_clob_client_get_orderbook():
     assert isinstance(response["asks"], list)
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_clob_client_get_orderbook_structure():
     client = ClobClient(
@@ -278,6 +280,7 @@ def test_clob_client_get_orderbook_structure():
         assert isinstance(response["asks"][0][1], (int, float))  # size
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_clob_client_get_orderbook_simulated_data():
     client = ClobClient(
@@ -447,6 +450,7 @@ def test_clob_client_multiple_orders():
     assert order2["side"] == "sell"
 
 
+@pytest.mark.requires_network
 @pytest.mark.unit
 def test_clob_client_orderbook_query():
     client = ClobClient(

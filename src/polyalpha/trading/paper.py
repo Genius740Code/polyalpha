@@ -1397,6 +1397,8 @@ class PaperEngine:
         )
         wallet._orders[order_id] = order
         wallet.balance -= amount  # reserve
+        if not self._use_multi_wallet:
+            self._balance = wallet.balance
         log.info(
             "Paper: limit %s @ %.3f $%.2f reserved — balance $%.2f",
             side, price, amount, wallet.balance,
@@ -2514,24 +2516,26 @@ class PaperEngine:
         if price <= 0:
             raise ValueError(f"Price must be positive, got {price}")
 
-        # Calculate shares first (needed for fee calculation)
-        net = amount  # Will subtract fee after calculation
-        shares = round(net / price, SHARE_ROUNDING) if price > 0 else 0.0
+        # First pass: estimate shares and fee
+        shares = round(amount / price, SHARE_ROUNDING) if price > 0 else 0.0
         
-        # Validate shares calculation resulted in positive amount
         if shares <= 0:
             raise ValueError(
                 f"Calculated shares is zero or negative (amount=${amount:.2f}, price=${price:.4f})"
             )
 
-        # Calculate fee and rebate
         fee, rebate_amount, rebate_rate, fee_type = self._calculate_fee(amount, price, shares, is_maker=is_limit)
-        net = amount - fee + rebate_amount  # Net cost after fee and rebate
+        net = amount - fee + rebate_amount
         shares = round(net / price, SHARE_ROUNDING) if price > 0 else 0.0
 
+        # Recalculate fee against final share count if using polymarket formula
+        if self._config.fee_mode == "polymarket":
+            fee, rebate_amount, rebate_rate, fee_type = self._calculate_fee(net, price, shares, is_maker=is_limit)
+
         wallet.balance -= amount
-        
-        # Track fee and rebate statistics
+        if not self._use_multi_wallet:
+            self._balance = wallet.balance
+
         self._track_fee_and_rebate(fee, rebate_amount, fee_type, amount)
 
         order = PaperOrder(

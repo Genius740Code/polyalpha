@@ -25,10 +25,8 @@ try:
     import pandas_ta as ta
     PANDAS_TA_AVAILABLE = True
 except ImportError:
+    from polyalpha.analysis import _native_ta as ta
     PANDAS_TA_AVAILABLE = False
-    logging.getLogger(__name__).warning(
-        "pandas-ta not installed. Install with: pip install pandas-ta"
-    )
 
 log = logging.getLogger(__name__)
 
@@ -53,13 +51,6 @@ class DeltaCalculator:
         """Initialize delta calculator."""
         self.data = data.copy()
         self._validate_data()
-
-        if not PANDAS_TA_AVAILABLE:
-            raise ImportError(
-                "pandas-ta is required for delta calculations. "
-                "Install with: pip install pandas-ta"
-            )
-
         self._log = logging.getLogger(__name__)
         self._cache: dict[str, pd.Series] = {}
 

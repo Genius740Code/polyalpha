@@ -112,7 +112,7 @@ def test_risk_manager_daily_loss_limit(make_market):
 @pytest.mark.unit
 def test_risk_manager_max_trades_per_day(make_market):
     """Test that max trades per day limit is enforced."""
-    config = PaperConfig(max_trades_per_day=3, max_risk_per_trade=0.20)
+    config = PaperConfig(max_trades_per_day=3, max_risk_per_trade=0.20, max_positions_per_market=5)
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market()
     
@@ -128,7 +128,7 @@ def test_risk_manager_max_trades_per_day(make_market):
 @pytest.mark.unit
 def test_risk_manager_max_risk_per_trade(make_market):
     """Test that max risk per trade percentage is enforced."""
-    config = PaperConfig(max_risk_per_trade=0.10)  # 10% of balance
+    config = PaperConfig(max_risk_per_trade=0.10, max_positions_per_market=5)  # 10% of balance
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market()
     
@@ -159,7 +159,7 @@ def test_risk_manager_disable(make_market):
 @pytest.mark.unit
 def test_risk_manager_summary(make_market):
     """Test risk summary reporting."""
-    config = PaperConfig(max_daily_loss=50.0, max_trades_per_day=10, max_risk_per_trade=0.20)
+    config = PaperConfig(max_daily_loss=50.0, max_trades_per_day=10, max_risk_per_trade=0.20, max_positions_per_market=5)
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market()
     
@@ -179,7 +179,7 @@ def test_risk_manager_summary(make_market):
 @pytest.mark.unit
 def test_risk_manager_reset_daily_limits(make_market):
     """Test manual reset of daily limits."""
-    config = PaperConfig(max_trades_per_day=2, max_risk_per_trade=0.20)
+    config = PaperConfig(max_trades_per_day=2, max_risk_per_trade=0.20, max_positions_per_market=5)
     engine = PaperEngine(balance=100.0, config=config)
     market = make_market()
     

@@ -29,11 +29,11 @@ Usage
     # Cancel an order
     response = client.cancel_order(order_id="order-id")
 
-    # Get orderbook
-    orderbook = client.get_orderbook(token_id="token-id")
-
     # Get balance
     balance = client.get_balance()
+
+For order-book data (bids, asks, mid-price, spreads), use
+``ClobBookClient`` from ``polyalpha.orderbook`` instead.
 """
 
 from __future__ import annotations
@@ -439,35 +439,6 @@ class ClobClient:
         except Exception as e:
             log.error("Failed to get order status %s: %s", order_id, e)
             raise NetworkError(f"Failed to get order status: {e}")
-
-    def get_orderbook(self, token_id: str) -> dict:
-        """
-        Get current orderbook for a token.
-
-        Parameters
-        ----------
-        token_id : str
-            Token ID to query
-
-        Returns
-        -------
-        dict
-            Orderbook with bids and asks arrays
-            Format: {"bids": [[price, size], ...], "asks": [[price, size], ...]}
-
-        Raises
-        ------
-        NetworkError
-            If request fails
-        """
-        log.debug("Getting orderbook for token: %s", mask_transaction_hash(token_id))
-
-        try:
-            response = self._make_request("GET", f"/orderbook/{token_id}")
-            return response
-        except Exception as e:
-            log.error("Failed to get orderbook for %s: %s", mask_transaction_hash(token_id), e)
-            raise NetworkError(f"Failed to get orderbook: {e}")
 
     def get_balance(self) -> dict:
         """
