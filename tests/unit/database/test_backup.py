@@ -1,9 +1,6 @@
 """
-Database backup and restore tests — run with: pytest tests/test_database_backup.py
+Database backup and restore tests.
 """
-
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import pytest
 from datetime import datetime, timezone

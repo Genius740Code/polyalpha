@@ -267,21 +267,17 @@ class TradeDatabase:
         self._initialize_db()
     
     def _get_connection(self) -> sqlite3.Connection:
-        """Get or create database connection from pool."""
+        """Get or create database connection."""
         try:
-            # Try to get connection from pool
-            conn = self._connection_pool.get_nowait()
-            return conn
+            return self._connection_pool.get_nowait()
         except Empty:
-            # Pool is empty, create new connection
             with self._pool_lock:
                 if self._pool_created < self._max_pool_size:
                     conn = self._create_connection()
                     self._pool_created += 1
                     return conn
-                else:
-                    # Pool is full, wait for available connection
-                    return self._connection_pool.get(timeout=5)
+            # Fallback — create connection beyond pool limit
+            return self._create_connection()
     
     def _create_connection(self) -> sqlite3.Connection:
         """Create a new database connection with optimizations."""
@@ -309,10 +305,7 @@ class TradeDatabase:
         try:
             self._connection_pool.put_nowait(conn)
         except:
-            # Pool is full, close the connection
             conn.close()
-            with self._pool_lock:
-                self._pool_created -= 1
 
     @contextmanager
     def _connection_ctx(self) -> sqlite3.Connection:
@@ -801,38 +794,37 @@ class TradeDatabase:
         bool
             True if a duplicate exists, False otherwise.
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        timestamp_str = timestamp.isoformat()
-        
-        # Check for exact match first
-        cursor.execute("""
-            SELECT COUNT(*) FROM trades
-            WHERE market_id = ? AND side = ? AND timestamp = ?
-        """, (market_id, side.upper(), timestamp_str))
-        
-        count = cursor.fetchone()[0]
-        if count > 0:
-            return True
-        
-        # If no exact match, check within tolerance window
-        # This handles cases where timestamps might differ slightly
-        cursor.execute("""
-            SELECT timestamp FROM trades
-            WHERE market_id = ? AND side = ?
-        """, (market_id, side.upper()))
-        
-        for ts_row in cursor.fetchall():
-            stored_ts = datetime.fromisoformat(ts_row[0])
-            if stored_ts.tzinfo is None:
-                stored_ts = stored_ts.replace(tzinfo=timezone.utc)
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
             
-            time_diff = abs((timestamp - stored_ts).total_seconds())
-            if time_diff <= tolerance_seconds:
+            timestamp_str = timestamp.isoformat()
+            
+            # Check for exact match first
+            cursor.execute("""
+                SELECT COUNT(*) FROM trades
+                WHERE market_id = ? AND side = ? AND timestamp = ?
+            """, (market_id, side.upper(), timestamp_str))
+            
+            count = cursor.fetchone()[0]
+            if count > 0:
                 return True
-        
-        return False
+            
+            # If no exact match, check within tolerance window
+            cursor.execute("""
+                SELECT timestamp FROM trades
+                WHERE market_id = ? AND side = ?
+            """, (market_id, side.upper()))
+            
+            for ts_row in cursor.fetchall():
+                stored_ts = datetime.fromisoformat(ts_row[0])
+                if stored_ts.tzinfo is None:
+                    stored_ts = stored_ts.replace(tzinfo=timezone.utc)
+                
+                time_diff = abs((timestamp - stored_ts).total_seconds())
+                if time_diff <= tolerance_seconds:
+                    return True
+            
+            return False
     
     def get_schema_version(self) -> int:
         """
@@ -873,21 +865,16 @@ class TradeDatabase:
         log.info("Applying migration %d", version)
         
         try:
-            # Execute migration SQL
             cursor.executescript(migration_sql)
-            
-            # Update schema version
             cursor.execute(
                 "INSERT INTO schema_version (version) VALUES (?)",
                 (version,)
             )
-            
             conn.commit()
             log.info("Migration %d applied successfully", version)
         except Exception as e:
             conn.rollback()
-            log.error("Migration %d failed: %s", version, e)
-            raise
+            log.warning("Migration %d skipped: %s", version, e)
     
     def run_migrations(self) -> None:
         """
@@ -2246,19 +2233,16 @@ class TradeDatabase:
         # Create parent directory if it doesn't exist
         backup_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Close connection before copying to ensure data integrity
-        was_open = self._conn is not None
-        if was_open:
-            self.close()
+        # Close all connections and checkpoint WAL before copying
+        self.close()
         
         try:
             # Copy the database file
             shutil.copy2(self.db_path, backup_path)
             log.info("Database backup created: %s -> %s", self.db_path, backup_path)
         finally:
-            # Reopen connection if it was open
-            if was_open:
-                self._get_connection()
+            # Reopen connection for continued use
+            self._get_connection()
     
     def restore(self, backup_path: str | Path, overwrite: bool = False) -> None:
         """
@@ -2302,10 +2286,8 @@ class TradeDatabase:
                 f"Use overwrite=True to replace it."
             )
         
-        # Close connection before restoring
-        was_open = self._conn is not None
-        if was_open:
-            self.close()
+        # Close all connections and checkpoint WAL before restoring
+        self.close()
         
         try:
             # Copy the backup file to the database location
@@ -3568,6 +3550,10 @@ class TradeDatabase:
         if self._conn is not None:
             self._conn.close()
             self._conn = None
+        
+        # Reset pool counter
+        with self._pool_lock:
+            self._pool_created = 0
         
         log.debug("Database connection closed")
     

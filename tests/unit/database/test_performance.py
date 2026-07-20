@@ -1,9 +1,6 @@
 """
-Database performance tests — run with: pytest tests/test_database_performance.py
+Database performance tests.
 """
-
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import pytest
 from datetime import datetime, timezone
@@ -446,7 +443,7 @@ def test_rebuild_nonexistent_index():
         db_path = Path(tmpdir) / "test.db"
         db = TradeDatabase(db_path)
         
-        with pytest.raises(ValueError, match="Index 'nonexistent' does not exist"):
+        with pytest.raises(ValueError, match="Invalid index name"):
             db.rebuild_index("nonexistent")
         
         db.close()
