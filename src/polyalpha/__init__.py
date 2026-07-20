@@ -48,6 +48,7 @@ from .client import Client
 from .core import Market
 from .core.env import load_env_file, get_env_config
 from .stream import Stream
+from .bot import Bot
 from .trading import PaperEngine, RealTradingEngine
 from .trading.paper import PaperConfig
 from .trading.real import RealTradingConfig, RealOrder, RealPosition, WalletManager
@@ -114,6 +115,8 @@ __all__ = [
     # Data objects
     "Market",
     "Stream",
+    # Bot
+    "Bot",
     # Environment
     "load_env_file",
     "get_env_config",
