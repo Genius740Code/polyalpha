@@ -293,9 +293,16 @@ class AutoRedeemEngine:
         log.info(f"Found {len(redeemable)} redeemable positions")
         return redeemable
     
-    def _check_triggers(self, positions: list[RedeemablePosition]) -> tuple[bool, str]:
+    def _check_triggers(self, positions: list[RedeemablePosition], force: bool = False) -> tuple[bool, str]:
         """
         Check if redemption should be triggered based on configuration.
+        
+        Parameters
+        ----------
+        positions : list[RedeemablePosition]
+            Positions to check.
+        force : bool
+            If True, bypass automatic trigger checks and force redemption.
         
         Returns
         -------
@@ -304,6 +311,12 @@ class AutoRedeemEngine:
         """
         total_value = sum(p.value_usd for p in positions)
         count = len(positions)
+        
+        # Manual/forced redemption bypasses all trigger checks
+        if force:
+            if count > 0:
+                return True, "manual"
+            return False, "no_positions"
         
         # Check count triggers
         if self._config.trigger_on_count:
@@ -319,13 +332,9 @@ class AutoRedeemEngine:
             if total_value >= self._config.min_value_usd:
                 return True, f"value_min (${total_value:.2f} >= ${self._config.min_value_usd:.2f})"
         
-        # Check if any positions exist (for manual/forced redemption)
-        if count > 0:
-            return True, "manual"
-        
         return False, "no_positions"
     
-    def redeem(self, positions: list[RedeemablePosition] | None = None) -> RedeemResult:
+    def redeem(self, positions: list[RedeemablePosition] | None = None, force: bool = False) -> RedeemResult:
         """
         Execute redemption for specified positions.
         
@@ -335,6 +344,8 @@ class AutoRedeemEngine:
         ----------
         positions : list[RedeemablePosition] | None
             Positions to redeem. If None, will scan for redeemable positions.
+        force : bool
+            If True, force redemption even if no automatic triggers are met.
         
         Returns
         -------
@@ -349,7 +360,7 @@ class AutoRedeemEngine:
             positions = self.check_positions()
         
         # Check triggers
-        should_redeem, trigger_reason = self._check_triggers(positions)
+        should_redeem, trigger_reason = self._check_triggers(positions, force=force)
         if not should_redeem:
             log.info(f"Redemption not triggered: {trigger_reason}")
             return RedeemResult(

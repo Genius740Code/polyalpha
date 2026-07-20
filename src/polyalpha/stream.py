@@ -257,10 +257,9 @@ class Stream:
                     self._emit("error", exc)
                     return
 
-                # Calculate exponential backoff with jitter
+                # Calculate exponential backoff with positive-only jitter
                 base_delay = self.retry_delay * (WS_BACKOFF_FACTOR ** (consecutive_failures - 1))
-                jitter_amount = base_delay * WS_JITTER * (random.random() * 2 - 1)
-                delay = max(0, base_delay + jitter_amount)
+                delay = base_delay + base_delay * WS_JITTER * random.random()
                 
                 log.warning(
                     "Stream: disconnected (attempt %d/%d) — retrying in %.1fs (with jitter)",

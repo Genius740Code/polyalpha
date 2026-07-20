@@ -1438,6 +1438,10 @@ class RealTradingEngine:
         # Emergency mode
         self._emergency_mode: bool = False
         
+        # Position sync caching
+        self._last_position_sync: float = 0.0
+        self._position_sync_ttl: float = 30.0  # seconds before re-syncing from chain
+        
         # Stream tracking for price-aware trading
         self._attached_streams: dict[str, "Stream"] = {}  # market_id -> Stream
 
@@ -1866,6 +1870,9 @@ class RealTradingEngine:
             raise OrderCancelled("Trading halted - emergency mode active")
 
         side = _validate_side(side)
+
+        # Sync balance from chain to avoid divergence
+        self.refresh_balance()
 
         # Track if user explicitly provided a price (for limit vs market order)
         user_provided_price = price is not None
@@ -2344,12 +2351,18 @@ class RealTradingEngine:
 
     def positions(self) -> list[RealPosition]:
         """Get all open positions."""
-        self.sync_positions_from_chain()
+        now = time.time()
+        if now - self._last_position_sync > self._position_sync_ttl:
+            self.sync_positions_from_chain()
+            self._last_position_sync = now
         return [p for p in self._positions.values() if not p.resolved]
 
     def all_positions(self) -> list[RealPosition]:
         """Get all positions including resolved ones."""
-        self.sync_positions_from_chain()
+        now = time.time()
+        if now - self._last_position_sync > self._position_sync_ttl:
+            self.sync_positions_from_chain()
+            self._last_position_sync = now
         return list(self._positions.values())
 
     def show_positions(self, show_all: bool = False, verbose: bool = True) -> None:

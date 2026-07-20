@@ -744,7 +744,7 @@ class PaperEngine:
 
     # ── Pre-Trade Checks ─────────────────────────────────────────────────────────
 
-    def pre_trade_checks(self, market, side: str, amount: float) -> dict:
+    def pre_trade_checks(self, market, side: str, amount: float, balance: float | None = None) -> dict:
         """
         Run comprehensive pre-trade checks before order execution.
 
@@ -787,12 +787,13 @@ class PaperEngine:
             "can_proceed": True,
         }
 
-        # Check balance
-        if amount > self._balance:
+        # Check balance (use wallet balance when provided, fall back to engine balance)
+        available_balance = balance if balance is not None else self._balance
+        if amount > available_balance:
             checks["balance_ok"] = False
             checks["can_proceed"] = False
             checks["warnings"].append(
-                f"Insufficient balance: need ${amount:.2f}, have ${self._balance:.2f}"
+                f"Insufficient balance: need ${amount:.2f}, have ${available_balance:.2f}"
             )
 
         # Check if market is still open
@@ -1282,8 +1283,8 @@ class PaperEngine:
             if time_window_end is not None and now > time_window_end:
                 raise ValueError(f"Cannot buy: current time {now} is after time window end {time_window_end}")
 
-        # Run pre-trade checks
-        checks = self.pre_trade_checks(market, side, amount)
+        # Run pre-trade checks with wallet balance
+        checks = self.pre_trade_checks(market, side, amount, balance=wallet.balance)
         if not checks["can_proceed"]:
             raise ValueError(
                 f"Pre-trade checks failed: {'; '.join(checks['warnings'])}"
@@ -1369,8 +1370,8 @@ class PaperEngine:
                 f"Order amount ${amount:.2f} exceeds balance ${wallet.balance:.2f}"
             )
 
-        # Run pre-trade checks
-        checks = self.pre_trade_checks(market, side, amount)
+        # Run pre-trade checks with wallet balance
+        checks = self.pre_trade_checks(market, side, amount, balance=wallet.balance)
         if not checks["can_proceed"]:
             raise ValueError(
                 f"Pre-trade checks failed: {'; '.join(checks['warnings'])}"
@@ -1503,9 +1504,11 @@ class PaperEngine:
         side = _validate_side(side)
         amount = _validate_positive(float(amount), "amount")
 
-        price = market.up_price if side == "UP" else market.down_price
-        if price <= 0:
-            price = FALLBACK_PRICE
+        # Get active wallet (multi-wallet aware)
+        wallet = self._get_active_wallet()
+
+        # Get price with stream awareness (prefers live stream price if available)
+        price, price_source = self._get_price_for_side(market, side)
 
         # Check time window if set
         if time_window_start is not None or time_window_end is not None:
@@ -1515,8 +1518,15 @@ class PaperEngine:
             if time_window_end is not None and now > time_window_end:
                 raise ValueError(f"Cannot buy: current time {now} is after time window end {time_window_end}")
 
-        # Validate against risk limits
-        self._risk_manager.validate_order(amount, self._balance, market.id, self._positions)
+        # Run pre-trade checks
+        checks = self.pre_trade_checks(market, side, amount, balance=wallet.balance)
+        if not checks["can_proceed"]:
+            raise ValueError(
+                f"Pre-trade checks failed: {'; '.join(checks['warnings'])}"
+            )
+
+        # Validate against risk limits using wallet state
+        wallet.risk_manager.validate_order(amount, wallet.balance, market.id, wallet._positions)
 
         # Validate TP/SL prices
         if stop_loss is not None:
