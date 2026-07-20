@@ -25,6 +25,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from typing import TYPE_CHECKING
+
 from .client import Client
 from .core import (
     ASSETS,
@@ -33,6 +35,9 @@ from .core import (
     Market,
 )
 from .core.errors import MarketNotFound
+
+if TYPE_CHECKING:
+    from .conditions import Condition
 
 log = logging.getLogger(__name__)
 
@@ -284,6 +289,10 @@ class Bot:
         self._market: Optional[Market] = None
         self._stream = None
         self._strategy: Optional[Callable] = None
+        self._condition: Optional["Condition"] = None
+        self._buy_side: Optional[str] = None
+        self._buy_amount: Optional[float] = None
+        self._bought_this_cycle: bool = False
         self._stop_event = threading.Event()
         self._tick_count = 0
         self._trade_count = 0
@@ -301,6 +310,68 @@ class Bot:
         self._strategy = fn
         return fn
 
+    def when(self, condition: "Condition") -> "Bot":
+        """
+        Set a condition that triggers a trade.
+
+        Combine with .buy() for a declarative strategy:
+
+            bot.when(and_(rsi_above(50), price_above("up", 0.9))).buy("UP", 20)
+
+        Parameters
+        ----------
+        condition : Condition
+            A composable condition from polyalpha.conditions.
+
+        Returns
+        -------
+        Bot (self) for chaining.
+        """
+        from .conditions import Condition as _Cond
+        if not isinstance(condition, _Cond):
+            raise TypeError("condition must be a polyalpha.conditions.Condition")
+        self._condition = condition
+        return self
+
+    def buy(self, side: str, amount: float) -> "Bot":
+        """
+        Set the default trade action when the condition is met.
+
+        Parameters
+        ----------
+        side : "UP" | "DOWN"
+        amount : USDC to spend per trade
+
+        Returns
+        -------
+        Bot (self) for chaining.
+        """
+        side = side.upper()
+        if side not in ("UP", "DOWN"):
+            raise ValueError(f"side must be 'UP' or 'DOWN', got {side!r}")
+        self._buy_side = side
+        self._buy_amount = amount
+        return self
+
+    def _maybe_build_strategy(self) -> None:
+        """Auto-generate a strategy from condition + buy action if no manual strategy set."""
+        if self._strategy is not None:
+            return
+        if self._condition is None or self._buy_side is None:
+            return
+        condition = self._condition
+        side = self._buy_side
+        amount = self._buy_amount
+
+        def _auto_strategy(ctx: TickContext) -> None:
+            if self._bought_this_cycle:
+                return
+            if condition(ctx):
+                ctx.buy(side, amount)
+                self._bought_this_cycle = True
+
+        self._strategy = _auto_strategy
+
     def run(self) -> None:
         """
         Start the bot (blocking).
@@ -312,6 +383,7 @@ class Bot:
             "Bot starting: %s %s | balance=$%.2f | paper=%s",
             self.asset, self.timeframe, self._client.paper.balance, self.paper_mode,
         )
+        self._maybe_build_strategy()
         self._stop_event.clear()
 
         try:
@@ -364,6 +436,7 @@ class Bot:
 
     def _discover(self) -> None:
         """Discover the latest market for the configured asset/timeframe."""
+        self._bought_this_cycle = False
         self._market = self._client.markets.latest(self.asset, self.timeframe)
         self._log.info("Market found: %s", self._market.slug)
 

@@ -94,6 +94,7 @@ from .core.errors import (
     RiskLimitExceeded,
     OrderCancelled,
 )
+from . import conditions
 from .ai import (
     OpenRouterClient,
     AIError,
@@ -164,6 +165,8 @@ __all__ = [
     "OpenRouterClient",
     "MarketAnalysis",
     "TradingSignal",
+    # Conditions
+    "conditions",
     # Errors
     "PolyalphaError",
     "MarketNotFound",
