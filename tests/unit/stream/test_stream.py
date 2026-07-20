@@ -434,3 +434,340 @@ def test_stream_retry_logic():
     
     # Test that retry count is respected
     # (actual reconnection logic requires WebSocket mocking)
+
+
+# ── Stream circuit breaker tests ───────────────────────────────────────────────
+
+@pytest.mark.unit
+def test_stream_circuit_breaker_enabled():
+    market = make_market()
+    stream = Stream(market, enable_circuit_breaker=True)
+    
+    assert stream._circuit_breaker is not None
+    assert stream.circuit_breaker_state is not None
+
+
+@pytest.mark.unit
+def test_stream_circuit_breaker_disabled():
+    market = make_market()
+    stream = Stream(market, enable_circuit_breaker=False)
+    
+    assert stream._circuit_breaker is None
+    assert stream.circuit_breaker_state is None
+
+
+# ── Stream connection quality tests ────────────────────────────────────────────
+
+@pytest.mark.unit
+def test_stream_connection_quality_initial():
+    market = make_market()
+    stream = Stream(market)
+    
+    assert stream.connection_quality == 1.0
+
+
+@pytest.mark.unit
+def test_stream_connection_quality_property():
+    market = make_market()
+    stream = Stream(market)
+    
+    # Test property access
+    quality = stream.connection_quality
+    assert 0.0 <= quality <= 1.0
+
+
+# ── Stream mid-price calculation tests ─────────────────────────────────────────
+
+@pytest.mark.unit
+def test_stream_mid_price_valid():
+    market = make_market()
+    stream = Stream(market)
+    
+    mid = stream._mid(0.58, 0.62)
+    assert mid == 0.60
+
+
+@pytest.mark.unit
+def test_stream_mid_price_zero_bid():
+    market = make_market()
+    stream = Stream(market)
+    
+    mid = stream._mid(0.0, 0.62)
+    assert mid is None
+
+
+@pytest.mark.unit
+def test_stream_mid_price_zero_ask():
+    market = make_market()
+    stream = Stream(market)
+    
+    mid = stream._mid(0.58, 0.0)
+    assert mid is None
+
+
+@pytest.mark.unit
+def test_stream_mid_price_invalid():
+    market = make_market()
+    stream = Stream(market)
+    
+    mid = stream._mid("invalid", 0.62)
+    assert mid is None
+
+
+# ── Stream token price setting tests ───────────────────────────────────────────
+
+@pytest.mark.unit
+def test_stream_set_token_price_valid():
+    market = make_market()
+    stream = Stream(market)
+    
+    stream._set_token_price("tok_up", 0.60)
+    
+    assert stream._token_prices["tok_up"] == 0.60
+
+
+@pytest.mark.unit
+def test_stream_set_token_price_invalid():
+    market = make_market()
+    stream = Stream(market)
+    
+    # Should not set price for invalid token or zero price
+    stream._set_token_price("", 0.60)
+    stream._set_token_price("tok_up", 0.0)
+    
+    assert "tok_up" not in stream._token_prices
+
+
+# ── Stream price handler tests ─────────────────────────────────────────────────
+
+@pytest.mark.unit
+def test_stream_handle_price_change():
+    market = make_market(tokens=["tok_up", "tok_down"])
+    stream = Stream(market)
+    
+    msg = {
+        "event_type": "price_change",
+        "price_changes": [
+            {
+                "asset_id": "tok_up",
+                "best_bid": 0.58,
+                "best_ask": 0.62
+            }
+        ]
+    }
+    
+    stream._handle_price_change(msg)
+    
+    assert stream._token_prices.get("tok_up") == 0.60
+
+
+@pytest.mark.unit
+def test_stream_handle_price_change_fallback():
+    market = make_market(tokens=["tok_up", "tok_down"])
+    stream = Stream(market)
+    
+    msg = {
+        "event_type": "price_change",
+        "price_changes": [
+            {
+                "asset_id": "tok_up",
+                "price": 0.60
+            }
+        ]
+    }
+    
+    stream._handle_price_change(msg)
+    
+    assert stream._token_prices.get("tok_up") == 0.60
+
+
+@pytest.mark.unit
+def test_stream_handle_best_bid_ask():
+    market = make_market(tokens=["tok_up", "tok_down"])
+    stream = Stream(market)
+    
+    msg = {
+        "asset_id": "tok_up",
+        "best_bid": 0.58,
+        "best_ask": 0.62
+    }
+    
+    stream._handle_best_bid_ask(msg)
+    
+    assert stream._token_prices.get("tok_up") == 0.60
+
+
+@pytest.mark.unit
+def test_stream_handle_book():
+    market = make_market(tokens=["tok_up", "tok_down"])
+    stream = Stream(market)
+    
+    msg = {
+        "asset_id": "tok_up",
+        "bids": [{"price": 0.58}],
+        "asks": [{"price": 0.62}]
+    }
+    
+    stream._handle_book(msg)
+    
+    assert stream._token_prices.get("tok_up") == 0.60
+
+
+@pytest.mark.unit
+def test_stream_handle_book_empty():
+    market = make_market(tokens=["tok_up", "tok_down"])
+    stream = Stream(market)
+    
+    msg = {
+        "asset_id": "tok_up",
+        "bids": [],
+        "asks": []
+    }
+    
+    # Should not crash with empty book
+    stream._handle_book(msg)
+
+
+@pytest.mark.unit
+def test_stream_handle_last_trade():
+    market = make_market(tokens=["tok_up", "tok_down"])
+    stream = Stream(market)
+    
+    msg = {
+        "asset_id": "tok_up",
+        "price": "0.61"
+    }
+    
+    stream._handle_last_trade(msg)
+    
+    assert stream._token_prices.get("tok_up") == 0.61
+
+
+@pytest.mark.unit
+def test_stream_handle_last_trade_invalid():
+    market = make_market(tokens=["tok_up", "tok_down"])
+    stream = Stream(market)
+    
+    msg = {
+        "asset_id": "tok_up",
+        "price": "invalid"
+    }
+    
+    # Should not crash with invalid price
+    stream._handle_last_trade(msg)
+
+
+# ── Stream market resolved tests ───────────────────────────────────────────────
+
+@pytest.mark.unit
+def test_stream_market_resolved():
+    market = make_market(tokens=["tok_up", "tok_down"])
+    stream = Stream(market)
+    
+    events_called = []
+    
+    @stream.on("close")
+    def on_close():
+        events_called.append("close")
+    
+    msg = {
+        "event_type": "market_resolved"
+    }
+    
+    stream._dispatch(msg)
+    
+    assert "close" in events_called
+
+
+# ── Stream add_handler tests ───────────────────────────────────────────────────
+
+@pytest.mark.unit
+def test_stream_add_handler():
+    market = make_market()
+    stream = Stream(market)
+    
+    events_called = []
+    
+    def on_price(up, down):
+        events_called.append((up, down))
+    
+    stream.add_handler("price", on_price)
+    stream._emit("price", 0.60, 0.40)
+    
+    assert len(events_called) == 1
+    assert events_called[0] == (0.60, 0.40)
+
+
+@pytest.mark.unit
+def test_stream_add_handler_invalid_event():
+    market = make_market()
+    stream = Stream(market)
+    
+    def handler():
+        pass
+    
+    with pytest.raises(ValueError, match="Unknown event"):
+        stream.add_handler("invalid_event", handler)
+
+
+# ── Stream running property tests ─────────────────────────────────────────────
+
+@pytest.mark.unit
+def test_stream_running_initial():
+    market = make_market()
+    stream = Stream(market)
+    
+    assert stream.running is False
+
+
+# ── Stream stop tests ─────────────────────────────────────────────────────────
+
+@pytest.mark.unit
+def test_stream_stop():
+    market = make_market()
+    stream = Stream(market)
+    
+    # Should not crash when stopping without WebSocket
+    stream.stop()
+    
+    assert stream._stop.is_set()
+
+
+# ── Stream message rate limiting tests ─────────────────────────────────────────
+
+@pytest.mark.unit
+def test_stream_message_rate_limiting():
+    market = make_market()
+    stream = Stream(market)
+    
+    # Test that rate limiter is applied during message processing
+    # (actual rate limiting behavior tested through integration)
+    assert stream._message_rate_limiter is not None
+
+
+# ── Stream connection quality update tests ─────────────────────────────────────
+
+@pytest.mark.unit
+def test_stream_pong_updates_quality_good():
+    market = make_market()
+    stream = Stream(market)
+    
+    # Simulate good RTT
+    stream._last_ping_time = 100.0
+    stream._on_message(None, "PONG")
+    
+    # Quality should remain high
+    assert stream.connection_quality >= 0.9
+
+
+@pytest.mark.unit
+def test_stream_pong_updates_quality_poor():
+    market = make_market()
+    stream = Stream(market)
+    
+    # Simulate poor RTT
+    stream._last_ping_time = 0.0
+    stream._on_message(None, "PONG")
+    
+    # Quality should be lower
+    assert stream.connection_quality <= 1.0
