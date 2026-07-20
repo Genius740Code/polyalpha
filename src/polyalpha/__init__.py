@@ -41,7 +41,7 @@ _handler.setFormatter(SensitiveDataFormatter(redact_file_paths=False))
 _root_logger.addHandler(_handler)
 
 # Set default level if not already configured
-if not _root_logger.level:
+if _root_logger.level == logging.WARNING:
     _root_logger.setLevel(logging.INFO)
 
 from .client import Client

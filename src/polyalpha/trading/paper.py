@@ -995,11 +995,7 @@ class PaperEngine:
         
         fee_type = "maker" if is_maker else "taker"
         
-        # For maker orders, apply maker fee rate (typically lower)
-        if is_maker:
-            fee = fee * MAKER_REBATE_PCT  # 25% maker rebate
-        
-        # Calculate additional rebate if enabled
+        # Calculate rebate if enabled (maker rebate handled in _calculate_rebate)
         rebate_amount, rebate_rate = self._calculate_rebate(fee, fee_type)
         
         return fee, rebate_amount, rebate_rate, fee_type
@@ -1675,13 +1671,14 @@ class PaperEngine:
         self._orders[order_id] = order
 
         # Reduce or close position
+        closed_cost_basis = position.cost_basis
         position.shares -= sell_shares
         if position.shares <= 0.001:  # Close if negligible
             position.shares = 0
             position.resolved = True
             position.outcome = "CLOSED"
-            # Calculate P&L for the closed position
-            pnl = net_amount - position.cost_basis
+            # Calculate P&L for the closed position (captured before shares reduced)
+            pnl = net_amount - closed_cost_basis
             # Record P&L with risk manager
             self._risk_manager.record_trade(pnl)
             log.info(
@@ -1926,15 +1923,33 @@ class PaperEngine:
             stop_loss=stop_loss, take_profit=take_profit,
         )
 
-        # Link them as OCO
-        main_order.oco_order_id = main_order.id  # Self-linked for tracking
+        # Create OCO linked order
+        oco_id = _new_id()
+        oco_order = PaperOrder(
+            id=oco_id,
+            market_id=main_order.market_id,
+            slug=main_order.slug,
+            side="DOWN" if side == "UP" else "UP",
+            price=main_order.price,
+            amount=main_order.amount,
+            shares=main_order.shares,
+            fee=main_order.fee,
+            status="filled",
+            is_limit=False,
+            filled_at=main_order.filled_at,
+            stop_loss=main_order.stop_loss,
+            take_profit=main_order.take_profit,
+        )
+        main_order.oco_order_id = oco_id
+        oco_order.oco_order_id = main_order.id
+        self._orders[oco_id] = oco_order
 
         log.info(
-            "Paper: OCO order created %s SL=%.3f TP=%.3f",
-            main_order.id[:8], stop_loss, take_profit,
+            "Paper: OCO orders created %s / %s SL=%.3f TP=%.3f",
+            main_order.id[:8], oco_id[:8], stop_loss, take_profit,
         )
 
-        return main_order, main_order
+        return main_order, oco_order
 
     # ── Queries ────────────────────────────────────────────────────────────────
 

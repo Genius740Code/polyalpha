@@ -214,7 +214,7 @@ class TradeDatabase:
         self._default_cache_ttl = 300.0  # 5 minutes default TTL
         
         # Prepared statement cache
-        self._prepared_statements: Dict[str, sqlite3.Statement] = {}
+        self._prepared_statements: Dict[str, Any] = {}
         self._statement_cache_max_size = 50
         self._statement_lock = Lock()
         
@@ -681,13 +681,13 @@ class TradeDatabase:
             
             conn.commit()
             
-            # Get the inserted IDs by querying the last inserted rows
-            # Get the last row ID
-            last_id = cursor.lastrowid
-            first_id = last_id - len(trades) + 1
-            
-            # Generate the list of IDs
-            trade_ids = list(range(first_id, last_id + 1))
+            # Get the inserted IDs by querying back within the transaction
+            cursor.execute("""
+                SELECT id FROM (
+                    SELECT id FROM trades ORDER BY id DESC LIMIT ?
+                ) ORDER BY id
+            """, (len(trades),))
+            trade_ids = [row[0] for row in cursor.fetchall()]
             
             # Invalidate cache on write
             self._invalidate_cache()
@@ -811,26 +811,18 @@ class TradeDatabase:
         # If no exact match, check within tolerance window
         # This handles cases where timestamps might differ slightly
         cursor.execute("""
-            SELECT COUNT(*) FROM trades
+            SELECT timestamp FROM trades
             WHERE market_id = ? AND side = ?
         """, (market_id, side.upper()))
         
-        rows = cursor.fetchall()
-        for row in rows:
-            # Parse stored timestamps and check tolerance
-            cursor.execute("""
-                SELECT timestamp FROM trades
-                WHERE market_id = ? AND side = ?
-            """, (market_id, side.upper()))
+        for ts_row in cursor.fetchall():
+            stored_ts = datetime.fromisoformat(ts_row[0])
+            if stored_ts.tzinfo is None:
+                stored_ts = stored_ts.replace(tzinfo=timezone.utc)
             
-            for ts_row in cursor.fetchall():
-                stored_ts = datetime.fromisoformat(ts_row[0])
-                if stored_ts.tzinfo is None:
-                    stored_ts = stored_ts.replace(tzinfo=timezone.utc)
-                
-                time_diff = abs((timestamp - stored_ts).total_seconds())
-                if time_diff <= tolerance_seconds:
-                    return True
+            time_diff = abs((timestamp - stored_ts).total_seconds())
+            if time_diff <= tolerance_seconds:
+                return True
         
         return False
     
@@ -950,14 +942,14 @@ class TradeDatabase:
         current_time = time.time()
         return (current_time - entry_time) < self._default_cache_ttl
     
-    def _get_prepared_statement(self, query: str) -> sqlite3.Statement:
+    def _get_prepared_statement(self, query: str) -> Any:
         """Get or create a prepared statement for the given query."""
         with self._statement_lock:
             if query in self._prepared_statements:
                 return self._prepared_statements[query]
             
             conn = self._get_connection()
-            stmt = conn.prepare(query)
+            stmt = conn.execute(query)
             
             # Implement LRU eviction for statement cache
             if len(self._prepared_statements) >= self._statement_cache_max_size:
