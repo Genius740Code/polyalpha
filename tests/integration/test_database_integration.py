@@ -198,3 +198,136 @@ def test_database_trading_balance_persistence():
     
     # Close client to release database lock
     client.close()
+
+
+def test_database_trading_order_history():
+    """Test that order history is maintained in database."""
+    from polyalpha.core.market import Market
+    import polyalpha
+    
+    db_path = ":memory:"
+    config = PaperConfig(enable_risk_management=False)
+    client = polyalpha.Client(balance=100.0, db_path=db_path, paper_config=config)
+    
+    market = Market(
+        id="test-id",
+        question="Test",
+        description="Test",
+        slug="btc-updown-5m-123",
+        active=True,
+        closed=False,
+        archived=False,
+        start_time="2030-01-01T00:00:00Z",
+        end_time="2030-01-01T00:05:00Z",
+        volume=1000.0,
+        liquidity=500.0,
+        outcomes=["UP", "DOWN"],
+        prices=[0.55, 0.45],
+        tokens=["tok_up", "tok_down"]
+    )
+    
+    # Place multiple orders
+    order1 = client.paper.buy(market, side="UP", amount=10.0)
+    order2 = client.paper.buy(market, side="DOWN", amount=15.0)
+    order3 = client.paper.buy(market, side="UP", amount=5.0)
+    
+    # Verify all orders are in history
+    all_orders = client.paper.orders()
+    assert len(all_orders) == 3
+    
+    # Verify order details are preserved
+    assert any(o.id == order1.id and o.side == "UP" for o in all_orders)
+    assert any(o.id == order2.id and o.side == "DOWN" for o in all_orders)
+    
+    client.close()
+
+
+def test_database_trading_transaction_logging():
+    """Test that transactions are logged in database."""
+    from polyalpha.core.market import Market
+    import polyalpha
+    
+    db_path = ":memory:"
+    config = PaperConfig(enable_risk_management=False)
+    client = polyalpha.Client(balance=100.0, db_path=db_path, paper_config=config)
+    
+    market = Market(
+        id="test-id",
+        question="Test",
+        description="Test",
+        slug="btc-updown-5m-123",
+        active=True,
+        closed=False,
+        archived=False,
+        start_time="2030-01-01T00:00:00Z",
+        end_time="2030-01-01T00:05:00Z",
+        volume=1000.0,
+        liquidity=500.0,
+        outcomes=["UP", "DOWN"],
+        prices=[0.55, 0.45],
+        tokens=["tok_up", "tok_down"]
+    )
+    
+    # Place order and resolve
+    client.paper.buy(market, side="UP", amount=10.0)
+    client.paper.resolve(market, outcome="UP")
+    
+    # Verify transaction was recorded
+    positions = client.paper.all_positions()
+    assert len(positions) == 1
+    assert positions[0].resolved == True
+    assert positions[0].outcome == "WON"
+    
+    client.close()
+
+
+def test_database_trading_concurrent_access():
+    """Test database handles concurrent trading operations."""
+    from polyalpha.core.market import Market
+    import polyalpha
+    import threading
+    
+    db_path = ":memory:"
+    config = PaperConfig(enable_risk_management=False)
+    client = polyalpha.Client(balance=500.0, db_path=db_path, paper_config=config)
+    
+    market = Market(
+        id="test-id",
+        question="Test",
+        description="Test",
+        slug="btc-updown-5m-123",
+        active=True,
+        closed=False,
+        archived=False,
+        start_time="2030-01-01T00:00:00Z",
+        end_time="2030-01-01T00:05:00Z",
+        volume=1000.0,
+        liquidity=500.0,
+        outcomes=["UP", "DOWN"],
+        prices=[0.55, 0.45],
+        tokens=["tok_up", "tok_down"]
+    )
+    
+    errors = []
+    
+    def place_trade(side):
+        try:
+            client.paper.buy(market, side=side, amount=10.0)
+        except Exception as e:
+            errors.append(e)
+    
+    threads = [
+        threading.Thread(target=place_trade, args=("UP",)),
+        threading.Thread(target=place_trade, args=("DOWN",)),
+        threading.Thread(target=place_trade, args=("UP",)),
+    ]
+    
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    
+    assert len(errors) == 0
+    assert len(client.paper.orders()) == 3
+    
+    client.close()

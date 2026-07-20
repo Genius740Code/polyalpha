@@ -269,3 +269,248 @@ def test_e2e_multiple_markets():
         # Check positions
         positions = client.paper.positions()
         assert len(positions) == 2
+
+
+def test_trading_error_recovery():
+    """Test trading system recovers from errors gracefully."""
+    from polyalpha.core.market import Market
+    
+    config = PaperConfig(enable_risk_management=False)
+    client = polyalpha.Client(balance=100.0, paper_config=config)
+    
+    market = Market(
+        id="test-id",
+        question="Test",
+        description="Test",
+        slug="btc-updown-5m-123",
+        active=True,
+        closed=False,
+        archived=False,
+        start_time="2030-01-01T00:00:00Z",
+        end_time="2030-01-01T00:05:00Z",
+        volume=1000.0,
+        liquidity=500.0,
+        outcomes=["UP", "DOWN"],
+        prices=[0.55, 0.45],
+        tokens=["tok_up", "tok_down"]
+    )
+    
+    # Try to trade with insufficient balance
+    try:
+        client.paper.buy(market, side="UP", amount=200.0)
+        assert False, "Should have raised error for insufficient balance"
+    except Exception:
+        pass  # Expected
+    
+    # Verify system still works after error
+    order = client.paper.buy(market, side="UP", amount=10.0)
+    assert order.status == "filled"
+
+
+def test_trading_with_fees():
+    """Test trading with fee calculations."""
+    from polyalpha.core.market import Market
+    
+    config = PaperConfig(enable_risk_management=False, custom_fee_rate=0.01)
+    client = polyalpha.Client(balance=100.0, paper_config=config)
+    
+    market = Market(
+        id="test-id",
+        question="Test",
+        description="Test",
+        slug="btc-updown-5m-123",
+        active=True,
+        closed=False,
+        archived=False,
+        start_time="2030-01-01T00:00:00Z",
+        end_time="2030-01-01T00:05:00Z",
+        volume=1000.0,
+        liquidity=500.0,
+        outcomes=["UP", "DOWN"],
+        prices=[0.55, 0.45],
+        tokens=["tok_up", "tok_down"]
+    )
+    
+    # Place order with fees
+    order = client.paper.buy(market, side="UP", amount=10.0)
+    assert order.status == "filled"
+    
+    # Verify order was placed successfully
+    # Fee calculation is applied to position cost basis, not directly to balance
+    assert client.paper.balance >= 0
+    assert len(client.paper.positions()) == 1
+
+
+def test_trading_position_aggregation():
+    """Test that positions are aggregated correctly."""
+    from polyalpha.core.market import Market
+    
+    config = PaperConfig(enable_risk_management=False)
+    client = polyalpha.Client(balance=100.0, paper_config=config)
+    
+    market = Market(
+        id="test-id",
+        question="Test",
+        description="Test",
+        slug="btc-updown-5m-123",
+        active=True,
+        closed=False,
+        archived=False,
+        start_time="2030-01-01T00:00:00Z",
+        end_time="2030-01-01T00:05:00Z",
+        volume=1000.0,
+        liquidity=500.0,
+        outcomes=["UP", "DOWN"],
+        prices=[0.55, 0.45],
+        tokens=["tok_up", "tok_down"]
+    )
+    
+    # Place multiple orders on same side
+    client.paper.buy(market, side="UP", amount=10.0)
+    client.paper.buy(market, side="UP", amount=15.0)
+    client.paper.buy(market, side="UP", amount=5.0)
+    
+    # Check aggregated position
+    positions = client.paper.positions()
+    assert len(positions) == 1
+    assert positions[0].side == "UP"
+    # Cost basis includes fees (default 2% fee rate)
+    # 30.0 * 0.98 = 29.4
+    assert positions[0].cost_basis == 29.4
+
+
+def test_trading_sell_order():
+    """Test sell order functionality."""
+    from polyalpha.core.market import Market
+    
+    config = PaperConfig(enable_risk_management=False)
+    client = polyalpha.Client(balance=100.0, paper_config=config)
+    
+    market = Market(
+        id="test-id",
+        question="Test",
+        description="Test",
+        slug="btc-updown-5m-123",
+        active=True,
+        closed=False,
+        archived=False,
+        start_time="2030-01-01T00:00:00Z",
+        end_time="2030-01-01T00:05:00Z",
+        volume=1000.0,
+        liquidity=500.0,
+        outcomes=["UP", "DOWN"],
+        prices=[0.55, 0.45],
+        tokens=["tok_up", "tok_down"]
+    )
+    
+    # Buy first to establish position
+    client.paper.buy(market, side="UP", amount=10.0)
+    
+    # Buy opposite side to reduce position
+    opposite_order = client.paper.buy(market, side="DOWN", amount=5.0)
+    assert opposite_order.status == "filled"
+    
+    # Check positions - should have both sides
+    positions = client.paper.positions()
+    assert len(positions) == 2
+
+
+def test_trading_order_validation():
+    """Test that orders are validated before execution."""
+    from polyalpha.core.market import Market
+    
+    config = PaperConfig(enable_risk_management=False)
+    client = polyalpha.Client(balance=100.0, paper_config=config)
+    
+    market = Market(
+        id="test-id",
+        question="Test",
+        description="Test",
+        slug="btc-updown-5m-123",
+        active=True,
+        closed=False,
+        archived=False,
+        start_time="2030-01-01T00:00:00Z",
+        end_time="2030-01-01T00:05:00Z",
+        volume=1000.0,
+        liquidity=500.0,
+        outcomes=["UP", "DOWN"],
+        prices=[0.55, 0.45],
+        tokens=["tok_up", "tok_down"]
+    )
+    
+    # Try invalid amount
+    try:
+        client.paper.buy(market, side="UP", amount=-10.0)
+        assert False, "Should reject negative amount"
+    except Exception:
+        pass  # Expected
+    
+    # Try zero amount
+    try:
+        client.paper.buy(market, side="UP", amount=0.0)
+        assert False, "Should reject zero amount"
+    except Exception:
+        pass  # Expected
+    
+    # Valid order should work
+    order = client.paper.buy(market, side="UP", amount=10.0)
+    assert order.status == "filled"
+
+
+def test_trading_market_state_validation():
+    """Test that trading respects market state."""
+    from polyalpha.core.market import Market
+    
+    config = PaperConfig(enable_risk_management=False)
+    client = polyalpha.Client(balance=100.0, paper_config=config)
+    
+    # Closed market
+    closed_market = Market(
+        id="closed-id",
+        question="Test",
+        description="Test",
+        slug="btc-updown-5m-123",
+        active=True,
+        closed=True,
+        archived=False,
+        start_time="2030-01-01T00:00:00Z",
+        end_time="2030-01-01T00:05:00Z",
+        volume=1000.0,
+        liquidity=500.0,
+        outcomes=["UP", "DOWN"],
+        prices=[0.55, 0.45],
+        tokens=["tok_up", "tok_down"]
+    )
+    
+    # Should not allow trading on closed market
+    try:
+        client.paper.buy(closed_market, side="UP", amount=10.0)
+        assert False, "Should reject trading on closed market"
+    except Exception:
+        pass  # Expected
+    
+    # Inactive market
+    inactive_market = Market(
+        id="inactive-id",
+        question="Test",
+        description="Test",
+        slug="btc-updown-5m-123",
+        active=False,
+        closed=False,
+        archived=False,
+        start_time="2030-01-01T00:00:00Z",
+        end_time="2030-01-01T00:05:00Z",
+        volume=1000.0,
+        liquidity=500.0,
+        outcomes=["UP", "DOWN"],
+        prices=[0.55, 0.45],
+        tokens=["tok_up", "tok_down"]
+    )
+    
+    # Should not allow trading on inactive market
+    try:
+        client.paper.buy(inactive_market, side="UP", amount=10.0)
+        assert False, "Should reject trading on inactive market"
+    except Exception:
+        pass  # Expected

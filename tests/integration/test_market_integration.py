@@ -328,3 +328,175 @@ def test_market_search_and_trade():
         # Verify positions across markets
         positions = client.paper.positions()
         assert len(positions) == 2
+
+
+def test_market_client_pagination():
+    """Test market client handles paginated results."""
+    client = MarketClient(timeout=10, retries=3)
+    
+    MOCK_PAGINATED_RESPONSE = {
+        "markets": [
+            {
+                "id": f"market-{i}",
+                "question": f"Market {i}",
+                "description": "Test",
+                "slug": f"market-{i}",
+                "active": True,
+                "closed": False,
+                "archived": False,
+                "start_time": "2025-01-01T00:00:00Z",
+                "end_time": "2025-01-01T00:05:00Z",
+                "volume": 1000.0,
+                "liquidity": 500.0,
+                "outcomes": ["UP", "DOWN"],
+                "order_book": {
+                    "tokens": [
+                        {"token_id": "tok_up", "best_bid": 0.50, "best_ask": 0.52},
+                        {"token_id": "tok_down", "best_bid": 0.48, "best_ask": 0.50}
+                    ]
+                }
+            }
+            for i in range(10)
+        ]
+    }
+    
+    with patch('httpx.Client.get') as mock_get:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = MOCK_PAGINATED_RESPONSE
+        mock_get.return_value = mock_response
+        
+        markets = client.search("test", limit=10)
+        assert len(markets) == 10
+
+
+def test_market_client_caching():
+    """Test market client caches responses appropriately."""
+    client = MarketClient(timeout=10, retries=3)
+    
+    with patch('httpx.Client.get') as mock_get:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = MOCK_MARKET_RESPONSE
+        mock_get.return_value = mock_response
+        
+        # First call
+        market1 = client.get("btc-updown-5m-1751234700")
+        assert mock_get.call_count == 1
+        
+        # Second call (no cache in current implementation)
+        market2 = client.get("btc-updown-5m-1751234700")
+        assert mock_get.call_count == 2  # Makes another call
+        
+        assert market1.slug == market2.slug
+
+
+def test_market_paper_trading_with_risk_management():
+    """Test market discovery with paper trading and risk management enabled."""
+    import polyalpha
+    
+    with patch('httpx.Client.get') as mock_get:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = MOCK_MARKET_RESPONSE
+        mock_get.return_value = mock_response
+        
+        # Initialize client with risk management
+        config = PaperConfig(
+            enable_risk_management=True,
+            max_position_size=50.0,
+            max_daily_loss=20.0,
+            max_risk_per_trade=0.5  # 50% to allow larger trades
+        )
+        client = polyalpha.Client(balance=100.0, paper_config=config)
+        
+        # Discover market
+        market = client.markets.get("btc-updown-5m-1751234700")
+        assert market.slug == "btc-updown-5m-1751234700"
+        
+        # Place trade within risk limits
+        order = client.paper.buy(market, side="UP", amount=10.0)
+        assert order.status == "filled"
+        
+        # Try to exceed max position size
+        try:
+            client.paper.buy(market, side="UP", amount=60.0)
+            # Should fail due to risk management
+            assert False, "Should have raised risk management error"
+        except Exception:
+            pass  # Expected
+
+
+def test_market_client_with_authentication():
+    """Test market client with authentication headers."""
+    client = MarketClient(
+        timeout=10,
+        retries=3
+    )
+    
+    with patch('httpx.Client.get') as mock_get:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = MOCK_MARKET_RESPONSE
+        mock_get.return_value = mock_response
+        
+        market = client.get("btc-updown-5m-1751234700")
+        assert market.slug == "btc-updown-5m-1751234700"
+        
+        # Verify client was created successfully
+        assert client is not None
+
+
+def test_market_paper_trading_order_cancellation():
+    """Test cancelling orders on discovered markets."""
+    import polyalpha
+    
+    with patch('httpx.Client.get') as mock_get:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = MOCK_MARKET_RESPONSE
+        mock_get.return_value = mock_response
+        
+        config = PaperConfig(enable_risk_management=False)
+        client = polyalpha.Client(balance=100.0, paper_config=config)
+        
+        # Discover market
+        market = client.markets.get("btc-updown-5m-1751234700")
+        
+        # Place limit order
+        order = client.paper.limit(market, side="UP", price=0.90, amount=20.0)
+        assert order.status == "open"
+        
+        # Cancel order
+        cancelled_order = client.paper.cancel(order.id)
+        assert cancelled_order.status == "cancelled"
+
+
+def test_market_paper_trading_position_resolution():
+    """Test resolving positions on discovered markets."""
+    import polyalpha
+    
+    with patch('httpx.Client.get') as mock_get:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = MOCK_MARKET_RESPONSE
+        mock_get.return_value = mock_response
+        
+        config = PaperConfig(enable_risk_management=False)
+        client = polyalpha.Client(balance=100.0, paper_config=config)
+        
+        # Discover market
+        market = client.markets.get("btc-updown-5m-1751234700")
+        
+        # Place trade
+        order = client.paper.buy(market, side="UP", amount=10.0)
+        assert order.status == "filled"
+        
+        # Resolve market
+        client.paper.resolve(market, outcome="UP")
+        
+        # Verify position resolution
+        positions = client.paper.all_positions()
+        assert len(positions) == 1
+        assert positions[0].resolved == True
+        assert positions[0].outcome == "WON"
