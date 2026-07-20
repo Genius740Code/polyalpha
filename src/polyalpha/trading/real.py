@@ -58,6 +58,12 @@ from ..core import (
     TransactionRebroadcastError,
     PRICE_STALENESS_THRESHOLD,
     FALLBACK_PRICE,
+    FEE_RATE_SPORTS,
+    FEE_RATE_CRYPTO,
+    FEE_RATE_ECONOMICS,
+    MINIMUM_FEE,
+    FEE_ROUNDING,
+    POLYMARKET_FEE_ROUNDING,
 )
 from .clob_client import ClobClient
 from .alchemy_client import AlchemyClient
@@ -123,7 +129,10 @@ class RealTradingConfig:
     retry_delay: float = 1.0
 
     # Fee settings
-    fee_mode: str = "polymarket"  # Use actual Polymarket fees
+    fee_mode: str = "polymarket"  # "polymarket", "custom", or "zero"
+    market_category: str = "crypto"  # For polymarket mode: crypto, sports, finance, politics, tech, economics, culture, weather, geopolitical, other
+    custom_fee_rate: float = 0.02  # Used when fee_mode="custom"
+    maker_fee_rate: float = 0.0  # Maker fee rate for limit orders
 
     # Logging
     log_all_orders: bool = True
@@ -183,6 +192,10 @@ class RealTradingConfig:
             raise ValueError(
                 f"fee_mode must be 'polymarket', 'custom', or 'zero', got '{self.fee_mode}'"
             )
+        if self.custom_fee_rate < 0:
+            raise ValueError(f"custom_fee_rate must be >= 0, got {self.custom_fee_rate}")
+        if self.maker_fee_rate < 0:
+            raise ValueError(f"maker_fee_rate must be >= 0, got {self.maker_fee_rate}")
 
 
 # ── Dataclasses ────────────────────────────────────────────────────────────────
@@ -1904,7 +1917,8 @@ class RealTradingEngine:
             price, price_source = self._get_price_for_side(market, side)
 
         # 6. Calculate shares and fee
-        shares, fee = self._calculate_shares_and_fee(amount, price)
+        is_maker = user_provided_price  # limit orders provide liquidity
+        shares, fee = self._calculate_shares_and_fee(amount, price, is_maker=is_maker)
 
         # 7. Require confirmation if enabled
         if confirm and self._config.require_confirmation:
@@ -1939,8 +1953,8 @@ class RealTradingEngine:
             confidence=confidence,
         )
 
-        # 10. Update balance
-        self._balance -= (amount + fee)
+        # 10. Update balance (fee comes out of amount, not on top)
+        self._balance -= amount
 
         # 11. Store order
         self._orders[order.id] = order
@@ -3446,11 +3460,136 @@ class RealTradingEngine:
             positions=self._positions,
         )
 
-    def _calculate_shares_and_fee(self, amount: float, price: float) -> tuple[float, float]:
-        """Calculate shares and fee for an order."""
-        shares = amount / price
-        fee = amount * 0.02  # Placeholder: 2% fee
+    def _calculate_shares_and_fee(self, amount: float, price: float, is_maker: bool = False) -> tuple[float, float]:
+        """
+        Calculate shares and fee for an order using the configured fee mode.
+
+        The fee is deducted from the trade amount (like Polymarket does on-chain),
+        so the user receives fewer shares.
+
+        Parameters
+        ----------
+        amount : float
+            Total USDC being spent
+        price : float
+            Price per share
+        is_maker : bool
+            Whether this is a maker order (limit order providing liquidity)
+
+        Returns
+        -------
+        tuple[float, float]
+            (shares, fee) where shares = (amount - fee) / price
+        """
+        if price <= 0:
+            return 0.0, 0.0
+
+        # First pass: estimate fee from initial share estimate
+        shares_est = amount / price
+        fee = self._calculate_fee(amount, price, shares_est, is_maker)
+
+        # Fee comes out of the trade amount
+        net_trade = amount - fee
+        if net_trade <= 0:
+            return 0.0, fee
+
+        shares = net_trade / price
+
+        # Second pass: recalculate fee with actual shares (significant for polymarket formula)
+        if self._config.fee_mode == "polymarket":
+            fee = self._calculate_fee(amount, price, shares, is_maker)
+            net_trade = amount - fee
+            if net_trade <= 0:
+                return 0.0, fee
+            shares = net_trade / price
+
         return shares, fee
+
+    def _calculate_fee(self, amount: float, price: float, shares: float, is_maker: bool = False) -> float:
+        """
+        Calculate the fee for an order based on the configured fee mode.
+
+        Parameters
+        ----------
+        amount : float
+            Total USDC being spent
+        price : float
+            Price per share
+        shares : float
+            Number of shares being traded
+        is_maker : bool
+            Whether this is a maker order (limit order providing liquidity)
+
+        Returns
+        -------
+        float
+            The fee amount in USDC
+        """
+        if self._config.fee_mode == "zero":
+            return 0.0
+        elif self._config.fee_mode == "custom":
+            fee_rate = self._config.maker_fee_rate if is_maker else self._config.custom_fee_rate
+            return round(amount * fee_rate, FEE_ROUNDING)
+        elif self._config.fee_mode == "polymarket":
+            return self._polymarket_fee(amount, price, shares, is_maker)
+        return 0.0
+
+    def _polymarket_fee(self, amount: float, price: float, shares: float, is_maker: bool = False) -> float:
+        """
+        Calculate Polymarket-style fee using their actual formula.
+
+        Formula: fee = C × p × feeRate × (p × (1 - p))^exponent
+
+        Where:
+        - C: Number of shares traded
+        - p: Price of the trade
+        - feeRate: Category-specific (e.g., sports=0.03, crypto=0.02)
+        - exponent: 1
+
+        Geopolitical markets have 0% fee.
+        The price-dependent term p*(1-p) means fees are highest at p=0.5
+        and approach zero near p=0 or p=1.
+
+        Parameters
+        ----------
+        amount : float
+            Total USDC being spent (unused in formula but kept for interface consistency)
+        price : float
+            Price per share
+        shares : float
+            Number of shares
+        is_maker : bool
+            Whether this is a maker order (currently unused — same formula for both)
+
+        Returns
+        -------
+        float
+            The fee amount in USDC
+        """
+        if self._config.market_category.lower() == "geopolitical":
+            return 0.0
+
+        fee_rate = self._fee_rate_for_category(self._config.market_category)
+
+        exponent = 1
+        fee = shares * price * fee_rate * (price * (1 - price)) ** exponent
+        fee = round(fee, POLYMARKET_FEE_ROUNDING)
+
+        if fee < MINIMUM_FEE:
+            fee = 0.0
+
+        return fee
+
+    def _fee_rate_for_category(self, category: str) -> float:
+        """Get the Polymarket fee rate for a given market category."""
+        c = category.lower()
+        if c == "sports":
+            return FEE_RATE_SPORTS
+        elif c in ("crypto", "finance", "politics", "tech"):
+            return FEE_RATE_CRYPTO
+        elif c in ("economics", "culture", "weather", "other"):
+            return FEE_RATE_ECONOMICS
+        return FEE_RATE_CRYPTO  # Default
 
     def _require_confirmation(
         self,
@@ -3471,7 +3610,8 @@ class RealTradingEngine:
         print(f"Price:     ${price:.4f}")
         print(f"Shares:    {shares:.4f}")
         print(f"Fee:       ${fee:.4f}")
-        print(f"Total:     ${amount + fee:.2f}")
+        print(f"Net Trade: ${amount - fee:.2f}")
+        print(f"Total:     ${amount:.2f}")
         print(f"Balance:   ${self._balance:.2f}")
         print("=" * 60)
 
