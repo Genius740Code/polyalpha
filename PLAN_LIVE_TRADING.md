@@ -47,12 +47,22 @@ Live trading via `RealTradingEngine` now has a functional CLOB execution layer.
 - [x] **`execute_trailing_stop_exit()`** — places market sell order via `clob_client.place_order()`, tracks result
 - [x] **`cancel()`** — delegates to `clob_client.cancel_order()` (was already wired via `cancel_order`)
 
-### P2 — Post-Trade & Recovery
+### P2 — Post-Trade & Recovery ✅
 
-- [ ] **Auto-redeem for real trading** (`auto_redeem.py`)
-- [ ] **`restore_from_backup()`** — position/order reconstruction from emergency snapshot
-- [ ] **`sync_positions_from_chain()`** — improve fill-price derivation from placeholder
-- [ ] **`transfer_position()`** — implement real on-chain token transfer
+- [x] **Auto-redeem for real trading** (`auto_redeem.py`)
+  - Added `redeem_position(market_id, side)` to `RealTradingEngine` — calls CTF `redeem()` via `WalletManager._ctf_contract`
+  - Wire-up complete: `auto_redeem.py` calls `trading.redeem_position()` with real on-chain tx
+  - Returns `{success, tx_hash, error}` dict; updates local position balance on success
+- [x] **`restore_from_backup()`** — position/order reconstruction from emergency snapshot
+  - Added `RealPosition.dump()` / `RealOrder.dump()` with `market_id`, `entry_time`, `scale_count`, `hedge_amount`
+  - Added `RealPosition.from_dump()` / `RealOrder.from_dump()` factory methods
+  - `restore_from_backup()` reads JSON, reconstructs all objects, rebuilds cross-references, refreshes balance
+- [x] **`sync_positions_from_chain()`** — improved fill-price derivation
+  - Multi-strategy price resolution: (1) match existing order records, (2) Gamma metadata price, (3) CLOB orderbook mid-price, (4) existing position avg_price, (5) `FALLBACK_PRICE`
+  - Real entry_time from Alchemy `blockTimestamp` instead of `datetime.now()`
+- [x] **`transfer_position()`** — real on-chain ERC1155 transfer
+  - Calls `CTF.safeTransferFrom(from, to, tokenId, amount, data)` via `WalletManager._ctf_contract`
+  - Updates local position shares; removes position if fully transferred
 
 ### P3 — Hardening
 
