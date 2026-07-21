@@ -346,7 +346,7 @@ class TransactionSigner:
             # Sign transaction
             signed_txn = account.sign_transaction(transaction_dict)
             
-            log.info("Signed transaction with private key, nonce: %d", transaction_dict.get('nonce'))
+            log.info("Signed transaction with private key, nonce: %s", transaction_dict.get('nonce'))
             
             return SigningResult(
                 success=True,

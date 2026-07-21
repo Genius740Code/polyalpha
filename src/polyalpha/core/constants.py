@@ -149,7 +149,7 @@ PRICE_STALENESS_THRESHOLD = 30  # Seconds before market price is considered stal
 FEE_RATE_SPORTS = 0.03  # Fee rate for sports markets
 FEE_RATE_CRYPTO = 0.02  # Fee rate for crypto/finance/politics/tech markets
 FEE_RATE_ECONOMICS = 0.015  # Fee rate for economics/culture/weather/other markets
-MAKER_REBATE_PCT = 0.75  # Maker rebate percentage (25% discount)
+MAKER_REBATE_PCT = 0.75  # Polymarket maker rebate rate — makers get 75% of fee back, paying ~25% effectively
 MINIMUM_FEE = 0.0001  # Minimum fee amount in USDC
 
 # ── Display ───────────────────────────────────────────────────────────────────

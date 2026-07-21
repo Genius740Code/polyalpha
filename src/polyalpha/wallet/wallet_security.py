@@ -480,7 +480,10 @@ class WalletSecurity:
             }
             
             encrypted_export = export_cipher.encrypt(json.dumps(export_data).encode())
-            export_path.write_bytes(encrypted_export)
+            # Prepend salt so import can read it without decrypting
+            export_path.write_text(
+                base64.b64encode(export_salt).decode() + "\n" + encrypted_export.decode()
+            )
             
             log.info("Exported wallet: %s to %s", mask_address(wallet_address), export_path.name)
     
@@ -501,15 +504,13 @@ class WalletSecurity:
             Imported wallet address.
         """
         with self._lock:
-            encrypted_export = import_path.read_bytes()
-            
-            # Derive key from export password
-            export_data = json.loads(encrypted_export.decode())
-            export_salt = base64.b64decode(export_data["export_salt"])
+            content = import_path.read_text()
+            salt_b64, encrypted_b64 = content.split("\n", 1)
+            export_salt = base64.b64decode(salt_b64)
             export_key, _ = self._derive_key(password, export_salt)
             export_cipher = Fernet(export_key)
             
-            decrypted = export_cipher.decrypt(encrypted_export)
+            decrypted = export_cipher.decrypt(encrypted_b64.encode())
             data = json.loads(decrypted.decode())
             
             wallet_address = data["wallet_address"]

@@ -103,24 +103,138 @@ def test_fee_mode_polymarket_geopolitical(make_market):
 
 @pytest.mark.unit
 def test_fee_mode_polymarket_crypto(make_market):
-    """Test Polymarket fee mode for crypto markets."""
-    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="crypto")
+    """Test Polymarket fee mode for crypto markets — verify formula output."""
+    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="crypto", enable_rebates=False)
     engine = PaperEngine(balance=100.0, config=config)
-    market = make_market()
+    market = make_market(prices=[0.55, 0.45])
     order = engine.buy(market, side="UP", amount=10.0)
-    # Fee should be calculated using Polymarket formula
-    assert order.fee >= 0.0
+    # Polymarket formula: fee = shares * price * 0.02 * (price * (1-price))
+    # At p=0.55, fee = 0.0493 (after double-pass recalculation)
+    assert order.fee == pytest.approx(0.0493, abs=1e-4)
+    assert order.fee_type == "taker"
 
 
 @pytest.mark.unit
 def test_fee_mode_polymarket_sports(make_market):
-    """Test Polymarket fee mode for sports markets."""
-    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="sports")
+    """Test Polymarket fee mode for sports markets — verify 3% rate."""
+    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="sports", enable_rebates=False)
     engine = PaperEngine(balance=100.0, config=config)
-    market = make_market()
+    market = make_market(prices=[0.55, 0.45])
     order = engine.buy(market, side="UP", amount=10.0)
-    # Fee should be calculated using sports fee rate
-    assert order.fee >= 0.0
+    # 3% fee rate vs 2% crypto rate
+    assert order.fee == pytest.approx(0.0737, abs=1e-4)
+    assert order.fee > 0
+
+
+@pytest.mark.unit
+def test_fee_mode_polymarket_finance(make_market):
+    """Test Polymarket fee mode for finance markets (same as crypto)."""
+    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="finance", enable_rebates=False)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market(prices=[0.55, 0.45])
+    order = engine.buy(market, side="UP", amount=10.0)
+    assert order.fee == pytest.approx(0.0493, abs=1e-4)
+
+
+@pytest.mark.unit
+def test_fee_mode_polymarket_politics(make_market):
+    """Test Polymarket fee mode for politics markets (same as crypto)."""
+    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="politics", enable_rebates=False)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market(prices=[0.55, 0.45])
+    order = engine.buy(market, side="UP", amount=10.0)
+    assert order.fee == pytest.approx(0.0493, abs=1e-4)
+
+
+@pytest.mark.unit
+def test_fee_mode_polymarket_tech(make_market):
+    """Test Polymarket fee mode for tech markets (same as crypto)."""
+    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="tech", enable_rebates=False)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market(prices=[0.55, 0.45])
+    order = engine.buy(market, side="UP", amount=10.0)
+    assert order.fee == pytest.approx(0.0493, abs=1e-4)
+
+
+@pytest.mark.unit
+def test_fee_mode_polymarket_economics(make_market):
+    """Test Polymarket fee mode for economics markets — verify 1.5% rate."""
+    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="economics", enable_rebates=False)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market(prices=[0.55, 0.45])
+    order = engine.buy(market, side="UP", amount=10.0)
+    assert order.fee == pytest.approx(0.0370, abs=1e-4)
+
+
+@pytest.mark.unit
+def test_fee_mode_polymarket_culture(make_market):
+    """Test Polymarket fee mode for culture markets (same as economics)."""
+    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="culture", enable_rebates=False)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market(prices=[0.55, 0.45])
+    order = engine.buy(market, side="UP", amount=10.0)
+    assert order.fee == pytest.approx(0.0370, abs=1e-4)
+
+
+@pytest.mark.unit
+def test_fee_mode_polymarket_weather(make_market):
+    """Test Polymarket fee mode for weather markets (same as economics)."""
+    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="weather", enable_rebates=False)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market(prices=[0.55, 0.45])
+    order = engine.buy(market, side="UP", amount=10.0)
+    assert order.fee == pytest.approx(0.0370, abs=1e-4)
+
+
+@pytest.mark.unit
+def test_fee_mode_polymarket_other(make_market):
+    """Test Polymarket fee mode for 'other' category (same as economics)."""
+    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="other", enable_rebates=False)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market(prices=[0.55, 0.45])
+    order = engine.buy(market, side="UP", amount=10.0)
+    assert order.fee == pytest.approx(0.0370, abs=1e-4)
+
+
+@pytest.mark.unit
+def test_polymarket_fee_price_at_50_pct(make_market):
+    """Polymarket fee is maximal at p=0.50."""
+    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="crypto", enable_rebates=False)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market(prices=[0.50, 0.50])
+    order = engine.buy(market, side="UP", amount=10.0)
+    # At p=0.50, price*(1-price) = 0.25 (maximal)
+    fee_at_50 = order.fee
+    # Compare with fee at p=0.55 (should be lower)
+    market2 = make_market(prices=[0.55, 0.45])
+    order2 = engine.buy(market2, side="UP", amount=10.0)
+    assert fee_at_50 > order2.fee
+
+
+@pytest.mark.unit
+def test_polymarket_fee_price_at_extremes(make_market):
+    """Polymarket fee approaches zero at p near 0 or 1."""
+    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="crypto", enable_rebates=False)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market(prices=[0.01, 0.99])
+    order = engine.buy(market, side="UP", amount=10.0)
+    # At p=0.01, price*(1-price) = 0.0099, fee should be very small
+    assert order.fee < 0.005
+
+
+@pytest.mark.unit
+def test_polymarket_fee_maker_limit(make_market):
+    """Test polymarket fee for limit (maker) orders."""
+    config = PaperConfig(enable_risk_management=False, fee_mode="polymarket", market_category="crypto", enable_rebates=False)
+    engine = PaperEngine(balance=100.0, config=config)
+    market = make_market(prices=[0.55, 0.45])
+    order = engine.limit(market, side="UP", price=0.50, amount=10.0)
+    engine.check_limits(market.id, up_price=0.55, down_price=0.45)
+    orders = engine.orders()
+    maker_fee = orders[0].fee
+    assert orders[0].fee_type == "maker"
+    # Maker fee uses same formula but is_maker=True (affects fee_type label)
+    assert maker_fee > 0
 
 
 # ── Slippage tests ───────────────────────────────────────────────────────────────

@@ -1711,6 +1711,12 @@ class PaperEngine:
         fee, rebate_amount, rebate_rate, fee_type = self._calculate_fee(sell_amount, actual_price, sell_shares, is_maker=False)
         net_amount = sell_amount - fee
 
+        # Recalculate fee against final share count if using polymarket formula
+        if self._config.fee_mode == "polymarket":
+            sell_shares = round(net_amount / actual_price, SHARE_ROUNDING) if actual_price > 0 else 0.0
+            fee, rebate_amount, rebate_rate, fee_type = self._calculate_fee(net_amount, actual_price, sell_shares, is_maker=False)
+            net_amount = sell_amount - fee
+
         # Update balance (add proceeds)
         self._balance += net_amount
 
@@ -2770,7 +2776,11 @@ class PaperEngine:
         fee, rebate_amount, rebate_rate, fee_type = self._calculate_fee(order.amount, actual_price, shares, is_maker=True)
         net = order.amount - fee + rebate_amount
         shares = round(net / actual_price, SHARE_ROUNDING) if actual_price > 0 else 0.0
-        
+
+        # Recalculate fee against final share count if using polymarket formula
+        if self._config.fee_mode == "polymarket":
+            fee, rebate_amount, rebate_rate, fee_type = self._calculate_fee(net, actual_price, shares, is_maker=True)
+
         # Track fee and rebate statistics
         self._track_fee_and_rebate(fee, rebate_amount, fee_type, order.amount)
 

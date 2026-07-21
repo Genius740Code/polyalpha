@@ -591,10 +591,18 @@ class ManualInterventionRequiredError(Exception):
 
 class DegradationLevel(Enum):
     """System degradation levels."""
-    NORMAL = "normal"  # Full functionality
-    DEGRADED = "degraded"  # Reduced functionality
-    MINIMAL = "minimal"  # Core functionality only
-    CRITICAL = "critical"  # Emergency mode
+    NORMAL = "normal"
+    DEGRADED = "degraded"
+    MINIMAL = "minimal"
+    CRITICAL = "critical"
+
+    def __lt__(self, other):
+        order = ["normal", "degraded", "minimal", "critical"]
+        return order.index(self.value) < order.index(other.value)
+
+    def __gt__(self, other):
+        order = ["normal", "degraded", "minimal", "critical"]
+        return order.index(self.value) > order.index(other.value)
 
 
 @dataclass
@@ -692,7 +700,7 @@ class GracefulDegradation:
         reason : str
             Reason for degradation
         """
-        if new_level.value > self._current_level.value:
+        if new_level > self._current_level:
             log.warning(
                 "Degrading from %s to %s: %s",
                 self._current_level.value, new_level.value, reason
@@ -718,7 +726,7 @@ class GracefulDegradation:
         reason : str
             Reason for recovery
         """
-        if new_level.value < self._current_level.value:
+        if new_level < self._current_level:
             log.info(
                 "Recovering from %s to %s: %s",
                 self._current_level.value, new_level.value, reason
@@ -1038,8 +1046,8 @@ class DisasterRecovery:
     def _generate_backup_filename(self, data_type: str) -> str:
         """Generate a unique backup filename."""
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        hash_suffix = hashlib.md5(timestamp.encode()).hexdigest()[:8]
-        filename = f"{data_type}_{timestamp}_{hash_suffix}.json"
+        unique = hashlib.md5(str(time.time_ns()).encode()).hexdigest()[:8]
+        filename = f"{data_type}_{timestamp}_{unique}.json"
         if self._config.compress_backups:
             filename += ".gz"
         return os.path.join(self._backup_dir, filename)
