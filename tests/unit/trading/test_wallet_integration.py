@@ -8,6 +8,8 @@ They can be run with: pytest tests/test_wallet_integration.py -v
 import pytest
 from polyalpha.trading.real import WalletManager
 
+pytestmark = [pytest.mark.unit, pytest.mark.requires_network]
+
 
 class TestWalletManagerInitialization:
     """Tests for WalletManager initialization."""

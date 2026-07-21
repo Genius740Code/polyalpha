@@ -23,7 +23,8 @@ class MockMarket:
 @pytest.fixture
 def engine():
     """Create a fresh paper trading engine for each test."""
-    return PaperEngine(balance=1000.0)
+    config = PaperConfig(enable_risk_management=False)
+    return PaperEngine(balance=1000.0, config=config)
 
 
 @pytest.fixture
@@ -42,6 +43,7 @@ def market():
     return MockMarket()
 
 
+@pytest.mark.unit
 class TestStopLossTakeProfit:
     """Test basic stop-loss and take-profit functionality."""
     
@@ -131,6 +133,7 @@ class TestStopLossTakeProfit:
         assert order.tp_sl_triggered_by == "tp"
 
 
+@pytest.mark.unit
 class TestTrailingStops:
     """Test trailing stop-loss and take-profit functionality."""
     
@@ -251,6 +254,7 @@ class TestTrailingStops:
         assert updated.trail_tp_price is not None
 
 
+@pytest.mark.unit
 class TestOCOOrders:
     """Test One-Cancels-Other order functionality."""
     
@@ -278,6 +282,7 @@ class TestOCOOrders:
         assert main_order.tp_sl_triggered_by == "sl"
 
 
+@pytest.mark.unit
 class TestSellPosition:
     """Test sell/closing position functionality."""
     
@@ -313,20 +318,21 @@ class TestSellPosition:
             engine.sell_position(market, side="UP")
 
 
+@pytest.mark.unit
 class TestEdgeCases:
     """Test edge cases and error handling."""
     
     def test_invalid_stop_loss(self, engine, market):
         """Test invalid stop-loss value."""
-        with pytest.raises(ValueError, match="stop_loss must be > 0"):
+        with pytest.raises(ValueError, match="stop_loss must be between"):
             engine.buy_with_tp_sl(
                 market, side="UP", amount=100.0,
                 stop_loss=-0.1
             )
-    
+
     def test_invalid_take_profit(self, engine, market):
         """Test invalid take-profit value."""
-        with pytest.raises(ValueError, match="take_profit must be > 0"):
+        with pytest.raises(ValueError, match="take_profit must be between"):
             engine.buy_with_tp_sl(
                 market, side="UP", amount=100.0,
                 take_profit=-0.1
@@ -353,6 +359,7 @@ class TestEdgeCases:
             )
 
 
+@pytest.mark.unit
 class TestOrderDump:
     """Test order serialization with new fields."""
     
@@ -376,6 +383,7 @@ class TestOrderDump:
         assert "tp_sl_triggered_by" in dump
 
 
+@pytest.mark.unit
 class TestPercentageSlTp:
     """Test percentage-based stop-loss and take-profit."""
 

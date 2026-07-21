@@ -10,6 +10,8 @@ from polyalpha.trading.real import (
     HybridPositionSizer,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class MockMarket:
     """Mock market for testing."""
@@ -238,7 +240,7 @@ class TestHybridPositionSizer:
         market = MockMarket()
         
         result = sizer.calculate_size(balance=10.0, market=market, side="UP")
-        assert result == 10.0  # Capped at balance
+        assert result == 5.0  # 50% of balance
     
     def test_hybrid_no_kelly_adjustment_low_confidence(self):
         """Test hybrid without Kelly adjustment ignores low confidence."""

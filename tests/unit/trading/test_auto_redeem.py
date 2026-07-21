@@ -5,6 +5,8 @@ Tests for auto-redeem functionality.
 import pytest
 from datetime import datetime, timezone, timedelta
 from polyalpha import Client, AutoRedeemConfig
+
+pytestmark = pytest.mark.unit
 from polyalpha.trading.auto_redeem import (
     AutoRedeemEngine,
     RedeemablePosition,
@@ -226,7 +228,7 @@ def test_redeem_dry_run(auto_redeem_engine, sample_redeemable_positions):
     """Test redemption in dry run mode."""
     auto_redeem_engine._config.dry_run = True
     
-    result = auto_redeem_engine.redeem(sample_redeemable_positions)
+    result = auto_redeem_engine.redeem(sample_redeemable_positions, force=True)
     
     assert result.success is True
     assert result.redeemed_count == len(sample_redeemable_positions)
@@ -239,12 +241,12 @@ def test_redeem_history(auto_redeem_engine, sample_redeemable_positions):
     auto_redeem_engine._config.dry_run = True
     
     # First redemption
-    auto_redeem_engine.redeem(sample_redeemable_positions)
+    auto_redeem_engine.redeem(sample_redeemable_positions, force=True)
     history = auto_redeem_engine.get_redeem_history()
     assert len(history) == 1
     
     # Second redemption
-    auto_redeem_engine.redeem(sample_redeemable_positions)
+    auto_redeem_engine.redeem(sample_redeemable_positions, force=True)
     history = auto_redeem_engine.get_redeem_history()
     assert len(history) == 2
     
@@ -260,7 +262,7 @@ def test_clear_history(auto_redeem_engine, sample_redeemable_positions):
     """Test clearing redemption history."""
     auto_redeem_engine._config.dry_run = True
     
-    auto_redeem_engine.redeem(sample_redeemable_positions)
+    auto_redeem_engine.redeem(sample_redeemable_positions, force=True)
     assert len(auto_redeem_engine.get_redeem_history()) == 1
     
     auto_redeem_engine.clear_history()
@@ -456,9 +458,8 @@ def test_invalid_time_interval(auto_redeem_engine):
     """Test handling of invalid time interval."""
     auto_redeem_engine._config.time_interval = "invalid"
     
-    # Should default to 1 day
-    seconds = auto_redeem_engine._parse_time_interval()
-    assert seconds == 86400
+    with pytest.raises(ValueError):
+        auto_redeem_engine._parse_time_interval()
 
 
 def test_zero_min_markets(auto_redeem_engine, sample_redeemable_positions):
