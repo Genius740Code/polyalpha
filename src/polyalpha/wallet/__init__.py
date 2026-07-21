@@ -3,7 +3,6 @@ Wallet security module for real trading.
 
 This module provides comprehensive wallet security features including:
 - Encrypted key storage
-- Hardware wallet support (Ledger, Trezor)
 - Multi-signature wallet support
 - Secure transaction signing
 - Wallet recovery mechanisms
@@ -14,7 +13,6 @@ from __future__ import annotations
 
 from .wallet_manager import WalletManager
 from .wallet_security import WalletSecurity
-from .hardware_wallet import HardwareWallet, HardwareWalletType
 from .multisig_wallet import MultiSigWallet
 from .transaction_signer import TransactionSigner
 from .audit_logger import AuditLogger, AuditEventType, get_audit_logger
@@ -22,8 +20,6 @@ from .audit_logger import AuditLogger, AuditEventType, get_audit_logger
 __all__ = [
     "WalletManager",
     "WalletSecurity",
-    "HardwareWallet",
-    "HardwareWalletType",
     "MultiSigWallet",
     "TransactionSigner",
     "AuditLogger",

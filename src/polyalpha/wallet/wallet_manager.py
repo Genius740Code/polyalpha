@@ -2,8 +2,7 @@
 Wallet manager for unified wallet security operations.
 
 This module provides a unified interface for wallet operations,
-integrating encrypted storage, hardware wallets, multi-sig, and
-transaction signing.
+integrating encrypted storage, multi-sig, and transaction signing.
 """
 
 from __future__ import annotations
@@ -18,13 +17,6 @@ from threading import Lock
 
 from ..utils.logging_utils import mask_address
 from .wallet_security import WalletSecurity, WalletStorageType, WalletCredentials
-from .hardware_wallet import (
-    HardwareWallet,
-    HardwareWalletType,
-    HardwareWalletInfo,
-    detect_hardware_wallets,
-    get_hardware_wallet,
-)
 from .multisig_wallet import (
     MultiSigWallet,
     MultiSigSigner,
@@ -38,7 +30,6 @@ log = logging.getLogger(__name__)
 class WalletType(Enum):
     """Types of wallets managed by WalletManager."""
     SOFTWARE = "software"
-    HARDWARE = "hardware"
     MULTISIG = "multisig"
 
 
@@ -54,11 +45,6 @@ class WalletConfig:
     # Software wallet specific
     password: Optional[str] = None
     
-    # Hardware wallet specific
-    hardware_type: Optional[HardwareWalletType] = None
-    device_id: Optional[str] = None
-    derivation_path: str = "m/44'/60'/0'/0/0"
-    
     # Multi-sig specific
     multisig_signers: Optional[List[MultiSigSigner]] = None
     required_weight: Optional[int] = None
@@ -71,7 +57,6 @@ class WalletManager:
     Provides:
     - Unified interface for all wallet types
     - Encrypted storage for software wallets
-    - Hardware wallet integration
     - Multi-signature wallet management
     - Secure transaction signing
     - Wallet access logging
@@ -106,7 +91,6 @@ class WalletManager:
         )
         
         self._wallets: Dict[str, WalletConfig] = {}
-        self._hardware_wallets: Dict[str, HardwareWallet] = {}
         self._multisig_wallets: Dict[str, MultiSigWallet] = {}
         self._default_wallet: Optional[str] = None
         self._lock = Lock()
@@ -160,64 +144,6 @@ class WalletManager:
                 self._default_wallet = address
             
             log.info("Added software wallet: %s", address)
-    
-    def add_hardware_wallet(
-        self,
-        address: str,
-        hardware_type: HardwareWalletType,
-        device_id: str,
-        derivation_path: str = "m/44'/60'/0'/0/0",
-        name: Optional[str] = None,
-        set_as_default: bool = False,
-    ) -> None:
-        """
-        Add a hardware wallet.
-        
-        Parameters
-        ----------
-        address : str
-            Wallet address.
-        hardware_type : HardwareWalletType
-            Type of hardware wallet.
-        device_id : str
-            Device identifier.
-        derivation_path : str
-            BIP-32 derivation path.
-        name : str, optional
-            Wallet name.
-        set_as_default : bool
-            Whether to set as default wallet.
-        """
-        with self._lock:
-            # Create hardware wallet instance
-            hw_wallet = get_hardware_wallet(hardware_type, device_id)
-            hw_wallet.connect()
-            
-            # Verify address
-            hw_address = hw_wallet.get_address(derivation_path)
-            if hw_address.lower() != address.lower():
-                hw_wallet.disconnect()
-                raise ValueError(f"Address mismatch: expected {address}, got {hw_address}")
-            
-            # Store
-            self._hardware_wallets[address] = hw_wallet
-            
-            config = WalletConfig(
-                wallet_type=WalletType.HARDWARE,
-                address=address,
-                name=name,
-                is_default=set_as_default,
-                hardware_type=hardware_type,
-                device_id=device_id,
-                derivation_path=derivation_path,
-            )
-            
-            self._wallets[address] = config
-            
-            if set_as_default:
-                self._default_wallet = address
-            
-            log.info("Added hardware wallet: %s (%s)", mask_address(address), hardware_type.value)
     
     def add_multisig_wallet(
         self,
@@ -325,16 +251,6 @@ class WalletManager:
                 rpc_url=self._rpc_url,
             )
         
-        elif config.wallet_type == WalletType.HARDWARE:
-            hw_wallet = self._hardware_wallets.get(addr)
-            if not hw_wallet:
-                raise ValueError(f"Hardware wallet {addr} not connected")
-            return TransactionSigner(
-                signing_method=SigningMethod.HARDWARE_WALLET,
-                hardware_wallet=hw_wallet,
-                rpc_url=self._rpc_url,
-            )
-        
         elif config.wallet_type == WalletType.MULTISIG:
             multisig = self._multisig_wallets.get(addr)
             if not multisig:
@@ -403,10 +319,6 @@ class WalletManager:
             # Remove from appropriate storage
             if config.wallet_type == WalletType.SOFTWARE:
                 self._wallet_security.remove_wallet(address)
-            elif config.wallet_type == WalletType.HARDWARE:
-                hw_wallet = self._hardware_wallets.pop(address, None)
-                if hw_wallet:
-                    hw_wallet.disconnect()
             elif config.wallet_type == WalletType.MULTISIG:
                 self._multisig_wallets.pop(address, None)
             
@@ -466,14 +378,7 @@ class WalletManager:
                 "metadata": config.metadata,
             }
             
-            if config.wallet_type == WalletType.HARDWARE:
-                hw_wallet = self._hardware_wallets.get(address)
-                if hw_wallet:
-                    info["hardware_type"] = config.hardware_type.value
-                    info["device_id"] = config.device_id
-                    info["is_connected"] = hw_wallet.is_connected()
-            
-            elif config.wallet_type == WalletType.MULTISIG:
+            if config.wallet_type == WalletType.MULTISIG:
                 multisig = self._multisig_wallets.get(address)
                 if multisig:
                     info["signers"] = [s.address for s in multisig.get_signers()]
@@ -507,17 +412,6 @@ class WalletManager:
     def get_default_wallet(self) -> Optional[str]:
         """Get the default wallet address."""
         return self._default_wallet
-    
-    def detect_hardware_wallets(self) -> List[HardwareWalletInfo]:
-        """
-        Detect connected hardware wallets.
-        
-        Returns
-        -------
-        list of HardwareWalletInfo
-            Detected hardware wallets.
-        """
-        return detect_hardware_wallets()
     
     def export_wallet(
         self,
@@ -613,15 +507,8 @@ class WalletManager:
         log.info("Rotated password for wallet: %s", mask_address(address))
     
     def shutdown(self) -> None:
-        """Shutdown wallet manager and disconnect hardware wallets."""
+        """Shutdown wallet manager."""
         with self._lock:
-            for hw_wallet in self._hardware_wallets.values():
-                try:
-                    hw_wallet.disconnect()
-                except Exception as e:
-                    log.warning("Error disconnecting hardware wallet: %s", e)
-            
-            self._hardware_wallets.clear()
             log.info("Wallet manager shutdown complete")
 
 

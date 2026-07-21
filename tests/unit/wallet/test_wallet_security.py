@@ -13,14 +13,6 @@ from polyalpha.wallet.wallet_security import (
     WalletStorageType,
     WalletCredentials,
 )
-from polyalpha.wallet.hardware_wallet import (
-    HardwareWalletType,
-    HardwareWalletInfo,
-    LedgerWallet,
-    TrezorWallet,
-    detect_hardware_wallets,
-    get_hardware_wallet,
-)
 from polyalpha.wallet.multisig_wallet import (
     MultiSigWallet,
     MultiSigSigner,
@@ -144,37 +136,6 @@ class TestWalletSecurity:
         
         assert imported_address == wallet_address
         assert wallet_address in wallet_security.list_wallets()
-
-
-@pytest.mark.unit
-class TestHardwareWallet:
-    """Tests for hardware wallet support."""
-    
-    def test_ledger_wallet_creation(self):
-        """Test creating a Ledger wallet instance."""
-        wallet = LedgerWallet("test_device")
-        assert wallet.device_id == "test_device"
-        assert not wallet.is_connected()
-    
-    def test_trezor_wallet_creation(self):
-        """Test creating a Trezor wallet instance."""
-        wallet = TrezorWallet("test_device")
-        assert wallet.device_id == "test_device"
-        assert not wallet.is_connected()
-    
-    def test_get_hardware_wallet(self):
-        """Test getting hardware wallet by type."""
-        ledger = get_hardware_wallet(HardwareWalletType.LEDGER, "device_1")
-        assert isinstance(ledger, LedgerWallet)
-        
-        trezor = get_hardware_wallet(HardwareWalletType.TREZOR, "device_2")
-        assert isinstance(trezor, TrezorWallet)
-    
-    def test_detect_hardware_wallets(self):
-        """Test hardware wallet detection."""
-        # This will return empty list if no hardware wallets are connected
-        detected = detect_hardware_wallets()
-        assert isinstance(detected, list)
 
 
 @pytest.mark.unit

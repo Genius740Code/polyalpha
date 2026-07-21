@@ -96,7 +96,6 @@ Current implementation is functional but incomplete. Several critical features a
 ## Priority 4: Security & Compliance
 
 ### 4.1 Wallet Security
-- [x] Add hardware wallet support (Ledger, Trezor)
 - [x] Implement multi-signature wallet support
 - [x] Add key encryption at rest
 - [x] Implement secure key storage (keyring integration)
@@ -136,7 +135,6 @@ Current implementation is functional but incomplete. Several critical features a
 
 ### 5.3 Examples
 - [ ] Update `examples/real_trading.py` with working examples
-- [ ] Add hardware wallet example
 - [ ] Create advanced order type examples
 - [ ] Add portfolio management examples
 - [ ] Create risk management examples
@@ -276,7 +274,6 @@ Current implementation is functional but incomplete. Several critical features a
 - Basic reporting
 
 ### Phase 3: Security & Compliance (Weeks 5-6)
-- Hardware wallet support
 - Compliance features
 - Security enhancements
 - Audit logging
@@ -323,7 +320,7 @@ Current implementation is functional but incomplete. Several critical features a
 ### Medium Risk Items
 1. **No portfolio-level risk limits** - Could lead to overexposure
 2. **Missing audit logging** - Compliance issues
-3. **No hardware wallet support** - Security risk
+
 4. **Limited error handling** - May fail silently
 
 ### Low Risk Items

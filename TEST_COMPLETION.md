@@ -20,7 +20,6 @@
 | `trading/alchemy_client.py` | 23% | 57 | Small, easy to mock |
 | `wallet/transaction_signer.py` | 22% | 216 | On-chain signing — mock web3 |
 | `trading/error_handling.py` | 32% | 433 | Error paths, high-value to cover |
-| `wallet/hardware_wallet.py` | 38% | 235 | Hardware interaction, mock HID |
 | `wallet/wallet_manager.py` | 43% | 197 | |
 
 ### Priority 3 — Medium coverage (50-75%)

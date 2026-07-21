@@ -31,7 +31,6 @@ log = logging.getLogger(__name__)
 class SigningMethod(Enum):
     """Transaction signing methods."""
     PRIVATE_KEY = "private_key"
-    HARDWARE_WALLET = "hardware_wallet"
     MULTISIG = "multisig"
     KEYRING = "keyring"
 
@@ -68,7 +67,6 @@ class TransactionSigner:
         self,
         signing_method: SigningMethod = SigningMethod.PRIVATE_KEY,
         private_key: Optional[str] = None,
-        hardware_wallet: Optional[Any] = None,
         multisig_wallet: Optional[Any] = None,
         rpc_url: Optional[str] = None,
     ):
@@ -81,8 +79,6 @@ class TransactionSigner:
             Method to use for signing.
         private_key : str, optional
             Private key (for PRIVATE_KEY method).
-        hardware_wallet : HardwareWallet, optional
-            Hardware wallet instance (for HARDWARE_WALLET method).
         multisig_wallet : MultiSigWallet, optional
             Multi-sig wallet instance (for MULTISIG method).
         rpc_url : str, optional
@@ -96,7 +92,6 @@ class TransactionSigner:
         
         self._signing_method = signing_method
         self._private_key = private_key
-        self._hardware_wallet = hardware_wallet
         self._multisig_wallet = multisig_wallet
         self._rpc_url = rpc_url
         self._w3: Optional[Web3] = None
@@ -109,8 +104,6 @@ class TransactionSigner:
         # Validate configuration
         if signing_method == SigningMethod.PRIVATE_KEY and not private_key:
             raise ValueError("Private key required for PRIVATE_KEY signing method")
-        if signing_method == SigningMethod.HARDWARE_WALLET and not hardware_wallet:
-            raise ValueError("Hardware wallet required for HARDWARE_WALLET signing method")
         if signing_method == SigningMethod.MULTISIG and not multisig_wallet:
             raise ValueError("Multi-sig wallet required for MULTISIG signing method")
         
@@ -161,8 +154,6 @@ class TransactionSigner:
                 # Sign based on method
                 if self._signing_method == SigningMethod.PRIVATE_KEY:
                     return self._sign_with_private_key(transaction_dict)
-                elif self._signing_method == SigningMethod.HARDWARE_WALLET:
-                    return self._sign_with_hardware_wallet(transaction_dict)
                 elif self._signing_method == SigningMethod.MULTISIG:
                     return self._sign_with_multisig(transaction_dict)
                 else:
@@ -372,48 +363,6 @@ class TransactionSigner:
                 error_message=str(e),
             )
     
-    def _sign_with_hardware_wallet(self, transaction_dict: Dict[str, Any]) -> SigningResult:
-        """
-        Sign transaction with hardware wallet.
-        
-        Parameters
-        ----------
-        transaction_dict : dict
-            Transaction to sign.
-        
-        Returns
-        -------
-        SigningResult
-            Signing result.
-        """
-        try:
-            if not self._hardware_wallet:
-                return SigningResult(
-                    success=False,
-                    signed_transaction=None,
-                    signature=None,
-                    error_message="Hardware wallet not connected",
-                )
-            
-            signed_txn = self._hardware_wallet.sign_transaction(transaction_dict)
-            
-            log.info("Signed transaction with hardware wallet")
-            
-            return SigningResult(
-                success=True,
-                signed_transaction=signed_txn,
-                signature=signed_txn.get('signature', ''),
-                gas_estimate=transaction_dict.get('gas'),
-            )
-        except Exception as e:
-            log.error("Hardware wallet signing failed: %s", e)
-            return SigningResult(
-                success=False,
-                signed_transaction=None,
-                signature=None,
-                error_message=str(e),
-            )
-    
     def _sign_with_multisig(self, transaction_dict: Dict[str, Any]) -> SigningResult:
         """
         Sign transaction with multi-sig wallet.
@@ -467,7 +416,7 @@ class TransactionSigner:
         message : str
             Message to sign.
         address : str, optional
-            Address to sign with (for hardware wallets).
+            Address to sign with.
         
         Returns
         -------
@@ -484,22 +433,6 @@ class TransactionSigner:
                     success=True,
                     signed_transaction=None,
                     signature=signed_message.signature.hex(),
-                )
-            elif self._signing_method == SigningMethod.HARDWARE_WALLET:
-                if not self._hardware_wallet:
-                    return SigningResult(
-                        success=False,
-                        signed_transaction=None,
-                        signature=None,
-                        error_message="Hardware wallet not connected",
-                    )
-                
-                signature = self._hardware_wallet.sign_message(message)
-                
-                return SigningResult(
-                    success=True,
-                    signed_transaction=None,
-                    signature=signature,
                 )
             else:
                 return SigningResult(
