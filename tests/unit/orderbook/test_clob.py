@@ -339,7 +339,7 @@ def test_clob_client_get_address():
         rpc_url="https://polygon-rpc.com",
         simulate=True,
     )
-    address = client._get_address()
+    address = client.address
     assert address.startswith("0x")
     assert len(address) == 42
 
@@ -360,7 +360,14 @@ def test_clob_client_sign_order():
         "price": 0.55,
         "size": 10.0,
     }
-    signature = client._sign_order(order_data)
+    eip712_order = client._build_eip712_order(
+        token_id=order_data["token_id"],
+        side=order_data["side"],
+        price=order_data["price"],
+        size=order_data["size"],
+        nonce=1234567890,
+    )
+    signature = client._sign_eip712_order(eip712_order)
     assert signature.startswith("0x")
     assert len(signature) == 132  # 0x + 130 hex chars
 

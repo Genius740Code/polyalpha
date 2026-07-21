@@ -92,6 +92,8 @@ class RealTradingConfig:
     private_key: str
     rpc_url: str
     polymarket_api_key: str
+    polymarket_api_secret: str = ""
+    polymarket_api_passphrase: str = ""
 
     # Safety settings
     require_confirmation: bool = True  # Require manual confirmation for orders
@@ -382,6 +384,7 @@ class BracketOrder:
     stop_loss_price: Optional[float] = None
     take_profit_price: Optional[float] = None
     filled_at: Optional[datetime] = None
+    token_id: str = ""
 
     def dump(self) -> dict:
         return {
@@ -423,6 +426,7 @@ class ConditionalOrder:
     child_order_amount: Optional[float] = None
     triggered_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
+    token_id: str = ""
 
     def dump(self) -> dict:
         return {
@@ -1387,6 +1391,8 @@ class RealTradingEngine:
         private_key: str,
         rpc_url: str,
         polymarket_api_key: str,
+        polymarket_api_secret: str = "",
+        polymarket_api_passphrase: str = "",
         config: Optional[RealTradingConfig] = None,
         db_path: Optional[str] = None,
         simulate: bool = False,
@@ -1396,6 +1402,8 @@ class RealTradingEngine:
             private_key=private_key,
             rpc_url=rpc_url,
             polymarket_api_key=polymarket_api_key,
+            polymarket_api_secret=polymarket_api_secret,
+            polymarket_api_passphrase=polymarket_api_passphrase,
         )
 
         # Validate credentials for real trading
@@ -1432,6 +1440,8 @@ class RealTradingEngine:
             api_key=polymarket_api_key,
             private_key=private_key,
             rpc_url=rpc_url,
+            api_secret=polymarket_api_secret or self._config.polymarket_api_secret or None,
+            api_passphrase=polymarket_api_passphrase or self._config.polymarket_api_passphrase or None,
             timeout=self._config.order_timeout,
             retry_attempts=self._config.retry_attempts,
             retry_delay=self._config.retry_delay,
@@ -4484,6 +4494,7 @@ class RealTradingEngine:
         ends_at = datetime.now(timezone.utc) + datetime.timedelta(seconds=duration_seconds)
 
         # Create TWAP order
+        token_id = market.up_token if side == "UP" else market.down_token
         twap_id = str(uuid.uuid4())
         twap_order = TWAPOrder(
             id=twap_id,
@@ -4491,13 +4502,12 @@ class RealTradingEngine:
             slug=market.slug,
             side=side,
             total_amount=total_amount,
-            duration_seconds=duration_seconds,
-            num_slices=num_slices,
+            slice_amount=slice_amount,
             price=price,
             status="active",
             created_at=datetime.now(timezone.utc),
-            ends_at=ends_at,
             slice_interval=slice_interval,
+            token_id=token_id,
         )
 
         self._twap_orders[twap_id] = twap_order

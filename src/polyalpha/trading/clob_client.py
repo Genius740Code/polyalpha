@@ -4,18 +4,29 @@ CLOB Client — Polymarket CLOB API integration.
 This module provides a client for interacting with the Polymarket CLOB API,
 including order placement, cancellation, and orderbook queries.
 
-Uses EIP-712 typed data signing for order authentication and CLOB API
-key derivation via wallet signature.
+Uses EIP-712 typed data signing for order payloads and HMAC-SHA256
+(L2) authentication for all API requests.
 
 Usage
 -----
     from polyalpha.trading.clob_client import ClobClient
 
+    # Derive or provide L2 API credentials
     client = ClobClient(
         api_key="your-api-key",
+        api_secret="your-api-secret",
+        api_passphrase="your-api-passphrase",
         private_key="your-private-key",
         rpc_url="https://polygon-rpc.com",
     )
+
+    # Or derive credentials via L1 wallet auth
+    client = ClobClient(
+        api_key="",
+        private_key="your-private-key",
+        rpc_url="https://polygon-rpc.com",
+    )
+    creds = client.derive_api_credentials()  # one-time setup
 
     # Place an order
     response = client.place_order(
@@ -41,7 +52,9 @@ For order-book data (bids, asks, mid-price, spreads), use
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import json
 import logging
 import secrets
@@ -66,6 +79,23 @@ EIP712_CLOB_DOMAIN = {
     "version": "1",
     "chainId": POLYGON_CHAIN_ID,
     "verifyingContract": CLOB_CONTRACT,
+}
+
+# EIP-712 Domain for API key derivation
+EIP712_DERIVE_KEY_DOMAIN = {
+    "name": "Polymarket",
+    "version": "1",
+    "chainId": POLYGON_CHAIN_ID,
+    "verifyingContract": "0x0000000000000000000000000000000000000000",
+}
+
+# EIP-712 types for API key derivation
+EIP712_DERIVE_KEY_TYPES = {
+    "CreateApiKey": [
+        {"name": "address", "type": "address"},
+        {"name": "timestamp", "type": "uint256"},
+        {"name": "nonce", "type": "uint256"},
+    ],
 }
 
 # EIP-712 Order type definition matching the CLOB contract
@@ -95,7 +125,7 @@ class ClobClient:
 
     Handles order placement, cancellation, and orderbook queries for the
     Polymarket CLOB (Central Limit Order Book). Uses EIP-712 typed data
-    signing for order authentication.
+    signing for order payloads and HMAC-SHA256 (L2) for request auth.
 
     Parameters
     ----------
@@ -113,6 +143,10 @@ class ClobClient:
         Number of retry attempts for failed requests (default: 3)
     retry_delay : float, optional
         Delay between retry attempts in seconds (default: 1.0)
+    api_secret : str, optional
+        L2 API secret (HMAC key) for request signing
+    api_passphrase : str, optional
+        L2 API passphrase for authentication
     """
 
     def __init__(
@@ -124,11 +158,40 @@ class ClobClient:
         timeout: int = 10,
         retry_attempts: int = 3,
         retry_delay: float = 1.0,
+        api_secret: Optional[str] = None,
+        api_passphrase: Optional[str] = None,
         simulate: bool = False,
     ):
+        """
+        Parameters
+        ----------
+        api_key : str
+            Polymarket API key (from settings or derived via L1 auth)
+        private_key : str
+            Wallet private key for EIP-712 order signing
+        rpc_url : str
+            Polygon RPC URL
+        base_url : str, optional
+            CLOB API base URL (default: https://clob.polymarket.com)
+        timeout : int, optional
+            Request timeout in seconds (default: 10)
+        retry_attempts : int, optional
+            Retry attempts for failed requests (default: 3)
+        retry_delay : float, optional
+            Delay between retries in seconds (default: 1.0)
+        api_secret : str, optional
+            L2 API secret for HMAC-SHA256 request signing.
+            Required for real (non-simulated) trading.
+        api_passphrase : str, optional
+            L2 API passphrase. Required for real trading.
+        simulate : bool, optional
+            Enable simulation mode (default: False)
+        """
         self.api_key = api_key
         self.private_key = private_key
         self.rpc_url = rpc_url
+        self.api_secret = api_secret
+        self.api_passphrase = api_passphrase
         self.base_url = base_url
         self.timeout = timeout
         self.retry_attempts = retry_attempts
@@ -138,9 +201,6 @@ class ClobClient:
         # httpx client (lazy init)
         self._client: Optional[httpx.Client] = None
         self._address: Optional[str] = None
-        self._clob_api_key: Optional[str] = None
-        self._clob_api_key_created: float = 0.0
-        self._clob_api_key_ttl: int = 300  # regenerate every 5 min
 
         log.info("ClobClient initialized for %s (simulate=%s)", base_url, simulate)
 
@@ -154,13 +214,14 @@ class ClobClient:
                 from eth_account import Account
                 account = Account.from_key(self.private_key)
                 self._address = account.address
-            except ImportError:
+            except Exception:
                 if self.simulate:
                     self._address = "0x" + "0" * 40
                 else:
                     raise RuntimeError(
-                        "eth_account package required for CLOB operations. "
-                        "Install with: pip install eth-account"
+                        "Failed to derive address from private key. "
+                        "Ensure a valid hex private key is provided. "
+                        "Install eth-account if missing: pip install eth-account"
                     )
         return self._address
 
@@ -179,50 +240,93 @@ class ClobClient:
             )
         return self._client
 
-    def _build_auth_headers(self) -> dict[str, str]:
+    def _build_hmac_signature(
+        self,
+        method: str,
+        request_path: str,
+        timestamp: str,
+        body: Optional[str] = None,
+    ) -> str:
         """
-        Build authentication headers for CLOB API requests.
+        Build L2 HMAC-SHA256 signature for CLOB API request authentication.
 
-        Derives an API key by signing a timestamp message with the wallet.
-        The API key is cached and regenerated every ``_clob_api_key_ttl`` seconds.
+        Uses the API secret as the HMAC key.
+
+        Parameters
+        ----------
+        method : str
+            HTTP method (GET, POST, DELETE)
+        request_path : str
+            API request path (e.g., /order)
+        timestamp : str
+            Current UNIX timestamp as string
+        body : str, optional
+            Request body as JSON string (included for POST requests)
+
+        Returns
+        -------
+        str
+            URL-safe base64-encoded HMAC-SHA256 digest
+        """
+        secret_bytes = base64.urlsafe_b64decode(self.api_secret)
+        message = timestamp + method.upper() + request_path
+        if body:
+            message += str(body).replace("'", '"')
+        h = hmac.new(secret_bytes, message.encode("utf-8"), hashlib.sha256)
+        return base64.urlsafe_b64encode(h.digest()).decode("utf-8")
+
+    def _build_l2_headers(
+        self,
+        method: str,
+        request_path: str,
+        body: Optional[dict] = None,
+    ) -> dict[str, str]:
+        """
+        Build L2 authentication headers for CLOB API requests using HMAC-SHA256.
+
+        Requires API credentials (api_key, api_secret, api_passphrase).
+        If credentials are missing and not in simulate mode, a RuntimeError is raised.
+
+        Parameters
+        ----------
+        method : str
+            HTTP method (GET, POST, DELETE)
+        request_path : str
+            API request path (e.g., /order)
+        body : dict, optional
+            Request body (serialized to JSON for HMAC signing)
+
+        Returns
+        -------
+        dict[str, str]
+            The 5 required L2 auth headers
         """
         if self.simulate:
             return {
-                "Authorization": "Bearer simulated-api-key",
+                "POLY_ADDRESS": self.address,
+                "POLY_SIGNATURE": "simulated-hmac-signature",
+                "POLY_TIMESTAMP": str(int(time.time() * 1000)),
                 "POLY_API_KEY": "simulated",
-                "POLY_API_TIMESTAMP": str(int(time.time() * 1000)),
+                "POLY_PASSPHRASE": "simulated",
             }
 
-        now = time.time()
-        if (
-            self._clob_api_key is None
-            or now - self._clob_api_key_created > self._clob_api_key_ttl
-        ):
-            self._clob_api_key = self._derive_api_key()
-            self._clob_api_key_created = now
+        if not self.api_secret or not self.api_passphrase:
+            raise RuntimeError(
+                "L2 API credentials required. "
+                "Call derive_api_credentials() first or pass api_secret/api_passphrase."
+            )
 
         timestamp = str(int(time.time() * 1000))
+        body_str = json.dumps(body) if body else None
+        signature = self._build_hmac_signature(method, request_path, timestamp, body_str)
+
         return {
-            "Authorization": f"Bearer {self._clob_api_key}",
-            "POLY_API_KEY": self._clob_api_key,
-            "POLY_API_TIMESTAMP": timestamp,
+            "POLY_ADDRESS": self.address,
+            "POLY_SIGNATURE": signature,
+            "POLY_TIMESTAMP": timestamp,
+            "POLY_API_KEY": self.api_key,
+            "POLY_PASSPHRASE": self.api_passphrase,
         }
-
-    def _derive_api_key(self) -> str:
-        """
-        Derive CLOB API key by signing a wallet-ownership message.
-
-        The message format is ``{address}:{timestamp}``, signed with EIP-191.
-        The signature hex becomes the CLOB API key.
-        """
-        from eth_account import Account
-        from eth_account.messages import encode_defunct
-
-        timestamp = str(int(time.time() * 1000))
-        message = f"{self.address}:{timestamp}"
-        signable = encode_defunct(text=message)
-        signed = Account.from_key(self.private_key).sign_message(signable)
-        return f"{self.address}:{signed.signature.hex()}"
 
     def _make_request(
         self,
@@ -262,7 +366,7 @@ class ClobClient:
 
         client = self._get_client()
         url = f"{self.base_url}{endpoint}"
-        headers = self._build_auth_headers()
+        headers = self._build_l2_headers(method, endpoint, data)
 
         last_error = None
         for attempt in range(self.retry_attempts):
@@ -357,7 +461,7 @@ class ClobClient:
                 "order_id": oid,
                 "status": "cancelled",
             }
-        elif method == "GET" and "order" in endpoint and "status" in endpoint.lower():
+        elif method == "GET" and endpoint.startswith("/order/") and "orderbook" not in endpoint:
             parts = endpoint.split("/")
             oid = parts[-2] if len(parts) >= 2 else parts[-1]
             return {
@@ -379,6 +483,79 @@ class ClobClient:
             }
         else:
             return {}
+
+    # ── L1 Authentication (API Credential Derivation) ──────────────────────────
+
+    def derive_api_credentials(self) -> dict:
+        """
+        Derive or create L2 API credentials using L1 wallet authentication.
+
+        Calls ``POST /auth/derive-api-key`` with an EIP-712 signed message
+        to generate or retrieve ``api_key``, ``secret``, and ``passphrase``.
+
+        These credentials are cached on the instance and can be passed to
+        subsequent ClobClient instances to skip the derivation step.
+
+        Returns
+        -------
+        dict
+            Credentials with keys: api_key, secret, passphrase
+
+        Raises
+        ------
+        RuntimeError
+            If L1 authentication fails (invalid key, network error)
+        """
+        if self.simulate:
+            return {
+                "api_key": "simulated-api-key",
+                "secret": "simulated-secret",
+                "passphrase": "simulated-passphrase",
+            }
+
+        from eth_account import Account
+        from eth_account.messages import encode_typed_data
+
+        timestamp = int(time.time() * 1000)
+        nonce = 0
+
+        l1_message = {
+            "address": self.address,
+            "timestamp": timestamp,
+            "nonce": nonce,
+        }
+
+        signable = encode_typed_data(
+            domain_data=EIP712_DERIVE_KEY_DOMAIN,
+            message_types=EIP712_DERIVE_KEY_TYPES,
+            message_data=l1_message,
+        )
+        signed = Account.from_key(self.private_key).sign_message(signable)
+        l1_signature = "0x" + signed.signature.hex()
+
+        l1_headers = {
+            "POLY_ADDRESS": self.address,
+            "POLY_SIGNATURE": l1_signature,
+            "POLY_TIMESTAMP": str(timestamp),
+            "POLY_NONCE": str(nonce),
+        }
+
+        log.info("Deriving L2 API credentials via L1 wallet authentication")
+        client = self._get_client()
+        url = f"{self.base_url}/auth/derive-api-key"
+        try:
+            response = client.post(url, headers=l1_headers)
+            response.raise_for_status()
+            creds = response.json()
+            self.api_key = creds["api_key"]
+            self.api_secret = creds["secret"]
+            self.api_passphrase = creds["passphrase"]
+            log.info("L2 API credentials derived successfully")
+            return dict(creds)
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(f"Failed to derive API credentials: {e}")
+        except httpx.RequestError as e:
+            raise RuntimeError(f"Network error deriving API credentials: {e}")
 
     # ── EIP-712 Order Signing ──────────────────────────────────────────────────
 
@@ -476,12 +653,13 @@ class ClobClient:
             signed = Account.from_key(self.private_key).sign_message(signable)
             return "0x" + signed.signature.hex()
 
-        except ImportError:
+        except Exception:
             if self.simulate:
                 return "0x" + "a" * 130
             raise RuntimeError(
-                "eth_account package required for EIP-712 signing. "
-                "Install with: pip install eth-account"
+                "Failed to sign EIP-712 order. "
+                "Ensure a valid hex private key is provided. "
+                "Install eth-account if missing: pip install eth-account"
             )
 
     # ── Public API Methods ─────────────────────────────────────────────────────
@@ -535,6 +713,19 @@ class ClobClient:
 
         if nonce is None:
             nonce = int(time.time() * 1000)
+
+        # In simulate mode, return a fake response immediately
+        if self.simulate:
+            import uuid
+            return {
+                "order_id": str(uuid.uuid4()),
+                "status": "pending",
+                "token_id": token_id,
+                "side": side,
+                "price": price,
+                "size": size,
+                "order_type": order_type,
+            }
 
         # Build and sign the EIP-712 order
         order = self._build_eip712_order(token_id, side, price, size, nonce)

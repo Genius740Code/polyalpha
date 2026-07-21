@@ -88,6 +88,8 @@ def get_env_config() -> dict[str, Any]:
         "private_key": _get("PRIVATE_KEY", var_type=str),
         "rpc_url": _get("RPC_URL", default="https://polygon-rpc.com", var_type=str),
         "polymarket_api_key": _get("POLYMARKET_API_KEY", var_type=str),
+        "polymarket_api_secret": _get("POLYMARKET_API_SECRET", var_type=str),
+        "polymarket_api_passphrase": _get("POLYMARKET_API_PASSPHRASE", var_type=str),
         "openrouter_api_key": _get("OPENROUTER_API_KEY", var_type=str),
         "db_path": _get("DB_PATH", var_type=str),
     }
