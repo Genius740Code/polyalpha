@@ -461,6 +461,7 @@ class IcebergOrder:
     created_at: datetime
     filled_amount: float = 0.0
     child_order_ids: list[str] = field(default_factory=list)
+    token_id: str = ""
 
     @property
     def remaining_amount(self) -> float:
@@ -512,6 +513,7 @@ class TWAPOrder:
     ends_at: Optional[datetime] = None
     child_order_ids: list[str] = field(default_factory=list)
     slice_interval: float = 0.0  # Seconds between slices
+    token_id: str = ""
 
     @property
     def remaining_amount(self) -> float:
@@ -2023,6 +2025,51 @@ class RealTradingEngine:
             confirm=confirm,
         )
 
+    def sell(
+        self,
+        market,
+        side: str,
+        amount: Optional[float] = None,
+        confidence: float = 0.5,
+        price: Optional[float] = None,
+        confirm: bool = True,
+    ) -> RealOrder:
+        """
+        Execute a real sell order on the CLOB.
+
+        To sell an existing position on Polymarket, you buy the opposite side.
+        This method handles the side inversion automatically.
+
+        Parameters
+        ----------
+        market : Market
+            Market to trade
+        side : str
+            Side of the position being sold ("UP" or "DOWN")
+        amount : float, optional
+            USDC amount to sell. If None, uses position sizing strategy.
+        confidence : float
+            Confidence level for position sizing
+        price : float, optional
+            Limit price. If None, executes at market.
+        confirm : bool
+            Require manual confirmation before executing
+
+        Returns
+        -------
+        RealOrder
+            The executed sell order
+        """
+        opposite = "DOWN" if _validate_side(side) == "UP" else "UP"
+        return self.buy(
+            market=market,
+            side=opposite,
+            amount=amount,
+            confidence=confidence,
+            price=price,
+            confirm=confirm,
+        )
+
     # ── Order Management ─────────────────────────────────────────────────────────
 
     def cancel(self, order_id: str) -> None:
@@ -2674,19 +2721,45 @@ class RealTradingEngine:
         
         position = self._positions[position_key]
         
-        # Create a market sell order to exit the position
-        # This is a simplified implementation - in production, you'd need to
-        # construct the actual sell order with proper token_id and price
-        log.info("Executing trailing stop exit for %s %s at current price", 
-                 position.slug, position.side)
+        log.info("Executing trailing stop exit for %s %s at $%.4f",
+                 position.slug, position.side, position.current_price)
         
-        # Update position status
-        position.resolved = True
-        position.outcome = "STOPPED"
-        
-        # Record the exit (simplified - would need actual order execution)
-        log.warning("Trailing stop exit executed for %s %s (simplified - needs actual order execution)",
-                   position.slug, position.side)
+        try:
+            token_id = position.market_id
+            current_price = position.current_price
+            
+            order_response = self._clob_client.place_order(
+                token_id=token_id,
+                side="sell",
+                price=current_price,
+                size=position.shares,
+                order_type="market",
+            )
+            
+            order = RealOrder(
+                id=order_response["order_id"],
+                market_id=position.market_id,
+                slug=position.slug,
+                side=position.side,
+                price=current_price,
+                amount=position.shares * current_price,
+                shares=position.shares,
+                fee=0.0,
+                status="pending",
+                is_limit=False,
+                created_at=datetime.now(timezone.utc),
+            )
+            self._orders[order.id] = order
+            
+            position.resolved = True
+            position.outcome = "STOPPED"
+            
+            log.info("Trailing stop exit executed for %s %s: order=%s",
+                     position.slug, position.side, order.id)
+                     
+        except Exception as e:
+            log.error("Failed to execute trailing stop exit for %s %s: %s",
+                      position.slug, position.side, e)
 
     # ── Position Management ───────────────────────────────────────────────────────
 
@@ -3998,11 +4071,15 @@ class RealTradingEngine:
                 # Place stop loss order if specified
                 if bracket.stop_loss_price is not None:
                     try:
-                        # Need to get market object - simplified for now
-                        # In production, you'd need to retrieve the market from market_id
                         log.info("Placing stop loss order for bracket %s at %.4f", bracket_id, bracket.stop_loss_price)
-                        # stop_order = self.limit(market, side, bracket.stop_loss_price, bracket.amount, confirm=False)
-                        # bracket.stop_loss_order_id = stop_order.id
+                        sl_order = self._clob_client.place_order(
+                            token_id=bracket.market_id,
+                            side="sell",
+                            price=bracket.stop_loss_price,
+                            size=bracket.amount / bracket.stop_loss_price,
+                            order_type="limit",
+                        )
+                        bracket.stop_loss_order_id = sl_order.get("order_id", "")
                     except Exception as e:
                         log.error("Failed to place stop loss for bracket %s: %s", bracket_id, e)
 
@@ -4010,8 +4087,14 @@ class RealTradingEngine:
                 if bracket.take_profit_price is not None:
                     try:
                         log.info("Placing take profit order for bracket %s at %.4f", bracket_id, bracket.take_profit_price)
-                        # take_profit_order = self.limit(market, side, bracket.take_profit_price, bracket.amount, confirm=False)
-                        # bracket.take_profit_order_id = take_profit_order.id
+                        tp_order = self._clob_client.place_order(
+                            token_id=bracket.market_id,
+                            side="sell",
+                            price=bracket.take_profit_price,
+                            size=bracket.amount / bracket.take_profit_price,
+                            order_type="limit",
+                        )
+                        bracket.take_profit_order_id = tp_order.get("order_id", "")
                     except Exception as e:
                         log.error("Failed to place take profit for bracket %s: %s", bracket_id, e)
 
@@ -4143,13 +4226,18 @@ class RealTradingEngine:
 
                 if should_trigger:
                     try:
-                        # Place child order (simplified - would need market object)
                         log.info(
                             "Conditional order %s triggered: price %.4f, placing child order",
                             cond_id, current_price
                         )
-                        # child_order = self.limit(market, cond.side, cond.child_order_price, cond.child_order_amount, confirm=False)
-                        # cond.child_order_id = child_order.id
+                        child = self._clob_client.place_order(
+                            token_id=cond.market_id,
+                            side="buy",
+                            price=cond.child_order_price,
+                            size=cond.child_order_amount / cond.child_order_price,
+                            order_type="limit",
+                        )
+                        cond.child_order_id = child.get("order_id", "")
                         cond.status = "triggered"
                         cond.triggered_at = datetime.now(timezone.utc)
                         triggered.append(cond_id)
@@ -4209,6 +4297,7 @@ class RealTradingEngine:
             raise ValueError("visible_size cannot exceed total_amount")
 
         # Create iceberg order
+        token_id = market.up_token if side == "UP" else market.down_token
         iceberg_id = str(uuid.uuid4())
         iceberg_order = IcebergOrder(
             id=iceberg_id,
@@ -4220,6 +4309,7 @@ class RealTradingEngine:
             price=price,
             status="active",
             created_at=datetime.now(timezone.utc),
+            token_id=token_id,
         )
 
         self._iceberg_orders[iceberg_id] = iceberg_order
@@ -4263,15 +4353,37 @@ class RealTradingEngine:
         slice_amount = min(iceberg.visible_size, remaining)
 
         try:
-            # Place limit order for this slice (simplified - would need market object)
             log.info(
                 "Executing iceberg slice: %s %s, amount=$%.2f @ %.4f",
                 iceberg.slug, iceberg.side, slice_amount, iceberg.price
             )
-            # order = self.limit(market, iceberg.side, iceberg.price, slice_amount, confirm=confirm)
-            # iceberg.child_order_ids.append(order.id)
-            # return order
-            return None  # Placeholder until market object is available
+            # Use ClobClient directly with the stored token_id
+            order_response = self._clob_client.place_order(
+                token_id=iceberg.token_id,
+                side="buy",
+                price=iceberg.price,
+                size=slice_amount / iceberg.price if iceberg.price > 0 else 0,
+                order_type="limit",
+            )
+
+            # Create a RealOrder for tracking
+            order = RealOrder(
+                id=order_response["order_id"],
+                market_id=iceberg.market_id,
+                slug=iceberg.slug,
+                side=iceberg.side,
+                price=iceberg.price,
+                amount=slice_amount,
+                shares=slice_amount / iceberg.price if iceberg.price > 0 else 0,
+                fee=0.0,
+                status="pending",
+                is_limit=True,
+                created_at=datetime.now(timezone.utc),
+            )
+            self._orders[order.id] = order
+            iceberg.child_order_ids.append(order.id)
+            return order
+
         except Exception as e:
             log.error("Failed to execute iceberg slice for %s: %s", iceberg_id, e)
             return None
@@ -4435,18 +4547,47 @@ class RealTradingEngine:
         slice_amount = twap.slice_amount
 
         try:
-            # Place order for this slice (simplified - would need market object)
             log.info(
                 "Executing TWAP slice: %s %s, amount=$%.2f",
                 twap.slug, twap.side, slice_amount
             )
-            # if twap.price:
-            #     order = self.limit(market, twap.side, twap.price, slice_amount, confirm=confirm)
-            # else:
-            #     order = self.buy(market, twap.side, amount=slice_amount, confirm=confirm)
-            # twap.child_order_ids.append(order.id)
-            # return order
-            return None  # Placeholder until market object is available
+            if twap.price and twap.price > 0:
+                # Limit order at specified price
+                order_response = self._clob_client.place_order(
+                    token_id=twap.token_id,
+                    side="buy",
+                    price=twap.price,
+                    size=slice_amount / twap.price,
+                    order_type="limit",
+                )
+            else:
+                # Market order (use current price)
+                price = 0.5  # Will be overridden by actual fill
+                order_response = self._clob_client.place_order(
+                    token_id=twap.token_id,
+                    side="buy",
+                    price=price,
+                    size=slice_amount / price,
+                    order_type="market",
+                )
+
+            order = RealOrder(
+                id=order_response["order_id"],
+                market_id=twap.market_id,
+                slug=twap.slug,
+                side=twap.side,
+                price=twap.price or 0.5,
+                amount=slice_amount,
+                shares=slice_amount / (twap.price or 0.5),
+                fee=0.0,
+                status="pending",
+                is_limit=twap.price is not None and twap.price > 0,
+                created_at=datetime.now(timezone.utc),
+            )
+            self._orders[order.id] = order
+            twap.child_order_ids.append(order.id)
+            return order
+
         except Exception as e:
             log.error("Failed to execute TWAP slice for %s: %s", twap_id, e)
             return None
