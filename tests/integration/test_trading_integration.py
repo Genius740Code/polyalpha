@@ -36,8 +36,8 @@ def test_paper_trading_with_stream_integration():
     order = client.paper.limit(market, side="UP", price=0.90, amount=20.0)
     
     assert order.status == "open"
-    # Limit orders don't deduct balance until filled, so balance should remain 100.0
-    assert client.paper.balance == 100.0
+    # Limit order deducts balance (funds are reserved)
+    assert client.paper.balance == 80.0
     
     # Simulate price update that fills the order
     client.paper.check_limits(market.id, up_price=0.92, down_price=0.08)

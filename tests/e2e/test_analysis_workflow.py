@@ -47,7 +47,19 @@ class TestDataFeedWorkflow:
         return DataFeedConfig(
             source="binance",
             timeframe="5m",
-            limit=100
+            lookback_periods=100,
+            use_cache=False,
+        )
+
+    @pytest.fixture(scope="function")
+    def caching_feed_config(self, tmp_path):
+        """Create data feed configuration with caching enabled."""
+        return DataFeedConfig(
+            source="binance",
+            timeframe="5m",
+            lookback_periods=100,
+            use_cache=True,
+            cache_dir=str(tmp_path / "test_cache"),
         )
 
     def test_complete_data_fetching_workflow(self, data_feed_config, sample_ohlcv_data):
@@ -56,12 +68,13 @@ class TestDataFeedWorkflow:
             # Arrange: Mock API response
             mock_response = Mock()
             mock_response.json.return_value = [
-                [int((datetime.now() + timedelta(minutes=i)).timestamp() * 1000),
-                 50000.0 + i * 10,  # open
-                 50050.0 + i * 10,  # high
-                 49950.0 + i * 10,  # low
-                 50000.0 + i * 10,  # close
-                 100.0 + i]         # volume
+                [
+                    int((datetime.now() + timedelta(minutes=i)).timestamp() * 1000),
+                    50000.0 + i * 10, 50050.0 + i * 10, 49950.0 + i * 10,
+                    50000.0 + i * 10, 100.0 + i,
+                    int((datetime.now() + timedelta(minutes=i + 1)).timestamp() * 1000),
+                    100000.0, 100, 50.0 * 100, 50.0 * 100, ""
+                ]
                 for i in range(100)
             ]
             mock_get.return_value = mock_response
@@ -85,13 +98,17 @@ class TestDataFeedWorkflow:
             def mock_response_func(*args, **kwargs):
                 mock_response = Mock()
                 mock_response.json.return_value = [
-                    [int((datetime.now() + timedelta(minutes=i)).timestamp() * 1000),
-                     50000.0 + i * 10, 50050.0 + i * 10, 49950.0 + i * 10,
-                     50000.0 + i * 10, 100.0 + i]
+                    [
+                        int((datetime.now() + timedelta(minutes=i)).timestamp() * 1000),
+                        50000.0 + i * 10, 50050.0 + i * 10, 49950.0 + i * 10,
+                        50000.0 + i * 10, 100.0 + i,
+                        int((datetime.now() + timedelta(minutes=i + 1)).timestamp() * 1000),
+                        100000.0, 100, 50.0 * 100, 50.0 * 100, ""
+                    ]
                     for i in range(50)
                 ]
                 return mock_response
-            
+
             mock_get.side_effect = mock_response_func
             
             # Act: Fetch data for multiple symbols
@@ -105,21 +122,25 @@ class TestDataFeedWorkflow:
             assert len(results) == 3
             assert all(data is not None for data in results.values())
 
-    def test_data_caching_workflow(self, data_feed_config):
+    def test_data_caching_workflow(self, caching_feed_config):
         """Test workflow: fetch data -> cache -> retrieve from cache."""
         with patch('polyalpha.analysis.data_feed.requests.get') as mock_get:
             # Arrange: Mock API response
             mock_response = Mock()
             mock_response.json.return_value = [
-                [int((datetime.now() + timedelta(minutes=i)).timestamp() * 1000),
-                 50000.0 + i * 10, 50050.0 + i * 10, 49950.0 + i * 10,
-                 50000.0 + i * 10, 100.0 + i]
+                [
+                    int((datetime.now() + timedelta(minutes=i)).timestamp() * 1000),
+                    50000.0 + i * 10, 50050.0 + i * 10, 49950.0 + i * 10,
+                    50000.0 + i * 10, 100.0 + i,
+                    int((datetime.now() + timedelta(minutes=i + 1)).timestamp() * 1000),
+                    100000.0, 100, 50.0 * 100, 50.0 * 100, ""
+                ]
                 for i in range(50)
             ]
             mock_get.return_value = mock_response
             
             # Act: First fetch
-            feed = DataFeed(data_feed_config)
+            feed = DataFeed(caching_feed_config)
             data1 = feed.fetch("BTC")
             
             # Act: Second fetch (should use cache)
@@ -168,6 +189,9 @@ class TestIndicatorCalculationWorkflow:
             price += change
             data.append({
                 "timestamp": base_time + timedelta(minutes=i),
+                "open": price - 5,
+                "high": price + 10,
+                "low": price - 10,
                 "close": price,
                 "volume": 100.0 + i * 10,
             })
@@ -211,14 +235,14 @@ class TestIndicatorCalculationWorkflow:
         
         # Assert: Bands calculated
         assert bb is not None
-        assert "upper" in bb.columns
-        assert "middle" in bb.columns
-        assert "lower" in bb.columns
-        
+        assert "upper" in bb
+        assert "middle" in bb
+        assert "lower" in bb
+
         # Assert: Upper band > middle > lower
-        valid_data = bb.dropna()
-        assert all(valid_data["upper"] >= valid_data["middle"])
-        assert all(valid_data["middle"] >= valid_data["lower"])
+        bb_df = pd.DataFrame({k: v.dropna() for k, v in bb.items()})
+        assert all(bb_df["upper"] >= bb_df["middle"])
+        assert all(bb_df["middle"] >= bb_df["lower"])
 
     def test_macd_calculation_workflow(self, sample_price_data):
         """Test workflow: calculate MACD -> validate signal -> identify crossovers."""
@@ -228,14 +252,14 @@ class TestIndicatorCalculationWorkflow:
         
         # Assert: MACD calculated
         assert macd is not None
-        assert "macd" in macd.columns
-        assert "signal" in macd.columns
-        assert "histogram" in macd.columns
-        
+        assert "macd" in macd
+        assert "signal" in macd
+        assert "histogram" in macd
+
         # Assert: Histogram equals MACD - Signal
-        valid_data = macd.dropna()
-        expected_hist = valid_data["macd"] - valid_data["signal"]
-        assert all(abs(valid_data["histogram"] - expected_hist) < 0.01)
+        macd_df = pd.DataFrame({k: v.dropna() for k, v in macd.items()})
+        expected_hist = macd_df["macd"] - macd_df["signal"]
+        assert all(abs(macd_df["histogram"] - expected_hist) < 0.01)
 
     def test_multi_indicator_workflow(self, sample_price_data):
         """Test workflow: calculate multiple indicators -> combine -> analyze."""
@@ -285,6 +309,9 @@ class TestSignalGenerationWorkflow:
                 price -= 15  # Downtrend
             data.append({
                 "timestamp": base_time + timedelta(minutes=i),
+                "open": price - 5,
+                "high": price + 10,
+                "low": price - 10,
                 "close": price,
                 "volume": 100.0 + i * 10,
             })
@@ -448,9 +475,13 @@ class TestCompleteAnalysisWorkflow:
             def mock_response(*args, **kwargs):
                 mock_response = Mock()
                 mock_response.json.return_value = [
-                    [int((datetime.now() + timedelta(minutes=i)).timestamp() * 1000),
-                     50000.0 + i * 10, 50050.0 + i * 10, 49950.0 + i * 10,
-                     50000.0 + i * 10, 100.0 + i]
+                    [
+                        int((datetime.now() + timedelta(minutes=i)).timestamp() * 1000),
+                        50000.0 + i * 10, 50050.0 + i * 10, 49950.0 + i * 10,
+                        50000.0 + i * 10, 100.0 + i,
+                        int((datetime.now() + timedelta(minutes=i + 1)).timestamp() * 1000),
+                        100000.0, 100, 50.0 * 100, 50.0 * 100, ""
+                    ]
                     for i in range(50)
                 ]
                 return mock_response
@@ -460,7 +491,7 @@ class TestCompleteAnalysisWorkflow:
             # Act: Analyze each timeframe
             timeframe_signals = {}
             for tf in timeframes:
-                config = DataFeedConfig(source="binance", timeframe=tf, limit=50)
+                config = DataFeedConfig(source="binance", timeframe=tf, lookback_periods=50)
                 feed = DataFeed(config)
                 data = feed.fetch("BTC")
                 
@@ -522,19 +553,28 @@ class TestCompleteAnalysisWorkflow:
     def test_delta_calculation_workflow(self):
         """Test workflow: calculate delta between markets -> identify arbitrage."""
         # Arrange: Create mock data for two markets
+        base_ts = pd.date_range(start="2024-01-01", periods=100, freq="5min")
         market1_data = pd.DataFrame({
-            "timestamp": pd.date_range(start="2024-01-01", periods=100, freq="5min"),
+            "timestamp": base_ts,
+            "open": [49990.0 + i * 10 for i in range(100)],
+            "high": [50010.0 + i * 10 for i in range(100)],
+            "low": [49990.0 + i * 10 for i in range(100)],
             "close": [50000.0 + i * 10 for i in range(100)],
+            "volume": [100.0 + i for i in range(100)],
         })
         
         market2_data = pd.DataFrame({
-            "timestamp": pd.date_range(start="2024-01-01", periods=100, freq="5min"),
+            "timestamp": base_ts,
+            "open": [49995.0 + i * 10 for i in range(100)],
+            "high": [50015.0 + i * 10 for i in range(100)],
+            "low": [49995.0 + i * 10 for i in range(100)],
             "close": [50005.0 + i * 10 for i in range(100)],  # Slightly higher
+            "volume": [100.0 + i for i in range(100)],
         })
         
         # Act: Calculate delta
-        delta_calc = DeltaCalculator()
-        delta = delta_calc.calculate(market1_data, market2_data)
+        delta_calc = DeltaCalculator(market1_data)
+        delta = delta_calc.delta()
         
         # Assert: Delta calculated
         assert delta is not None
@@ -557,6 +597,9 @@ class TestAnalysisPerformance:
             price += change
             data.append({
                 "timestamp": base_time + timedelta(minutes=i),
+                "open": price - 5,
+                "high": price + 10,
+                "low": price - 10,
                 "close": price,
                 "volume": 100.0 + i,
             })
@@ -608,9 +651,13 @@ class TestAnalysisPerformance:
             # Arrange: Mock fast response
             mock_response = Mock()
             mock_response.json.return_value = [
-                [int((datetime.now() + timedelta(minutes=i)).timestamp() * 1000),
-                 50000.0 + i * 10, 50050.0 + i * 10, 49950.0 + i * 10,
-                 50000.0 + i * 10, 100.0 + i]
+                [
+                    int((datetime.now() + timedelta(minutes=i)).timestamp() * 1000),
+                    50000.0 + i * 10, 50050.0 + i * 10, 49950.0 + i * 10,
+                    50000.0 + i * 10, 100.0 + i,
+                    int((datetime.now() + timedelta(minutes=i + 1)).timestamp() * 1000),
+                    100000.0, 100, 50.0 * 100, 50.0 * 100, ""
+                ]
                 for i in range(500)
             ]
             mock_get.return_value = mock_response
@@ -618,7 +665,7 @@ class TestAnalysisPerformance:
             import time
             
             # Act: Fetch data
-            config = DataFeedConfig(source="binance", timeframe="5m", limit=500)
+            config = DataFeedConfig(source="binance", timeframe="5m", lookback_periods=500, use_cache=False)
             feed = DataFeed(config)
             
             start_time = time.time()

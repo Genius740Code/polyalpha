@@ -377,8 +377,7 @@ def chart_pnl_heatmap(trades: list[TradeRecord]):
         hoverongaps=False,
         hovertemplate="Hour %{x}:00 UTC | %{y}<br>PnL: $%{z:.4f}<extra></extra>",
         colorbar=dict(
-            title="PnL ($)",
-            titlefont=dict(color=_TEXT_COLOR),
+            title=dict(text="PnL ($)", font=dict(color=_TEXT_COLOR)),
             tickfont=dict(color=_TEXT_COLOR),
             bgcolor=_SURFACE_COLOR,
         ),
@@ -532,8 +531,7 @@ def chart_monthly_returns(
         hoverongaps=False,
         hovertemplate="%{y} %{x}<br>Return: %{z:.2f}%<extra></extra>",
         colorbar=dict(
-            title="Return (%)",
-            titlefont=dict(color=_TEXT_COLOR),
+            title=dict(text="Return (%)", font=dict(color=_TEXT_COLOR)),
             tickfont=dict(color=_TEXT_COLOR),
             ticksuffix="%",
             bgcolor=_SURFACE_COLOR,

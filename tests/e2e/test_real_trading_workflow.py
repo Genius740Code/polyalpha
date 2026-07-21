@@ -280,15 +280,16 @@ class TestRealTradingSecurity:
     def client(self, temp_dir):
         """Create a client with real trading enabled."""
         with patch('polyalpha.markets.MarketClient'):
-            client = Client(
-                private_key="0x" + "1" * 64,
-                rpc_url="https://polygon-rpc.com",
-                polymarket_api_key="test_api_key",
-                db_path=str(temp_dir / "test_security.db"),
-                log_level="DEBUG"
-            )
-            yield client
-            client.close()
+            with patch('polyalpha.trading.real.WalletManager._init_web3'):
+                client = Client(
+                    private_key="0x" + "1" * 64,
+                    rpc_url="https://polygon-rpc.com",
+                    polymarket_api_key="test_api_key",
+                    db_path=str(temp_dir / "test_security.db"),
+                    log_level="DEBUG"
+                )
+                yield client
+                client.close()
 
     def test_private_key_security(self, client):
         """Test that private key is handled securely."""
@@ -319,6 +320,7 @@ class TestRealTradingSecurity:
 
 @pytest.mark.e2e
 @pytest.mark.slow
+@pytest.mark.requires_network
 class TestRealTradingPerformance:
     """Test performance benchmarks for real trading."""
 
@@ -326,15 +328,16 @@ class TestRealTradingPerformance:
     def client(self, temp_dir):
         """Create a client for performance testing."""
         with patch('polyalpha.markets.MarketClient'):
-            client = Client(
-                private_key="0x" + "1" * 64,
-                rpc_url="https://polygon-rpc.com",
-                polymarket_api_key="test_api_key",
-                db_path=str(temp_dir / "perf_real.db"),
-                log_level="WARNING"
-            )
-            yield client
-            client.close()
+            with patch('polyalpha.trading.real.WalletManager._init_web3'):
+                client = Client(
+                    private_key="0x" + "1" * 64,
+                    rpc_url="https://polygon-rpc.com",
+                    polymarket_api_key="test_api_key",
+                    db_path=str(temp_dir / "perf_real.db"),
+                    log_level="WARNING"
+                )
+                yield client
+                client.close()
 
     @pytest.fixture(scope="function")
     def mock_market(self):

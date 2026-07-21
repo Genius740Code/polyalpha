@@ -147,7 +147,7 @@ class TestRetryProperties:
         """Test that retry decorator respects max_attempts."""
         call_count = [0]
         
-        @retry_on_error(max_attempts=max_attempts, delay=0.001)
+        @retry_on_error(max_attempts=max_attempts, delay=0.001, retry_on=(Exception,))
         def failing_function():
             call_count[0] += 1
             if call_count[0] <= fail_before:
@@ -325,7 +325,7 @@ class TestDataProperties:
     def test_sum_of_parts_equals_whole(self, values):
         """Test that sum of individual values equals total sum."""
         total = sum(values)
-        partial_sums = [sum(values[:i]) for i in range(len(values))]
+        partial_sums = [sum(values[:i]) for i in range(1, len(values) + 1)]
         
         # Last partial sum should equal total
         if len(partial_sums) > 0:
@@ -345,8 +345,8 @@ class TestMathProperties:
     @pytest.mark.property
     @given(st.floats(min_value=-1000.0, max_value=1000.0), st.floats(min_value=-1000.0, max_value=1000.0), st.floats(min_value=-1000.0, max_value=1000.0))
     def test_associative_addition(self, a, b, c):
-        """Test that addition is associative."""
-        assert (a + b) + c == a + (b + c)
+        """Test that addition is approximately associative (floating point)."""
+        assert (a + b) + c == pytest.approx(a + (b + c))
 
     @pytest.mark.property
     @given(st.floats(min_value=-1000.0, max_value=1000.0))
