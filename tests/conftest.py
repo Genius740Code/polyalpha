@@ -38,6 +38,12 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "requires_database: Tests that require database access"
     )
+    config.addinivalue_line(
+        "markers", "performance: Performance benchmarks"
+    )
+    config.addinivalue_line(
+        "markers", "property: Property-based tests using Hypothesis"
+    )
 
 
 # Global fixtures
