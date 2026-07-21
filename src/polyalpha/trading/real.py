@@ -239,6 +239,7 @@ class RealOrder:
     def dump(self) -> dict:
         return {
             "id": self.id,
+            "market_id": self.market_id,
             "market": self.slug,
             "side": self.side,
             "price": self.price,
@@ -261,6 +262,38 @@ class RealOrder:
             "last_status_check": self.last_status_check.isoformat() if self.last_status_check else None,
             "status_check_attempts": self.status_check_attempts,
         }
+
+    @staticmethod
+    def from_dump(data: dict) -> "RealOrder":
+        created_at = datetime.fromisoformat(data["created_at"]) if data.get("created_at") else _now()
+        filled_at = datetime.fromisoformat(data["filled_at"]) if data.get("filled_at") else None
+        last_sc = datetime.fromisoformat(data["last_status_check"]) if data.get("last_status_check") else None
+
+        return RealOrder(
+            id=data.get("id", ""),
+            market_id=data.get("market_id", ""),
+            slug=data.get("market", ""),
+            side=data.get("side", "UP"),
+            price=float(data.get("price", 0)),
+            amount=float(data.get("amount", 0)),
+            shares=float(data.get("shares", 0)),
+            fee=float(data.get("fee", 0)),
+            status=data.get("status", "pending"),
+            is_limit=bool(data.get("is_limit", False)),
+            created_at=created_at,
+            filled_at=filled_at,
+            tx_hash=data.get("tx_hash"),
+            stop_loss=float(data["stop_loss"]) if data.get("stop_loss") is not None else None,
+            take_profit=float(data["take_profit"]) if data.get("take_profit") is not None else None,
+            sizing_strategy=data.get("sizing_strategy", "fixed"),
+            confidence=float(data.get("confidence", 0.5)),
+            kelly_fraction=float(data.get("kelly_fraction", 0)),
+            filled_shares=float(data.get("filled_shares", 0)),
+            filled_amount=float(data.get("filled_amount", 0)),
+            avg_fill_price=float(data.get("avg_fill_price", 0)),
+            last_status_check=last_sc,
+            status_check_attempts=int(data.get("status_check_attempts", 0)),
+        )
 
 
 @dataclass
@@ -301,6 +334,7 @@ class RealPosition:
 
     def dump(self) -> dict:
         return {
+            "market_id": self.market_id,
             "market": self.slug,
             "question": self.question,
             "side": self.side,
@@ -316,7 +350,39 @@ class RealPosition:
             "stop_loss": self.stop_loss,
             "take_profit": self.take_profit,
             "order_ids": self.order_ids,
+            "entry_time": self.entry_time.isoformat() if self.entry_time else None,
+            "scale_count": self.scale_count,
+            "hedge_amount": self.hedge_amount,
         }
+
+    @staticmethod
+    def from_dump(data: dict) -> "RealPosition":
+        entry_time = None
+        if data.get("entry_time"):
+            try:
+                entry_time = datetime.fromisoformat(data["entry_time"])
+            except (ValueError, TypeError):
+                entry_time = None
+
+        return RealPosition(
+            market_id=data.get("market_id", data.get("market", "")),
+            slug=data.get("market", ""),
+            question=data.get("question", ""),
+            side=data.get("side", "UP"),
+            shares=float(data.get("shares", 0)),
+            avg_price=float(data.get("avg_price", 0)),
+            current_price=float(data.get("current_price", 0)),
+            cost_basis=float(data.get("cost_basis", 0)),
+            current_value=float(data.get("current_value", 0)),
+            resolved=bool(data.get("resolved", False)),
+            outcome=data.get("outcome"),
+            order_ids=list(data.get("order_ids", [])),
+            entry_time=entry_time,
+            stop_loss=float(data["stop_loss"]) if data.get("stop_loss") is not None else None,
+            take_profit=float(data["take_profit"]) if data.get("take_profit") is not None else None,
+            scale_count=int(data.get("scale_count", 0)),
+            hedge_amount=float(data.get("hedge_amount", 0)),
+        )
 
 
 @dataclass
@@ -948,6 +1014,9 @@ class WalletManager:
         account = Account.from_key(self._private_key)
         self._address = account.address
 
+        from ..trading.alchemy_client import AlchemyClient
+        self._ctf_address = AlchemyClient.CTF_ADDRESS
+
         # USDC contract on Polygon (minimal ABI for balance and allowance)
         usdc_abi = [
             {
@@ -985,6 +1054,48 @@ class WalletManager:
                 "type": "function",
             },
         ]
+
+        # CTF (Conditional Tokens Framework) contract — minimal ABI for redeem
+        ctf_abi = [
+            {
+                "constant": True,
+                "inputs": [
+                    {"name": "_owner", "type": "address"},
+                    {"name": "_id", "type": "uint256"},
+                ],
+                "name": "balanceOf",
+                "outputs": [{"name": "", "type": "uint256"}],
+                "type": "function",
+            },
+            {
+                "constant": False,
+                "inputs": [
+                    {"name": "from", "type": "address"},
+                    {"name": "to", "type": "address"},
+                    {"name": "id", "type": "uint256"},
+                    {"name": "amount", "type": "uint256"},
+                    {"name": "data", "type": "bytes"},
+                ],
+                "name": "safeTransferFrom",
+                "outputs": [],
+                "type": "function",
+            },
+            {
+                "constant": False,
+                "inputs": [
+                    {"name": "conditionId", "type": "bytes32"},
+                    {"name": "parentCollectionId", "type": "bytes32"},
+                    {"name": "indexSets", "type": "uint256[]"},
+                ],
+                "name": "redeem",
+                "outputs": [{"name": "payout", "type": "uint256"}],
+                "type": "function",
+            },
+        ]
+        self._ctf_contract = self._web3.eth.contract(
+            address=self._ctf_address,
+            abi=ctf_abi,
+        )
         usdc_address = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # Polygon USDC
         self._usdc_contract = self._web3.eth.contract(
             address=usdc_address,
@@ -1690,32 +1801,90 @@ class RealTradingEngine:
             log.error("Failed to create emergency backup: %s", e)
             raise BackupError(f"Failed to create emergency backup: {e}")
 
-    def restore_from_backup(self, backup_path: str) -> None:
+    def restore_from_backup(self, backup_path: str) -> dict:
         """
         Restore trading state from backup.
+
+        Reconstructs in-memory ``RealPosition`` and ``RealOrder`` objects
+        from the emergency snapshot data, and re-establishes the
+        position/order cross-references (order_ids on positions).
 
         Parameters
         ----------
         backup_path : str
-            Path to backup file
+            Path to backup file (``.json`` or ``.json.gz``).
+
+        Returns
+        -------
+        dict
+            Summary: positions_restored, orders_restored, advanced_orders.
+
+        Raises
+        ------
+        BackupError
+            If the backup data is corrupt or cannot be loaded.
         """
         try:
             backup_data = self._disaster_recovery.restore_backup(backup_path)
+            data = backup_data["data"]
+
+            restored_positions = 0
+            restored_orders = 0
+
+            # Restore orders first (positions reference order IDs)
+            if "orders" in data:
+                for order_id, order_data in data["orders"].items():
+                    if order_id in self._orders:
+                        log.warning("Order %s already exists, overwriting", order_id)
+                    self._orders[order_id] = RealOrder.from_dump(order_data)
+                    restored_orders += 1
+                    log.debug("Restored order: %s (%s %s)",
+                              order_id, order_data.get("market"), order_data.get("side"))
+                log.info("Restored %d orders from backup", restored_orders)
 
             # Restore positions
-            if "positions" in backup_data["data"]:
-                for pos_id, pos_data in backup_data["data"]["positions"].items():
-                    # Reconstruct position from data
-                    # This would need proper implementation based on RealPosition structure
-                    log.info("Restoring position: %s", pos_id)
+            if "positions" in data:
+                for pos_key, pos_data in data["positions"].items():
+                    if pos_key in self._positions:
+                        log.warning("Position %s already exists, overwriting", pos_key)
+                    self._positions[pos_key] = RealPosition.from_dump(pos_data)
 
-            # Restore orders
-            if "orders" in backup_data["data"]:
-                for order_id, order_data in backup_data["data"]["orders"].items():
-                    # Reconstruct order from data
-                    log.info("Restoring order: %s", order_id)
+                    position = self._positions[pos_key]
+                    orphan_ids = [oid for oid in position.order_ids if oid not in self._orders]
+                    if orphan_ids:
+                        log.warning("Position %s references %d order(s) not in backup: %s",
+                                    pos_key, len(orphan_ids), orphan_ids[:5])
 
-            log.info("Successfully restored from backup: %s", backup_path)
+                    restored_positions += 1
+                    log.debug("Restored position: %s (%s %s, shares=%.2f)",
+                              pos_key, pos_data.get("market"), pos_data.get("side"),
+                              float(pos_data.get("shares", 0)))
+                log.info("Restored %d positions from backup", restored_positions)
+
+            # Rebuild daily tracking from config
+            self._risk_manager._check_and_reset_daily()
+            if "config" in data:
+                cfg = data["config"]
+                log.info("Backup config: max_order_size=%.2f, max_daily_loss=%.2f, "
+                         "max_position_size=%.2f",
+                         float(cfg.get("max_order_size", 0)),
+                         float(cfg.get("max_daily_loss", 0)),
+                         float(cfg.get("max_position_size", 0)))
+
+            # Refresh balance from chain
+            try:
+                self.refresh_balance()
+            except Exception as exc:
+                log.warning("Could not refresh balance after restore: %s", exc)
+
+            log.info("Restore complete: %d positions, %d orders from %s",
+                     restored_positions, restored_orders, backup_path)
+
+            return {
+                "positions_restored": restored_positions,
+                "orders_restored": restored_orders,
+                "balance": self._balance,
+            }
 
         except Exception as e:
             log.error("Failed to restore from backup: %s", e)
@@ -2363,62 +2532,125 @@ class RealTradingEngine:
     def sync_positions_from_chain(self) -> None:
         """
         Fetch real positions from the blockchain using Alchemy.
-        Calculates balances from transfers and fetches token metadata.
+
+        Calculates balances from on-chain transfers and derives fill prices
+        by (1) matching against existing order records, (2) using Gamma
+        metadata mid-price, (3) querying CLOB orderbook mid-price, and
+        (4) falling back to a conservative estimate.
         """
         log.info("Syncing positions from blockchain...")
         address = self._wallet.address
         balances = self._alchemy_client.get_token_balances(address)
         transfers = self._alchemy_client.get_asset_transfers(address)
-        
+
         # Build token IDs list
         token_ids = list(balances.keys())
         if not token_ids:
             return
-            
+
         metadata = self._alchemy_client.fetch_polymarket_metadata(token_ids)
-        
-        # Calculate cost basis from transfers
+
+        # Index transfers by token_id for fast lookup
+        transfers_by_token: dict[str, list[dict]] = {}
+        for t in transfers:
+            for m in t.get("erc1155Metadata", []):
+                tid = m.get("tokenId", "")
+                if tid:
+                    transfers_by_token.setdefault(tid, []).append(t)
+
         for token_id, amount in balances.items():
             if amount <= 0:
                 continue
-                
+
             meta = metadata.get(token_id, {})
             market_id = meta.get("market_id", token_id)
             slug = meta.get("slug", token_id)
             question = meta.get("question", "Unknown Market")
-            side = meta.get("side", "UP") # Assume UP if unknown, can be derived
-            
-            # Simple average fill price derivation (placeholder)
-            # In real implementation we'd need to match with orders or parse the amounts paid
-            avg_price = 0.5  
-            cost_basis = amount * avg_price
-            current_price = float(meta.get("price", 0.5))
-            
-            # Find entry time from transfers
+            gamma_price = float(meta.get("price", 0.0))
+
+            # Determine side from metadata
+            side = meta.get("side", "UP")
+            clob_token_ids = meta.get("clobTokenIds", "")
+            if isinstance(clob_token_ids, str) and clob_token_ids:
+                tokens = [t.strip() for t in clob_token_ids.split(",")]
+                if len(tokens) > 1:
+                    token_dec = str(int(token_id, 16)) if token_id.startswith("0x") else token_id
+                    side = "UP" if tokens[0] == token_dec else "DOWN"
+
+            # ── Derive fill price (multi-strategy) ────────────────────────
+            fill_price = None
+
+            # Strategy 1: from existing order records with actual fills
+            for order in self._orders.values():
+                if order.market_id == market_id and order.side == side and order.avg_fill_price > 0:
+                    fill_price = order.avg_fill_price
+                    break
+
+            # Strategy 2: from Gamma metadata current price
+            if fill_price is None and gamma_price > 0:
+                fill_price = gamma_price
+
+            # Strategy 3: from CLOB orderbook mid-price
+            if fill_price is None:
+                try:
+                    ob = self._clob_client.get_orderbook(token_id)
+                    bids = ob.get("bids", [])
+                    asks = ob.get("asks", [])
+                    best_bid = float(bids[0][0]) if bids else 0.0
+                    best_ask = float(asks[0][0]) if asks else 0.0
+                    if best_bid > 0 and best_ask > 0:
+                        fill_price = (best_bid + best_ask) / 2.0
+                    elif best_bid > 0:
+                        fill_price = best_bid
+                    elif best_ask > 0:
+                        fill_price = best_ask
+                except Exception:
+                    pass
+
+            # Strategy 4: reuse existing position avg_price if already tracked
+            position_key = f"{market_id}:{side}"
+            if fill_price is None and position_key in self._positions:
+                fill_price = self._positions[position_key].avg_price
+
+            # Final fallback
+            if fill_price is None or fill_price <= 0:
+                fill_price = FALLBACK_PRICE
+
+            cost_basis = amount * fill_price
+            current_price = gamma_price if gamma_price > 0 else fill_price
+
+            # ── Entry time from incoming transfers ────────────────────────
             entry_time = None
-            token_transfers = [t for t in transfers if any(m.get("tokenId") == token_id for m in t.get("erc1155Metadata", []))]
-            if token_transfers:
-                # Get the earliest transfer to this address
-                # alchemy_getAssetTransfers returns a blockNum (hex string), can use block timestamp if we fetched it, but we don't have timestamps directly. We'd have to use eth_getBlockByNumber or rely on a rough estimate if time is missing. Let's set it to datetime.now() for now if we can't parse it easily.
-                entry_time = datetime.now() 
-                
+            incoming = [t for t in transfers_by_token.get(token_id, [])
+                        if t.get("to", "").lower() == address.lower()]
+            if incoming:
+                timestamps = []
+                for t in incoming:
+                    ts = t.get("metadata", {}).get("blockTimestamp", "")
+                    if ts:
+                        try:
+                            timestamps.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
+                        except (ValueError, TypeError):
+                            pass
+                if timestamps:
+                    entry_time = min(timestamps)
+
             position = RealPosition(
                 market_id=market_id,
                 slug=slug,
                 question=question,
                 side=side,
                 shares=amount,
-                avg_price=avg_price,
+                avg_price=fill_price,
                 current_price=current_price,
                 cost_basis=cost_basis,
                 current_value=amount * current_price,
                 entry_time=entry_time,
             )
-            
-            # Track buy/sell dates in position if needed (can add attributes later)
-            self._positions[f"{market_id}:{side}"] = position
-            
-        log.info(f"Synced {len(balances)} live positions.")
+
+            self._positions[position_key] = position
+
+        log.info(f"Synced {len(balances)} live positions from chain.")
 
     def positions(self) -> list[RealPosition]:
         """Get all open positions."""
@@ -3005,6 +3237,114 @@ class RealTradingEngine:
 
         return order
 
+    def redeem_position(
+        self,
+        market_id: str,
+        side: str,
+    ) -> dict:
+        """
+        Redeem a resolved position on-chain via the CTF contract.
+
+        Converts winning polymarket position tokens back into USDC
+        by calling the Conditional Tokens Framework ``redeem`` method.
+
+        Parameters
+        ----------
+        market_id : str
+            Market/condition ID to redeem.
+        side : str
+            "UP" or "DOWN" — which side of the market to redeem.
+
+        Returns
+        -------
+        dict
+            ``{"success": bool, "tx_hash": str | None, "error": str | None}``
+
+        Raises
+        ------
+        PositionNotFound
+            If no position exists for the given market/side.
+        """
+        side = _validate_side(side)
+        position_key = f"{market_id}:{side}"
+
+        if position_key not in self._positions:
+            raise PositionNotFound(f"No position found for {market_id} {side}")
+
+        position = self._positions[position_key]
+        log.info("Redeeming position %s %s (shares=%.4f, resolved=%s)",
+                 position.slug, side, position.shares, position.resolved)
+
+        if not position.resolved:
+            log.warning("Position %s %s is not yet resolved, checking chain...",
+                        position.slug, side)
+            try:
+                self._alchemy_client.get_token_balances(self._wallet.address)
+            except Exception:
+                pass
+
+        if self._wallet._web3 is None:
+            self._wallet._init_web3()
+
+        tx_hash = None
+        try:
+            from web3 import Web3
+
+            ctf = self._wallet._ctf_contract
+            address = Web3.to_checksum_address(self._wallet.address)
+
+            condition_id = Web3.to_bytes(hexstr=market_id) if market_id.startswith("0x") else market_id.encode()
+            if len(condition_id) != 32:
+                condition_id = Web3.keccak(text=market_id)
+
+            parent_collection_id = "0x" + "0" * 64
+            index_set = 0 if side == "DOWN" else 1
+            index_sets = [index_set]
+
+            gas_estimate = ctf.functions.redeem(
+                condition_id,
+                parent_collection_id,
+                index_sets,
+            ).estimate_gas({'from': address})
+
+            tx_params = self._wallet._build_transaction_params(
+                gas_estimate=int(gas_estimate * 1.2),
+                to_address=self._wallet._ctf_address,
+            )
+
+            tx = ctf.functions.redeem(
+                condition_id,
+                parent_collection_id,
+                index_sets,
+            ).build_transaction(tx_params)
+
+            from eth_account import Account
+            signed_tx = Account.sign_transaction(tx, self._wallet._private_key)
+            tx_hash_raw = self._wallet._web3.eth.send_raw_transaction(signed_tx.raw_transaction)
+            tx_hash = tx_hash_raw.hex()
+
+            self._wallet._track_pending_transaction(tx_hash, tx_params['nonce'])
+            receipt = self._wallet.wait_for_transaction(tx_hash, timeout=120)
+
+            if receipt['status'] == 1:
+                position.resolved = True
+                position.outcome = "WON"
+                log.info("Position %s %s redeemed on-chain: tx=%s",
+                         position.slug, side, tx_hash)
+
+                del self._positions[position_key]
+
+                self.refresh_balance()
+
+                return {"success": True, "tx_hash": tx_hash, "error": None}
+            else:
+                log.error("Redeem transaction %s failed on-chain", tx_hash)
+                return {"success": False, "tx_hash": tx_hash, "error": "On-chain revert"}
+
+        except Exception as e:
+            log.error("Failed to redeem position %s %s: %s", position.slug, side, e)
+            return {"success": False, "tx_hash": tx_hash, "error": str(e)}
+
     def transfer_position(
         self,
         market,
@@ -3062,24 +3402,84 @@ class RealTradingEngine:
         log.info("Transferring %.1f%% (%.2f shares) of position %s %s to wallet %s",
                  transfer_pct * 100, shares_to_transfer, market.slug, side, target_wallet_address)
 
-        # This is a placeholder implementation
-        # In production, this would involve:
-        # 1. Using Web3.py to transfer tokens to target wallet
-        # 2. Updating position tracking in both wallets
-        # 3. Recording the transfer in the database
+        if self._wallet._web3 is None:
+            self._wallet._init_web3()
 
-        tx_details = {
-            "from_wallet": self._wallet.get_address(),
-            "to_wallet": target_wallet_address,
-            "market_id": market.id,
-            "side": side,
-            "shares": shares_to_transfer,
-            "tx_hash": None,  # Would be actual transaction hash
-            "status": "pending",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
+        from web3 import Web3
 
-        log.warning("Position transfer is a placeholder - needs blockchain implementation")
+        token_id = market.up_token if side == "UP" else market.down_token
+        token_id_int = int(token_id, 16) if token_id.startswith("0x") else int(token_id)
+        from_address = Web3.to_checksum_address(self._wallet.address)
+        to_address = Web3.to_checksum_address(target_wallet_address)
+        amount_raw = int(shares_to_transfer * 1_000_000)
+
+        try:
+            gas_estimate = self._wallet._ctf_contract.functions.safeTransferFrom(
+                from_address,
+                to_address,
+                token_id_int,
+                amount_raw,
+                b"",
+            ).estimate_gas({'from': from_address})
+
+            tx_params = self._wallet._build_transaction_params(
+                gas_estimate=int(gas_estimate * 1.2),
+                to_address=self._wallet._ctf_address,
+            )
+
+            tx = self._wallet._ctf_contract.functions.safeTransferFrom(
+                from_address,
+                to_address,
+                token_id_int,
+                amount_raw,
+                b"",
+            ).build_transaction(tx_params)
+
+            from eth_account import Account
+            signed_tx = Account.sign_transaction(tx, self._wallet._private_key)
+            tx_hash_raw = self._wallet._web3.eth.send_raw_transaction(signed_tx.raw_transaction)
+            tx_hash = tx_hash_raw.hex()
+
+            self._wallet._track_pending_transaction(tx_hash, tx_params['nonce'])
+            receipt = self._wallet.wait_for_transaction(tx_hash, timeout=120)
+
+            if receipt['status'] == 1:
+                position.shares -= shares_to_transfer
+                position.cost_basis = position.shares * position.avg_price
+                position.current_value = position.shares * position.current_price
+
+                del self._positions[position_key]
+
+                log.info("Transfer successful: %s %s -> %s (tx=%s)",
+                         market.slug, side, target_wallet_address, tx_hash)
+
+                tx_details = {
+                    "from_wallet": from_address,
+                    "to_wallet": to_address,
+                    "market_id": market.id,
+                    "side": side,
+                    "shares": shares_to_transfer,
+                    "tx_hash": tx_hash,
+                    "status": "confirmed",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            else:
+                raise RuntimeError("Transfer reverted on-chain")
+
+        except Exception as e:
+            log.error("Failed to transfer position %s %s: %s", market.slug, side, e)
+            tx_details = {
+                "from_wallet": from_address,
+                "to_wallet": to_address,
+                "market_id": market.id,
+                "side": side,
+                "shares": shares_to_transfer,
+                "tx_hash": None,
+                "status": "failed",
+                "error": str(e),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
         return tx_details
 
     def merge_positions(
