@@ -835,12 +835,12 @@ class TradeDatabase:
         int
             The current schema version.
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT MAX(version) FROM schema_version")
-        result = cursor.fetchone()
-        return result[0] if result[0] is not None else 0
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT MAX(version) FROM schema_version")
+            result = cursor.fetchone()
+            return result[0] if result[0] is not None else 0
     
     def _apply_migration(self, version: int, migration_sql: str) -> None:
         """
@@ -853,28 +853,28 @@ class TradeDatabase:
         migration_sql : str
             SQL statements to execute for the migration.
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        current_version = self.get_schema_version()
-        
-        if current_version >= version:
-            log.debug("Migration %d already applied (current version: %d)", version, current_version)
-            return
-        
-        log.info("Applying migration %d", version)
-        
-        try:
-            cursor.executescript(migration_sql)
-            cursor.execute(
-                "INSERT INTO schema_version (version) VALUES (?)",
-                (version,)
-            )
-            conn.commit()
-            log.info("Migration %d applied successfully", version)
-        except Exception as e:
-            conn.rollback()
-            log.warning("Migration %d skipped: %s", version, e)
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
+            
+            current_version = self.get_schema_version()
+            
+            if current_version >= version:
+                log.debug("Migration %d already applied (current version: %d)", version, current_version)
+                return
+            
+            log.info("Applying migration %d", version)
+            
+            try:
+                cursor.executescript(migration_sql)
+                cursor.execute(
+                    "INSERT INTO schema_version (version) VALUES (?)",
+                    (version,)
+                )
+                conn.commit()
+                log.info("Migration %d applied successfully", version)
+            except Exception as e:
+                conn.rollback()
+                log.warning("Migration %d skipped: %s", version, e)
     
     def run_migrations(self) -> None:
         """
@@ -963,85 +963,85 @@ class TradeDatabase:
     
     def refresh_materialized_views(self) -> None:
         """Refresh materialized views for common aggregations."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
         
-        # Refresh trade statistics by asset
-        cursor.execute("DELETE FROM trade_statistics_mv")
+            # Refresh trade statistics by asset
+            cursor.execute("DELETE FROM trade_statistics_mv")
         
-        cursor.execute("""
-            INSERT INTO trade_statistics_mv (asset, total_trades, wins, losses, win_rate, total_pnl, avg_pnl, last_updated)
-            SELECT 
-                SUBSTR(market_slug, 1, INSTR(market_slug, '-') - 1) as asset,
-                COUNT(*) as total_trades,
-                SUM(CASE WHEN outcome = 'WON' THEN 1 ELSE 0 END) as wins,
-                SUM(CASE WHEN outcome = 'LOST' THEN 1 ELSE 0 END) as losses,
-                CAST(SUM(CASE WHEN outcome = 'WON' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS REAL) as win_rate,
-                SUM(pnl) as total_pnl,
-                AVG(pnl) as avg_pnl,
-                datetime('now') as last_updated
-            FROM trades
-            GROUP BY asset
-        """)
+            cursor.execute("""
+                INSERT INTO trade_statistics_mv (asset, total_trades, wins, losses, win_rate, total_pnl, avg_pnl, last_updated)
+                SELECT 
+                    SUBSTR(market_slug, 1, INSTR(market_slug, '-') - 1) as asset,
+                    COUNT(*) as total_trades,
+                    SUM(CASE WHEN outcome = 'WON' THEN 1 ELSE 0 END) as wins,
+                    SUM(CASE WHEN outcome = 'LOST' THEN 1 ELSE 0 END) as losses,
+                    CAST(SUM(CASE WHEN outcome = 'WON' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS REAL) as win_rate,
+                    SUM(pnl) as total_pnl,
+                    AVG(pnl) as avg_pnl,
+                    datetime('now') as last_updated
+                FROM trades
+                GROUP BY asset
+            """)
         
-        # Refresh daily summary
-        cursor.execute("DELETE FROM daily_summary_mv")
+            # Refresh daily summary
+            cursor.execute("DELETE FROM daily_summary_mv")
         
-        cursor.execute("""
-            INSERT INTO daily_summary_mv (date, total_trades, total_pnl, total_fees, win_rate, last_updated)
-            SELECT 
-                DATE(timestamp) as date,
-                COUNT(*) as total_trades,
-                SUM(pnl) as total_pnl,
-                SUM(fee) as total_fees,
-                CAST(SUM(CASE WHEN outcome = 'WON' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS REAL) as win_rate,
-                datetime('now') as last_updated
-            FROM trades
-            GROUP BY DATE(timestamp)
-        """)
+            cursor.execute("""
+                INSERT INTO daily_summary_mv (date, total_trades, total_pnl, total_fees, win_rate, last_updated)
+                SELECT 
+                    DATE(timestamp) as date,
+                    COUNT(*) as total_trades,
+                    SUM(pnl) as total_pnl,
+                    SUM(fee) as total_fees,
+                    CAST(SUM(CASE WHEN outcome = 'WON' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS REAL) as win_rate,
+                    datetime('now') as last_updated
+                FROM trades
+                GROUP BY DATE(timestamp)
+            """)
         
-        conn.commit()
-        log.info("Materialized views refreshed")
+            conn.commit()
+            log.info("Materialized views refreshed")
     
     def get_trade_statistics_from_mv(self) -> Dict[str, Dict[str, Any]]:
         """Get trade statistics from materialized view (faster than calculating)."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT * FROM trade_statistics_mv")
-        
-        stats = {}
-        for row in cursor.fetchall():
-            stats[row['asset']] = {
-                'total_trades': row['total_trades'],
-                'wins': row['wins'],
-                'losses': row['losses'],
-                'win_rate': row['win_rate'],
-                'total_pnl': row['total_pnl'],
-                'avg_pnl': row['avg_pnl'],
-                'last_updated': row['last_updated']
-            }
-        
-        return stats
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT * FROM trade_statistics_mv")
+            
+            stats = {}
+            for row in cursor.fetchall():
+                stats[row['asset']] = {
+                    'total_trades': row['total_trades'],
+                    'wins': row['wins'],
+                    'losses': row['losses'],
+                    'win_rate': row['win_rate'],
+                    'total_pnl': row['total_pnl'],
+                    'avg_pnl': row['avg_pnl'],
+                    'last_updated': row['last_updated']
+                }
+            
+            return stats
     
     def get_daily_summary_from_mv(self) -> Dict[str, Dict[str, Any]]:
         """Get daily summary from materialized view."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT * FROM daily_summary_mv ORDER BY date DESC")
-        
-        summary = {}
-        for row in cursor.fetchall():
-            summary[row['date']] = {
-                'total_trades': row['total_trades'],
-                'total_pnl': row['total_pnl'],
-                'total_fees': row['total_fees'],
-                'win_rate': row['win_rate'],
-                'last_updated': row['last_updated']
-            }
-        
-        return summary
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT * FROM daily_summary_mv ORDER BY date DESC")
+            
+            summary = {}
+            for row in cursor.fetchall():
+                summary[row['date']] = {
+                    'total_trades': row['total_trades'],
+                    'total_pnl': row['total_pnl'],
+                    'total_fees': row['total_fees'],
+                    'win_rate': row['win_rate'],
+                    'last_updated': row['last_updated']
+                }
+            
+            return summary
     
     def start_background_optimization(self, interval_seconds: int = 3600) -> None:
         """
@@ -1165,29 +1165,32 @@ class TradeDatabase:
             Batch of trades for the asset.
         """
         offset = 0
-        while True:
-            conn = self._get_connection()
-            cursor = conn.cursor()
+        conn = self._get_connection()
+        try:
+            while True:
+                cursor = conn.cursor()
             
-            pattern = f"{asset.lower()}%"
-            cursor.execute("""
-                SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                       amount, shares, fee, outcome, pnl, timestamp, market_session
-                FROM trades
-                WHERE LOWER(market_slug) LIKE ?
-                ORDER BY timestamp DESC
-                LIMIT ? OFFSET ?
-            """, (pattern, batch_size, offset))
+                pattern = f"{asset.lower()}%"
+                cursor.execute("""
+                    SELECT id, market_slug, market_id, side, entry_price, exit_price,
+                           amount, shares, fee, outcome, pnl, timestamp, market_session
+                    FROM trades
+                    WHERE LOWER(market_slug) LIKE ?
+                    ORDER BY timestamp DESC
+                    LIMIT ? OFFSET ?
+                """, (pattern, batch_size, offset))
             
-            batch = []
-            for row in cursor.fetchall():
-                batch.append(self._row_to_trade_record(row))
+                batch = []
+                for row in cursor.fetchall():
+                    batch.append(self._row_to_trade_record(row))
             
-            if not batch:
-                break
+                if not batch:
+                    break
             
-            yield batch
-            offset += batch_size
+                yield batch
+                offset += batch_size
+        finally:
+            self._return_connection(conn)
     
     def enable_cache(self) -> None:
         """Enable query result caching."""
@@ -1245,10 +1248,10 @@ class TradeDatabase:
         
         def execute_query(index: int, query: str, params: tuple) -> None:
             """Execute a single query and store result."""
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            results[index] = cursor.fetchall()
+            with self._connection_ctx() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                results[index] = cursor.fetchall()
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
@@ -1354,13 +1357,13 @@ class TradeDatabase:
         This runs SQLite's ANALYZE command to update statistics
         that help the query planner choose optimal execution plans.
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("ANALYZE")
-        conn.commit()
-        
-        log.info("Database indexes analyzed")
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("ANALYZE")
+            conn.commit()
+            
+            log.info("Database indexes analyzed")
     
     def optimize_database(self) -> None:
         """
@@ -1371,14 +1374,14 @@ class TradeDatabase:
         - Update statistics
         - Defragment the database
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("PRAGMA optimize")
-        conn.commit()
-        
-        self._last_optimization = datetime.now(timezone.utc)
-        log.info("Database optimized")
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("PRAGMA optimize")
+            conn.commit()
+            
+            self._last_optimization = datetime.now(timezone.utc)
+            log.info("Database optimized")
     
     def get_index_info(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -1389,23 +1392,23 @@ class TradeDatabase:
         dict
             Dictionary with index names as keys and index details as values.
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
         
-        cursor.execute("""
-            SELECT name, tbl_name, sql 
-            FROM sqlite_master 
-            WHERE type='index' AND name NOT LIKE 'sqlite_%'
-        """)
+            cursor.execute("""
+                SELECT name, tbl_name, sql 
+                FROM sqlite_master 
+                WHERE type='index' AND name NOT LIKE 'sqlite_%'
+            """)
         
-        indexes = {}
-        for row in cursor.fetchall():
-            indexes[row["name"]] = {
-                "table": row["tbl_name"],
-                "sql": row["sql"],
-            }
+            indexes = {}
+            for row in cursor.fetchall():
+                indexes[row["name"]] = {
+                    "table": row["tbl_name"],
+                    "sql": row["sql"],
+                }
         
-        return indexes
+            return indexes
     
     def rebuild_index(self, index_name: str) -> None:
         """
@@ -1421,41 +1424,41 @@ class TradeDatabase:
         ValueError
             If the index doesn't exist.
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
         
-        # Validate index name using whitelist to prevent SQL injection
-        valid_indexes = {
-            "idx_market_slug": "CREATE INDEX idx_market_slug ON trades(market_slug)",
-            "idx_market_id": "CREATE INDEX idx_market_id ON trades(market_id)",
-            "idx_side": "CREATE INDEX idx_side ON trades(side)",
-            "idx_outcome": "CREATE INDEX idx_outcome ON trades(outcome)",
-            "idx_timestamp": "CREATE INDEX idx_timestamp ON trades(timestamp)",
-            "idx_duplicate_check": "CREATE INDEX idx_duplicate_check ON trades(market_id, side, timestamp)",
-            "idx_market_session": "CREATE INDEX idx_market_session ON trades(market_session)"
-        }
+            # Validate index name using whitelist to prevent SQL injection
+            valid_indexes = {
+                "idx_market_slug": "CREATE INDEX idx_market_slug ON trades(market_slug)",
+                "idx_market_id": "CREATE INDEX idx_market_id ON trades(market_id)",
+                "idx_side": "CREATE INDEX idx_side ON trades(side)",
+                "idx_outcome": "CREATE INDEX idx_outcome ON trades(outcome)",
+                "idx_timestamp": "CREATE INDEX idx_timestamp ON trades(timestamp)",
+                "idx_duplicate_check": "CREATE INDEX idx_duplicate_check ON trades(market_id, side, timestamp)",
+                "idx_market_session": "CREATE INDEX idx_market_session ON trades(market_session)"
+            }
         
-        if index_name not in valid_indexes:
-            raise ValueError(f"Invalid index name '{index_name}'. Valid options: {sorted(valid_indexes.keys())}")
+            if index_name not in valid_indexes:
+                raise ValueError(f"Invalid index name '{index_name}'. Valid options: {sorted(valid_indexes.keys())}")
         
-        # Check if index exists
-        cursor.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='index' AND name=?
-        """, (index_name,))
+            # Check if index exists
+            cursor.execute("""
+                SELECT name FROM sqlite_master 
+                WHERE type='index' AND name=?
+            """, (index_name,))
         
-        if not cursor.fetchone():
-            raise ValueError(f"Index '{index_name}' does not exist")
+            if not cursor.fetchone():
+                raise ValueError(f"Index '{index_name}' does not exist")
         
-        # Rebuild by dropping and recreating using validated index name
-        # SQLite doesn't support parameterized identifiers, but whitelist validation ensures safety
-        cursor.execute(f"DROP INDEX IF EXISTS {index_name}")
+            # Rebuild by dropping and recreating using validated index name
+            # SQLite doesn't support parameterized identifiers, but whitelist validation ensures safety
+            cursor.execute(f"DROP INDEX IF EXISTS {index_name}")
         
-        # Recreate based on the index type
-        cursor.execute(valid_indexes[index_name])
+            # Recreate based on the index type
+            cursor.execute(valid_indexes[index_name])
         
-        conn.commit()
-        log.info("Index '%s' rebuilt", index_name)
+            conn.commit()
+            log.info("Index '%s' rebuilt", index_name)
     
     def load_all_trades(self) -> List[TradeRecord]:
         """
@@ -1466,22 +1469,22 @@ class TradeDatabase:
         List[TradeRecord]
             All trades in the database.
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
         
-        cursor.execute("""
-            SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                   amount, shares, fee, outcome, pnl, timestamp, market_session
-            FROM trades
-            ORDER BY timestamp DESC
-        """)
+            cursor.execute("""
+                SELECT id, market_slug, market_id, side, entry_price, exit_price,
+                       amount, shares, fee, outcome, pnl, timestamp, market_session
+                FROM trades
+                ORDER BY timestamp DESC
+            """)
         
-        trades = []
-        for row in cursor.fetchall():
-            trades.append(self._row_to_trade_record(row))
+            trades = []
+            for row in cursor.fetchall():
+                trades.append(self._row_to_trade_record(row))
         
-        log.debug("Loaded %d trades from database", len(trades))
-        return trades
+            log.debug("Loaded %d trades from database", len(trades))
+            return trades
     
     def load_trades_by_market(self, market_slug: str) -> List[TradeRecord]:
         """
@@ -1497,22 +1500,22 @@ class TradeDatabase:
         List[TradeRecord]
             Trades for the specified market.
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
         
-        cursor.execute("""
-            SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                   amount, shares, fee, outcome, pnl, timestamp, market_session
-            FROM trades
-            WHERE market_slug = ?
-            ORDER BY timestamp DESC
-        """, (market_slug,))
+            cursor.execute("""
+                SELECT id, market_slug, market_id, side, entry_price, exit_price,
+                       amount, shares, fee, outcome, pnl, timestamp, market_session
+                FROM trades
+                WHERE market_slug = ?
+                ORDER BY timestamp DESC
+            """, (market_slug,))
         
-        trades = []
-        for row in cursor.fetchall():
-            trades.append(self._row_to_trade_record(row))
+            trades = []
+            for row in cursor.fetchall():
+                trades.append(self._row_to_trade_record(row))
         
-        return trades
+            return trades
     
     def load_trades_by_asset(self, asset: str) -> List[TradeRecord]:
         """
@@ -1528,24 +1531,24 @@ class TradeDatabase:
         List[TradeRecord]
             Trades for the specified asset.
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
         
-        # Match market_slug starting with asset (case-insensitive)
-        pattern = f"{asset.lower()}%"
-        cursor.execute("""
-            SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                   amount, shares, fee, outcome, pnl, timestamp, market_session
-            FROM trades
-            WHERE LOWER(market_slug) LIKE ?
-            ORDER BY timestamp DESC
-        """, (pattern,))
+            # Match market_slug starting with asset (case-insensitive)
+            pattern = f"{asset.lower()}%"
+            cursor.execute("""
+                SELECT id, market_slug, market_id, side, entry_price, exit_price,
+                       amount, shares, fee, outcome, pnl, timestamp, market_session
+                FROM trades
+                WHERE LOWER(market_slug) LIKE ?
+                ORDER BY timestamp DESC
+            """, (pattern,))
         
-        trades = []
-        for row in cursor.fetchall():
-            trades.append(self._row_to_trade_record(row))
+            trades = []
+            for row in cursor.fetchall():
+                trades.append(self._row_to_trade_record(row))
         
-        return trades
+            return trades
     
     def load_trades_by_side(self, side: str) -> List[TradeRecord]:
         """
@@ -1561,22 +1564,22 @@ class TradeDatabase:
         List[TradeRecord]
             Trades for the specified side.
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
         
-        cursor.execute("""
-            SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                   amount, shares, fee, outcome, pnl, timestamp, market_session
-            FROM trades
-            WHERE side = ?
-            ORDER BY timestamp DESC
-        """, (side.upper(),))
+            cursor.execute("""
+                SELECT id, market_slug, market_id, side, entry_price, exit_price,
+                       amount, shares, fee, outcome, pnl, timestamp, market_session
+                FROM trades
+                WHERE side = ?
+                ORDER BY timestamp DESC
+            """, (side.upper(),))
         
-        trades = []
-        for row in cursor.fetchall():
-            trades.append(self._row_to_trade_record(row))
+            trades = []
+            for row in cursor.fetchall():
+                trades.append(self._row_to_trade_record(row))
         
-        return trades
+            return trades
     
     def load_trades_by_outcome(self, outcome: str) -> List[TradeRecord]:
         """
@@ -1592,22 +1595,22 @@ class TradeDatabase:
         List[TradeRecord]
             Trades with the specified outcome.
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
         
-        cursor.execute("""
-            SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                   amount, shares, fee, outcome, pnl, timestamp, market_session
-            FROM trades
-            WHERE outcome = ?
-            ORDER BY timestamp DESC
-        """, (outcome.upper(),))
+            cursor.execute("""
+                SELECT id, market_slug, market_id, side, entry_price, exit_price,
+                       amount, shares, fee, outcome, pnl, timestamp, market_session
+                FROM trades
+                WHERE outcome = ?
+                ORDER BY timestamp DESC
+            """, (outcome.upper(),))
         
-        trades = []
-        for row in cursor.fetchall():
-            trades.append(self._row_to_trade_record(row))
+            trades = []
+            for row in cursor.fetchall():
+                trades.append(self._row_to_trade_record(row))
         
-        return trades
+            return trades
     
     def load_trades_by_market_session(self, market_session: str) -> List[TradeRecord]:
         """
@@ -1623,22 +1626,22 @@ class TradeDatabase:
         List[TradeRecord]
             Trades for the specified market session.
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
         
-        cursor.execute("""
-            SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                   amount, shares, fee, outcome, pnl, timestamp, market_session
-            FROM trades
-            WHERE market_session = ?
-            ORDER BY timestamp DESC
-        """, (market_session,))
+            cursor.execute("""
+                SELECT id, market_slug, market_id, side, entry_price, exit_price,
+                       amount, shares, fee, outcome, pnl, timestamp, market_session
+                FROM trades
+                WHERE market_session = ?
+                ORDER BY timestamp DESC
+            """, (market_session,))
         
-        trades = []
-        for row in cursor.fetchall():
-            trades.append(self._row_to_trade_record(row))
+            trades = []
+            for row in cursor.fetchall():
+                trades.append(self._row_to_trade_record(row))
         
-        return trades
+            return trades
     
     def load_trades_by_date_range(
         self,
@@ -1660,22 +1663,22 @@ class TradeDatabase:
         List[TradeRecord]
             Trades within the specified date range.
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
         
-        cursor.execute("""
-            SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                   amount, shares, fee, outcome, pnl, timestamp, market_session
-            FROM trades
-            WHERE timestamp >= ? AND timestamp <= ?
-            ORDER BY timestamp DESC
-        """, (start_date.isoformat(), end_date.isoformat()))
+            cursor.execute("""
+                SELECT id, market_slug, market_id, side, entry_price, exit_price,
+                       amount, shares, fee, outcome, pnl, timestamp, market_session
+                FROM trades
+                WHERE timestamp >= ? AND timestamp <= ?
+                ORDER BY timestamp DESC
+            """, (start_date.isoformat(), end_date.isoformat()))
         
-        trades = []
-        for row in cursor.fetchall():
-            trades.append(self._row_to_trade_record(row))
+            trades = []
+            for row in cursor.fetchall():
+                trades.append(self._row_to_trade_record(row))
         
-        return trades
+            return trades
     
     def load_trades(
         self,
@@ -1735,142 +1738,142 @@ class TradeDatabase:
             else:
                 self._cache_misses += 1
         
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
         
-        # Build query with filters
-        query = """
-            SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                   amount, shares, fee, outcome, pnl, timestamp, market_session
-            FROM trades
-        """
+            # Build query with filters
+            query = """
+                SELECT id, market_slug, market_id, side, entry_price, exit_price,
+                       amount, shares, fee, outcome, pnl, timestamp, market_session
+                FROM trades
+            """
         
-        params = []
-        where_clauses = []
+            params = []
+            where_clauses = []
         
-        if filters:
-            # Asset filter (pattern match on market_slug)
-            if "asset" in filters:
-                pattern = f"{filters['asset'].lower()}%"
-                where_clauses.append("LOWER(market_slug) LIKE ?")
-                params.append(pattern)
+            if filters:
+                # Asset filter (pattern match on market_slug)
+                if "asset" in filters:
+                    pattern = f"{filters['asset'].lower()}%"
+                    where_clauses.append("LOWER(market_slug) LIKE ?")
+                    params.append(pattern)
             
-            # Side filter
-            if "side" in filters:
-                where_clauses.append("side = ?")
-                params.append(filters["side"].upper())
+                # Side filter
+                if "side" in filters:
+                    where_clauses.append("side = ?")
+                    params.append(filters["side"].upper())
             
-            # Outcome filter
-            if "outcome" in filters:
-                where_clauses.append("outcome = ?")
-                params.append(filters["outcome"].upper())
+                # Outcome filter
+                if "outcome" in filters:
+                    where_clauses.append("outcome = ?")
+                    params.append(filters["outcome"].upper())
             
-            # P&L range filters
-            if "min_pnl" in filters:
-                where_clauses.append("pnl >= ?")
-                params.append(float(filters["min_pnl"]))
+                # P&L range filters
+                if "min_pnl" in filters:
+                    where_clauses.append("pnl >= ?")
+                    params.append(float(filters["min_pnl"]))
             
-            if "max_pnl" in filters:
-                where_clauses.append("pnl <= ?")
-                params.append(float(filters["max_pnl"]))
+                if "max_pnl" in filters:
+                    where_clauses.append("pnl <= ?")
+                    params.append(float(filters["max_pnl"]))
             
-            # Amount range filters
-            if "min_amount" in filters:
-                where_clauses.append("amount >= ?")
-                params.append(float(filters["min_amount"]))
+                # Amount range filters
+                if "min_amount" in filters:
+                    where_clauses.append("amount >= ?")
+                    params.append(float(filters["min_amount"]))
             
-            if "max_amount" in filters:
-                where_clauses.append("amount <= ?")
-                params.append(float(filters["max_amount"]))
+                if "max_amount" in filters:
+                    where_clauses.append("amount <= ?")
+                    params.append(float(filters["max_amount"]))
             
-            # Exact market_slug filter
-            if "market_slug" in filters:
-                where_clauses.append("market_slug = ?")
-                params.append(filters["market_slug"])
+                # Exact market_slug filter
+                if "market_slug" in filters:
+                    where_clauses.append("market_slug = ?")
+                    params.append(filters["market_slug"])
             
-            # Exact market_id filter
-            if "market_id" in filters:
-                where_clauses.append("market_id = ?")
-                params.append(filters["market_id"])
+                # Exact market_id filter
+                if "market_id" in filters:
+                    where_clauses.append("market_id = ?")
+                    params.append(filters["market_id"])
         
-        # Add WHERE clause if filters exist
-        if where_clauses:
-            query += " WHERE " + " AND ".join(where_clauses)
+            # Add WHERE clause if filters exist
+            if where_clauses:
+                query += " WHERE " + " AND ".join(where_clauses)
         
-        # Validate sort_by field
-        valid_sort_fields = {
-            "timestamp", "pnl", "amount", "entry_price", "shares", "fee",
-            "market_slug", "side", "outcome"
-        }
-        if sort_by not in valid_sort_fields:
-            raise ValueError(
-                f"Invalid sort_by field '{sort_by}'. "
-                f"Valid options: {sorted(valid_sort_fields)}"
+            # Validate sort_by field
+            valid_sort_fields = {
+                "timestamp", "pnl", "amount", "entry_price", "shares", "fee",
+                "market_slug", "side", "outcome"
+            }
+            if sort_by not in valid_sort_fields:
+                raise ValueError(
+                    f"Invalid sort_by field '{sort_by}'. "
+                    f"Valid options: {sorted(valid_sort_fields)}"
+                )
+        
+            # Validate sort_order
+            sort_order = sort_order.lower()
+            if sort_order not in ("asc", "desc"):
+                raise ValueError(f"sort_order must be 'asc' or 'desc', got '{sort_order}'")
+        
+            # Add ORDER BY clause using whitelist to prevent SQL injection
+            sort_field_map = {
+                "timestamp": "timestamp",
+                "pnl": "pnl",
+                "amount": "amount",
+                "entry_price": "entry_price",
+                "shares": "shares",
+                "fee": "fee",
+                "market_slug": "market_slug",
+                "side": "side",
+                "outcome": "outcome"
+            }
+            safe_sort_by = sort_field_map.get(sort_by)
+            if not safe_sort_by:
+                raise ValueError(
+                    f"Invalid sort_by field '{sort_by}'. "
+                    f"Valid options: {sorted(valid_sort_fields)}"
+                )
+            query += f" ORDER BY {safe_sort_by} {sort_order.upper()}"
+        
+            # Add LIMIT and OFFSET for pagination
+            if limit is not None:
+                if limit <= 0:
+                    raise ValueError(f"limit must be positive, got {limit}")
+                query += " LIMIT ?"
+                params.append(int(limit))
+        
+            if offset > 0:
+                query += " OFFSET ?"
+                params.append(int(offset))
+        
+            # Execute query
+            cursor.execute(query, params)
+        
+            # Convert rows to TradeRecord objects
+            trades = []
+            for row in cursor.fetchall():
+                trades.append(self._row_to_trade_record(row))
+        
+            log.debug(
+                "Loaded %d trades with filters=%s, sort_by=%s, limit=%s, offset=%d",
+                len(trades), filters, sort_by, limit, offset
             )
         
-        # Validate sort_order
-        sort_order = sort_order.lower()
-        if sort_order not in ("asc", "desc"):
-            raise ValueError(f"sort_order must be 'asc' or 'desc', got '{sort_order}'")
+            # Store in cache if enabled
+            if self._cache_enabled:
+                cache_key = self._generate_cache_key(filters, sort_by, sort_order, limit, offset)
+                # Implement LRU eviction if cache is full
+                if len(self._query_cache) >= self._cache_max_size:
+                    # Remove oldest entry (first in dict)
+                    oldest_key = next(iter(self._query_cache))
+                    self._query_cache.pop(oldest_key)
+                    self._cache_ttl.pop(oldest_key, None)
+                self._query_cache[cache_key] = trades
+                self._cache_ttl[cache_key] = time.time()
+                log.debug("Cached %d trades with key: %s", len(trades), cache_key)
         
-        # Add ORDER BY clause using whitelist to prevent SQL injection
-        sort_field_map = {
-            "timestamp": "timestamp",
-            "pnl": "pnl",
-            "amount": "amount",
-            "entry_price": "entry_price",
-            "shares": "shares",
-            "fee": "fee",
-            "market_slug": "market_slug",
-            "side": "side",
-            "outcome": "outcome"
-        }
-        safe_sort_by = sort_field_map.get(sort_by)
-        if not safe_sort_by:
-            raise ValueError(
-                f"Invalid sort_by field '{sort_by}'. "
-                f"Valid options: {sorted(valid_sort_fields)}"
-            )
-        query += f" ORDER BY {safe_sort_by} {sort_order.upper()}"
-        
-        # Add LIMIT and OFFSET for pagination
-        if limit is not None:
-            if limit <= 0:
-                raise ValueError(f"limit must be positive, got {limit}")
-            query += " LIMIT ?"
-            params.append(int(limit))
-        
-        if offset > 0:
-            query += " OFFSET ?"
-            params.append(int(offset))
-        
-        # Execute query
-        cursor.execute(query, params)
-        
-        # Convert rows to TradeRecord objects
-        trades = []
-        for row in cursor.fetchall():
-            trades.append(self._row_to_trade_record(row))
-        
-        log.debug(
-            "Loaded %d trades with filters=%s, sort_by=%s, limit=%s, offset=%d",
-            len(trades), filters, sort_by, limit, offset
-        )
-        
-        # Store in cache if enabled
-        if self._cache_enabled:
-            cache_key = self._generate_cache_key(filters, sort_by, sort_order, limit, offset)
-            # Implement LRU eviction if cache is full
-            if len(self._query_cache) >= self._cache_max_size:
-                # Remove oldest entry (first in dict)
-                oldest_key = next(iter(self._query_cache))
-                self._query_cache.pop(oldest_key)
-                self._cache_ttl.pop(oldest_key, None)
-            self._query_cache[cache_key] = trades
-            self._cache_ttl[cache_key] = time.time()
-            log.debug("Cached %d trades with key: %s", len(trades), cache_key)
-        
-        return trades
+            return trades
     
     def aggregate_trades(
         self,
@@ -2520,36 +2523,36 @@ class TradeDatabase:
         bool
             True if trade was deleted, False if not found.
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("DELETE FROM trades WHERE id = ?", (trade_id,))
-        conn.commit()
-        
-        deleted = cursor.rowcount > 0
-        if deleted:
-            # Invalidate cache on write
-            self._invalidate_cache()
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
             
-            # Trigger trade_deleted hooks if streaming is enabled
-            if self._streaming_enabled:
-                self._trigger_trade_deleted_hooks(trade_id)
+            cursor.execute("DELETE FROM trades WHERE id = ?", (trade_id,))
+            conn.commit()
             
-            log.debug("Trade deleted: ID=%d", trade_id)
-        return deleted
+            deleted = cursor.rowcount > 0
+            if deleted:
+                # Invalidate cache on write
+                self._invalidate_cache()
+                
+                # Trigger trade_deleted hooks if streaming is enabled
+                if self._streaming_enabled:
+                    self._trigger_trade_deleted_hooks(trade_id)
+                
+                log.debug("Trade deleted: ID=%d", trade_id)
+            return deleted
     
     def clear_all_trades(self) -> None:
         """Delete all trades from the database."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("DELETE FROM trades")
-        conn.commit()
-        
-        # Invalidate cache on write
-        self._invalidate_cache()
-        
-        log.info("All trades cleared from database")
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("DELETE FROM trades")
+            conn.commit()
+            
+            # Invalidate cache on write
+            self._invalidate_cache()
+            
+            log.info("All trades cleared from database")
     
     # Event Hooks for Real-time Synchronization
     
@@ -2772,33 +2775,33 @@ class TradeDatabase:
         List[Dict[str, Any]]
             List of recent changes with metadata.
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
         
-        cursor.execute("""
-            SELECT id, market_slug, market_id, side, outcome, pnl, 
-                   timestamp, created_at
-            FROM trades
-            ORDER BY created_at DESC
-            LIMIT ?
-        """, (limit,))
+            cursor.execute("""
+                SELECT id, market_slug, market_id, side, outcome, pnl, 
+                       timestamp, created_at
+                FROM trades
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (limit,))
         
-        changes = []
-        for row in cursor.fetchall():
-            changes.append({
-                "id": row["id"],
-                "market_slug": row["market_slug"],
-                "market_id": row["market_id"],
-                "side": row["side"],
-                "outcome": row["outcome"],
-                "pnl": row["pnl"],
-                "timestamp": row["timestamp"],
-                "created_at": row["created_at"],
-                "operation": "INSERT"  # Simulated operation type
-            })
+            changes = []
+            for row in cursor.fetchall():
+                changes.append({
+                    "id": row["id"],
+                    "market_slug": row["market_slug"],
+                    "market_id": row["market_id"],
+                    "side": row["side"],
+                    "outcome": row["outcome"],
+                    "pnl": row["pnl"],
+                    "timestamp": row["timestamp"],
+                    "created_at": row["created_at"],
+                    "operation": "INSERT"  # Simulated operation type
+                })
         
-        log.debug("Retrieved %d recent changes", len(changes))
-        return changes
+            log.debug("Retrieved %d recent changes", len(changes))
+            return changes
     
     # Monitoring and Observability
     
@@ -2819,10 +2822,15 @@ class TradeDatabase:
         >>> print(f"Cache hit rate: {metrics.cache_hit_rate}%")
         """
         # Get total trades count
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM trades")
-        total_trades = cursor.fetchone()[0]
+        with self._connection_ctx() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM trades")
+            total_trades = cursor.fetchone()[0]
+            
+            # Get WAL status
+            cursor.execute("PRAGMA journal_mode")
+            wal_mode = cursor.fetchone()[0]
+            wal_enabled = wal_mode.upper() == "WAL"
         
         # Get database size
         database_size_bytes = self.db_path.stat().st_size if self.db_path.exists() else 0
@@ -2833,11 +2841,6 @@ class TradeDatabase:
         
         # Calculate average query time
         avg_query_time_ms = (sum(self._query_times) / len(self._query_times)) if self._query_times else 0.0
-        
-        # Get WAL status
-        cursor.execute("PRAGMA journal_mode")
-        wal_mode = cursor.fetchone()[0]
-        wal_enabled = wal_mode.upper() == "WAL"
         
         return DatabaseMetrics(
             total_trades=total_trades,

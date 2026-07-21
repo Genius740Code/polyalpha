@@ -188,7 +188,7 @@ class ClobClient:
             Enable simulation mode (default: False)
         """
         self.api_key = api_key
-        self.private_key = private_key
+        self._private_key = private_key
         self.rpc_url = rpc_url
         self.api_secret = api_secret
         self.api_passphrase = api_passphrase
@@ -212,7 +212,7 @@ class ClobClient:
         if self._address is None:
             try:
                 from eth_account import Account
-                account = Account.from_key(self.private_key)
+                account = Account.from_key(self._private_key)
                 self._address = account.address
             except Exception:
                 if self.simulate:
@@ -224,6 +224,22 @@ class ClobClient:
                         "Install eth-account if missing: pip install eth-account"
                     )
         return self._address
+    
+    @property
+    def private_key(self) -> str:
+        """Get the private key."""
+        return self._private_key
+    
+    @private_key.setter
+    def private_key(self, value: str) -> None:
+        self._private_key = value
+    
+    def __repr__(self) -> str:
+        return (
+            f"ClobClient(base_url={self.base_url!r}, "
+            f"address={self.address!r}, "
+            f"simulate={self.simulate})"
+        )
 
     # ── Session & Request Helpers ──────────────────────────────────────────────
 

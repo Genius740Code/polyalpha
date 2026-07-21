@@ -689,9 +689,18 @@ class DataFeed:
             )
             return self._fetch_binance(asset)
 
-        # Run async WebSocket connection
+        # Run async WebSocket connection (safe for sync or async callers)
         try:
-            data = asyncio.run(self._fetch_scraping_async(asset))
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        try:
+            if loop and loop.is_running():
+                future = asyncio.run_coroutine_threadsafe(self._fetch_scraping_async(asset), loop)
+                data = future.result(timeout=30)
+            else:
+                data = asyncio.run(self._fetch_scraping_async(asset))
             return data
         except Exception as exc:
             self._log.error(f"Scraping WebSocket error: {exc}")

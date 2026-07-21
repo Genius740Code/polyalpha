@@ -1654,12 +1654,13 @@ class PaperEngine:
         """
         _validate_market(market)
         side = _validate_side(side)
+        wallet = self._get_active_wallet()
         key = f"{market.id}:{side}"
 
-        if key not in self._positions:
+        if key not in wallet._positions:
             raise ValueError(f"No position found for {market.slug} {side}")
 
-        position = self._positions[key]
+        position = wallet._positions[key]
         current_price = position.current_price
 
         if current_price <= 0:
@@ -1718,7 +1719,9 @@ class PaperEngine:
             net_amount = sell_amount - fee
 
         # Update balance (add proceeds)
-        self._balance += net_amount
+        wallet.balance += net_amount
+        if not self._use_multi_wallet:
+            self._balance = wallet.balance
 
         # Create sell order
         order_id = _new_id()
@@ -1735,7 +1738,7 @@ class PaperEngine:
             is_limit=False,
             filled_at=_now(),
         )
-        self._orders[order_id] = order
+        wallet._orders[order_id] = order
 
         # Reduce or close position
         closed_cost_basis = position.cost_basis
@@ -1747,10 +1750,10 @@ class PaperEngine:
             # Calculate P&L for the closed position (captured before shares reduced)
             pnl = net_amount - closed_cost_basis
             # Record P&L with risk manager
-            self._risk_manager.record_trade(pnl)
+            wallet.risk_manager.record_trade(pnl)
             log.info(
                 "Paper: closed position %s %s — proceeds $%.2f, balance $%.2f",
-                market.slug, side, net_amount, self._balance,
+                market.slug, side, net_amount, wallet.balance,
             )
             # Save trade to database if enabled
             self._save_trade_to_db(position)

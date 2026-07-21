@@ -33,6 +33,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from threading import Lock
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -198,6 +199,15 @@ class RealTradingConfig:
             raise ValueError(f"custom_fee_rate must be >= 0, got {self.custom_fee_rate}")
         if self.maker_fee_rate < 0:
             raise ValueError(f"maker_fee_rate must be >= 0, got {self.maker_fee_rate}")
+    
+    def __repr__(self) -> str:
+        """Safe repr that does not expose the private key."""
+        cls = self.__class__.__name__
+        fields = []
+        for field_name in ("rpc_url", "polymarket_api_key", "max_order_size",
+                          "position_sizing", "fixed_amount", "fee_mode"):
+            fields.append(f"{field_name}={getattr(self, field_name)!r}")
+        return f"{cls}({', '.join(fields)}, private_key='****')"
 
 
 # ── Dataclasses ────────────────────────────────────────────────────────────────
@@ -994,6 +1004,8 @@ class WalletManager:
         self._usdc_contract = None
         self._clob_contract = None
 
+        self._nonce_lock = Lock()
+        
         log.info("WalletManager initialized")
 
     @property
@@ -1160,17 +1172,18 @@ class WalletManager:
         int
             Next nonce to use
         """
-        # Get current network nonce
-        network_nonce = self._web3.eth.get_transaction_count(self._address)
-        
-        # Use the higher of network nonce or local nonce
-        if self._nonce < network_nonce:
-            self._nonce = network_nonce
-        
-        current_nonce = self._nonce
-        self._nonce += 1
-        
-        return current_nonce
+        with self._nonce_lock:
+            # Get current network nonce
+            network_nonce = self._web3.eth.get_transaction_count(self._address)
+            
+            # Use the higher of network nonce or local nonce
+            if self._nonce < network_nonce:
+                self._nonce = network_nonce
+            
+            current_nonce = self._nonce
+            self._nonce += 1
+            
+            return current_nonce
 
     def _track_pending_transaction(self, tx_hash: str, nonce: int) -> None:
         """

@@ -255,6 +255,7 @@ class CircuitBreaker:
             if self._state == CircuitBreakerState.OPEN:
                 if self._should_attempt_reset():
                     self._state = CircuitBreakerState.HALF_OPEN
+                    self._failure_count = 0
                     self._success_count = 0
                     log.info("CircuitBreaker '%s' transitioning to HALF_OPEN", self.name)
                 else:

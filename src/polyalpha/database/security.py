@@ -132,7 +132,7 @@ class DatabaseEncryption:
     Provides at-rest encryption for sensitive database fields and files.
     """
     
-    def __init__(self, key: Optional[bytes] = None, password: Optional[str] = None):
+    def __init__(self, key: Optional[bytes] = None, password: Optional[str] = None, salt: Optional[bytes] = None):
         """
         Initialize encryption manager.
         
@@ -144,6 +144,9 @@ class DatabaseEncryption:
         password : str, optional
             Password to derive encryption key from using PBKDF2.
             If provided, key parameter is ignored.
+        salt : bytes, optional
+            Salt for PBKDF2 key derivation. If not provided, a random salt
+            is generated. Must be persisted to enable decryption later.
         """
         if not CRYPTOGRAPHY_AVAILABLE:
             raise ImportError(
@@ -151,8 +154,10 @@ class DatabaseEncryption:
                 "Install it with: pip install cryptography"
             )
         
+        self._salt: Optional[bytes] = salt
+        
         if password:
-            self._key = self._derive_key_from_password(password)
+            self._key = self._derive_key_from_password(password, salt=salt)
         elif key:
             self._key = key
         else:
@@ -176,10 +181,16 @@ class DatabaseEncryption:
         -------
         bytes
             32-byte encryption key.
+        
+        Note
+        ----
+        The salt must be persisted alongside encrypted data. If salt is None,
+        a new random salt is generated and stored in self._salt so it can
+        be retrieved via get_salt() for subsequent derivations.
         """
         if salt is None:
             salt = secrets.token_bytes(16)
-        
+            self._salt = salt
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
@@ -207,8 +218,20 @@ class DatabaseEncryption:
                 "cryptography library is required for encryption. "
                 "Install it with: pip install cryptography"
             )
-        enc = DatabaseEncryption(password=password)
+        enc = DatabaseEncryption(password=password, salt=salt)
         return enc._key
+    
+    @staticmethod
+    def key_and_salt_from_password(password: str) -> tuple[bytes, bytes]:
+        """Derive encryption key and return both key and salt for persistence."""
+        if not CRYPTOGRAPHY_AVAILABLE:
+            raise ImportError(
+                "cryptography library is required for encryption. "
+                "Install it with: pip install cryptography"
+            )
+        salt = secrets.token_bytes(16)
+        enc = DatabaseEncryption(password=password, salt=salt)
+        return enc._key, salt
     
     def encrypt(self, data: str) -> bytes:
         """
@@ -311,6 +334,10 @@ class DatabaseEncryption:
     def get_key(self) -> bytes:
         """Get the encryption key."""
         return self._key
+    
+    def get_salt(self) -> Optional[bytes]:
+        """Get the salt used for key derivation (None if key was provided directly)."""
+        return self._salt
 
 
 class AuthenticationManager:
