@@ -6,6 +6,7 @@ from .real import (
     RealPosition,
     WalletManager,
 )
+from .wallet import PaperWallet, WalletSelectionStrategy
 from .auto_redeem import (
     AutoRedeemEngine,
     AutoRedeemConfig,
@@ -32,6 +33,8 @@ __all__ = [
     "RealOrder",
     "RealPosition",
     "WalletManager",
+    "PaperWallet",
+    "WalletSelectionStrategy",
     "AutoRedeemEngine",
     "AutoRedeemConfig",
     "RedeemablePosition",

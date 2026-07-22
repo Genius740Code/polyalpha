@@ -673,6 +673,50 @@ class PaperEngine:
         """Check if multi-wallet mode is enabled."""
         return self._use_multi_wallet
 
+    def _find_order_across_wallets(self, order_id: str) -> tuple["PaperOrder", "PaperWallet"]:
+        """
+        Find an order across all wallets (including single-wallet mode).
+
+        Returns (order, wallet) tuple or raises OrderNotFound.
+        """
+        if self._use_multi_wallet and self._wallet_manager:
+            for wallet in self._wallet_manager.get_all_wallets():
+                order = wallet._orders.get(order_id)
+                if order is not None:
+                    return order, wallet
+        else:
+            order = self._orders.get(order_id)
+            if order is not None:
+                return order, self._get_active_wallet()
+        raise OrderNotFound(f"No order found: {order_id}")
+
+    def _find_position_across_wallets(self, market_id: str, side: str) -> tuple["PaperPosition", "PaperWallet"]:
+        """
+        Find a position across all wallets (including single-wallet mode).
+
+        Returns (position, wallet) tuple or raises PositionNotFound.
+        """
+        key = f"{market_id}:{side}"
+        if self._use_multi_wallet and self._wallet_manager:
+            for wallet in self._wallet_manager.get_all_wallets():
+                pos = wallet._positions.get(key)
+                if pos is not None:
+                    return pos, wallet
+        else:
+            pos = self._positions.get(key)
+            if pos is not None:
+                return pos, self._get_active_wallet()
+        raise PositionNotFound(f"Position {key} not found")
+
+    def _get_all_orders_across_wallets(self) -> list["PaperOrder"]:
+        """Get all orders from all wallets."""
+        if self._use_multi_wallet and self._wallet_manager:
+            all_orders = []
+            for wallet in self._wallet_manager.get_all_wallets():
+                all_orders.extend(wallet._orders.values())
+            return all_orders
+        return list(self._orders.values())
+
     def _get_active_wallet(self) -> "PaperWallet":
         """
         Get the active wallet for trading operations.
@@ -706,12 +750,32 @@ class PaperEngine:
         """Current paper trading configuration."""
         return self._config
 
-    def set_balance(self, amount: float) -> None:
-        """Reset the paper balance to *amount*."""
+    def set_balance(self, amount: float, wallet_id: str | None = None) -> None:
+        """
+        Reset the paper balance to *amount*.
+
+        Parameters
+        ----------
+        amount : float
+            New balance amount
+        wallet_id : str, optional
+            Wallet to update. If None and in multi-wallet mode, distributes
+            equally across all wallets. In single-wallet mode, ignored.
+        """
         if amount < 0:
             raise ValueError("Balance cannot be negative")
-        self._balance = float(amount)
-        log.info("Paper: balance set to $%.2f", amount)
+        if self._use_multi_wallet and self._wallet_manager:
+            if wallet_id:
+                wallet = self._wallet_manager.get_wallet(wallet_id)
+                wallet.set_balance(float(amount))
+            else:
+                per_wallet = float(amount) / len(self._wallet_manager.wallets)
+                for w in self._wallet_manager.get_all_wallets():
+                    w.set_balance(per_wallet)
+            log.info("Paper: multi-wallet balance set to $%.2f", amount)
+        else:
+            self._balance = float(amount)
+            log.info("Paper: balance set to $%.2f", amount)
 
     def set_config(self, config: PaperConfig) -> None:
         """Update the paper trading configuration."""
@@ -723,6 +787,8 @@ class PaperEngine:
     def get_risk_summary(self) -> dict:
         """
         Get current risk management summary.
+
+        In multi-wallet mode, returns an aggregated summary across all wallets.
 
         Returns
         -------
@@ -736,6 +802,16 @@ class PaperEngine:
         >>> print(f"Trades today: {summary['daily_trades']}")
         >>> print(f"Remaining loss limit: ${summary['remaining_loss_limit']:.2f}")
         """
+        if self._use_multi_wallet and self._wallet_manager:
+            summaries = [w.risk_manager.get_summary() for w in self._wallet_manager.get_all_wallets()]
+            return {
+                "daily_pnl": sum(s.get("daily_pnl", 0.0) for s in summaries),
+                "daily_trades": sum(s.get("daily_trades", 0) for s in summaries),
+                "remaining_loss_limit": min(s.get("remaining_loss_limit", float('inf')) for s in summaries),
+                "remaining_trades": min(s.get("remaining_trades", float('inf')) for s in summaries),
+                "daily_loss_limit": summaries[0].get("daily_loss_limit", 0.0) if summaries else 0.0,
+                "max_trades_per_day": summaries[0].get("max_trades_per_day", 0) if summaries else 0,
+            }
         return self._risk_manager.get_summary()
 
     def reset_daily_limits(self) -> None:
@@ -749,7 +825,11 @@ class PaperEngine:
         -------
         >>> client.paper.reset_daily_limits()
         """
-        self._risk_manager.reset_daily_limits()
+        if self._use_multi_wallet and self._wallet_manager:
+            for wallet in self._wallet_manager.get_all_wallets():
+                wallet.risk_manager.reset_daily_limits()
+        else:
+            self._risk_manager.reset_daily_limits()
 
     # ── Pre-Trade Checks ─────────────────────────────────────────────────────────
 
@@ -894,8 +974,9 @@ class PaperEngine:
             total_fee = 0.0
             entry_price = position.avg_price
 
+            all_orders_map = {o.id: o for o in self._get_all_orders_across_wallets()}
             for order_id in position.order_ids:
-                order = self._orders.get(order_id)
+                order = all_orders_map.get(order_id)
                 if order:
                     total_amount += order.amount
                     total_fee += order.fee
@@ -1634,7 +1715,7 @@ class PaperEngine:
         )
         return order
 
-    def sell_position(self, market, side: str, amount: float | None = None) -> PaperOrder:
+    def sell_position(self, market, side: str, amount: float | None = None, wallet: Optional["PaperWallet"] = None) -> PaperOrder:
         """
         Sell/close a position (simulated sell for prediction markets).
 
@@ -1643,6 +1724,8 @@ class PaperEngine:
         market : Market object
         side   : "UP" or "DOWN" - which position to close
         amount : USDC to sell (optional, defaults to full position)
+        wallet : PaperWallet, optional
+            Wallet to use for the sale. If None, uses active wallet selection.
 
         Returns
         -------
@@ -1654,7 +1737,8 @@ class PaperEngine:
         """
         _validate_market(market)
         side = _validate_side(side)
-        wallet = self._get_active_wallet()
+        if wallet is None:
+            wallet = self._get_active_wallet()
         key = f"{market.id}:{side}"
 
         if key not in wallet._positions:
@@ -1705,7 +1789,7 @@ class PaperEngine:
                 is_limit=False,
                 filled_at=_now(),
             )
-            self._orders[order_id] = order
+            wallet._orders[order_id] = order
             return order
 
         # Calculate fee (selling also has fee)
@@ -1784,9 +1868,7 @@ class PaperEngine:
         """
         trail_distance = _validate_positive(float(trail_distance), "trail_distance")
 
-        order = self._orders.get(order_id)
-        if order is None:
-            raise OrderNotFound(f"No order found: {order_id}")
+        order, _ = self._find_order_across_wallets(order_id)
         if order.status != "filled":
             raise ValueError(f"Can only set trailing SL on filled orders, got status='{order.status}'")
 
@@ -1819,9 +1901,7 @@ class PaperEngine:
         """
         trail_distance = _validate_positive(float(trail_distance), "trail_distance")
 
-        order = self._orders.get(order_id)
-        if order is None:
-            raise OrderNotFound(f"No order found: {order_id}")
+        order, _ = self._find_order_across_wallets(order_id)
         if order.status != "filled":
             raise ValueError(f"Can only set trailing TP on filled orders, got status='{order.status}'")
 
@@ -1860,13 +1940,9 @@ class PaperEngine:
         _validate_market(market)
         side = _validate_side(side)
         stop_price = _validate_price(float(stop_price), "stop_price")
-        position_key = f"{market.id}:{side}"
         
-        if position_key not in self._positions:
-            raise PositionNotFound(f"No position found for {market.slug} {side}")
-        
-        position = self._positions[position_key]
-        position.stop_loss = stop_price
+        pos, _ = self._find_position_across_wallets(market.id, side)
+        pos.stop_loss = stop_price
         
         log.info("Stop loss set at $%.4f for %s %s", stop_price, market.slug, side)
 
@@ -1895,13 +1971,9 @@ class PaperEngine:
         _validate_market(market)
         side = _validate_side(side)
         profit_price = _validate_price(float(profit_price), "profit_price")
-        position_key = f"{market.id}:{side}"
         
-        if position_key not in self._positions:
-            raise PositionNotFound(f"No position found for {market.slug} {side}")
-        
-        position = self._positions[position_key]
-        position.take_profit = profit_price
+        pos, _ = self._find_position_across_wallets(market.id, side)
+        pos.take_profit = profit_price
         
         log.info("Take profit set at $%.4f for %s %s", profit_price, market.slug, side)
 
@@ -1930,12 +2002,8 @@ class PaperEngine:
         _validate_market(market)
         side = _validate_side(side)
         trail_distance = _validate_positive(float(trail_distance), "trail_distance")
-        position_key = f"{market.id}:{side}"
         
-        if position_key not in self._positions:
-            raise PositionNotFound(f"No position found for {market.slug} {side}")
-        
-        position = self._positions[position_key]
+        position, _ = self._find_position_across_wallets(market.id, side)
         
         # Add trailing stop fields to position if not already present
         if not hasattr(position, 'trail_sl'):
@@ -2110,7 +2178,9 @@ class PaperEngine:
         )
         main_order.oco_order_id = oco_id
         oco_order.oco_order_id = main_order.id
-        self._orders[oco_id] = oco_order
+        # Store OCO order in the same wallet as the main order
+        _, oco_wallet = self._find_order_across_wallets(main_order.id)
+        oco_wallet._orders[oco_id] = oco_order
 
         log.info(
             "Paper: OCO orders created %s / %s SL=%.3f TP=%.3f",
@@ -2176,7 +2246,9 @@ class PaperEngine:
         from ..report.terminal import render_positions
 
         positions = self.all_positions() if show_all else self.positions()
-        render_positions(positions, self._orders, show_all=show_all, verbose=verbose)
+        all_orders = self._get_all_orders_across_wallets()
+        orders_dict = {o.id: o for o in all_orders}
+        render_positions(positions, orders_dict, show_all=show_all, verbose=verbose)
 
     def position_history(self) -> dict:
         """
@@ -2202,13 +2274,14 @@ class PaperEngine:
         losses = [p for p in closed_pos if p.outcome == "LOST"]
 
         # Calculate holding times for closed positions
+        all_orders_map = {o.id: o for o in self._get_all_orders_across_wallets()}
         holding_times = []
         for pos in closed_pos:
             if pos.order_ids:
                 fill_times = [
-                    self._orders[oid].filled_at 
-                    for oid in pos.order_ids 
-                    if oid in self._orders and self._orders[oid].filled_at
+                    all_orders_map[oid].filled_at
+                    for oid in pos.order_ids
+                    if oid in all_orders_map and all_orders_map[oid].filled_at
                 ]
                 if fill_times:
                     holding_time = (max(fill_times) - min(fill_times)).total_seconds()
@@ -2312,20 +2385,28 @@ class PaperEngine:
         # Validate prices
         up_price = _validate_price(float(up_price), "up_price")
         down_price = _validate_price(float(down_price), "down_price")
-        
-        # Update live prices for all open positions in this market
-        for pos in self._positions.values():
+
+        if self._use_multi_wallet and self._wallet_manager:
+            for wallet in self._wallet_manager.get_all_wallets():
+                self._check_limits_for_wallet(wallet, market_id, up_price, down_price)
+        else:
+            self._check_limits_for_wallet(self._get_active_wallet(), market_id, up_price, down_price)
+
+    def _check_limits_for_wallet(self, wallet, market_id: str, up_price: float, down_price: float) -> None:
+        """Check limits for a single wallet."""
+        # Update live prices for all open positions in this wallet/market
+        for pos in wallet._positions.values():
             if pos.market_id == market_id and not pos.resolved:
                 pos.current_price = up_price if pos.side == "UP" else down_price
 
         # Check and fill pending limit orders
-        for order in list(self._orders.values()):
+        for order in list(wallet._orders.values()):
             if order.status != "open" or order.market_id != market_id:
                 continue
-            
+
             # Increment check count
             order.check_count += 1
-            
+
             # Check if we should skip based on check_mode
             if not self._should_check_order(order):
                 log.debug(
@@ -2333,20 +2414,20 @@ class PaperEngine:
                     order.id[:8], order.check_count, self._config.check_mode
                 )
                 continue
-            
+
             current = up_price if order.side == "UP" else down_price
             if current >= order.price:
                 # Check time window before filling
                 if self._is_within_time_window(order):
-                    self._fill_limit(order, current)
+                    self._fill_limit(order, current, wallet=wallet)
                 else:
                     log.debug(
                         "Paper: limit order %s not filled - outside time window",
                         order.id[:8]
                     )
 
-        # Check TP/SL on filled orders
-        self._check_tp_sl(market_id, up_price, down_price)
+        # Check TP/SL on filled orders in this wallet
+        self._check_tp_sl_for_wallet(wallet, market_id, up_price, down_price)
 
     def _is_within_time_window(self, order: PaperOrder) -> bool:
         """
@@ -2408,11 +2489,19 @@ class PaperEngine:
 
     def _check_tp_sl(self, market_id: str, up_price: float, down_price: float) -> None:
         """
-        Check and trigger TP/SL orders, update trailing stops.
+        Check and trigger TP/SL orders across all wallets.
         
         This method is called by check_limits on every price update.
         """
-        for order in list(self._orders.values()):
+        if self._use_multi_wallet and self._wallet_manager:
+            for wallet in self._wallet_manager.get_all_wallets():
+                self._check_tp_sl_for_wallet(wallet, market_id, up_price, down_price)
+        else:
+            self._check_tp_sl_for_wallet(self._get_active_wallet(), market_id, up_price, down_price)
+
+    def _check_tp_sl_for_wallet(self, wallet, market_id: str, up_price: float, down_price: float) -> None:
+        """Check and trigger TP/SL orders for a single wallet."""
+        for order in list(wallet._orders.values()):
             # Only check filled orders with TP/SL set
             if order.status != "filled" or order.market_id != market_id:
                 continue
@@ -2494,13 +2583,16 @@ class PaperEngine:
                 
                 # Cancel OCO linked order if exists
                 if order.oco_order_id and order.oco_order_id != order.id:
-                    oco_order = self._orders.get(order.oco_order_id)
-                    if oco_order and oco_order.status == "filled":
-                        oco_order.stop_loss = None
-                        oco_order.take_profit = None
-                        oco_order.trail_sl = None
-                        oco_order.trail_tp = None
-                        log.info("Paper: cancelled OCO linked order %s", order.oco_order_id[:8])
+                    try:
+                        oco_order, _ = self._find_order_across_wallets(order.oco_order_id)
+                        if oco_order and oco_order.status == "filled":
+                            oco_order.stop_loss = None
+                            oco_order.take_profit = None
+                            oco_order.trail_sl = None
+                            oco_order.trail_tp = None
+                            log.info("Paper: cancelled OCO linked order %s", order.oco_order_id[:8])
+                    except OrderNotFound:
+                        pass
                 
                 # Execute sell to close position
                 try:
@@ -2510,6 +2602,7 @@ class PaperEngine:
                             'slug': order.slug,
                         })(),
                         side=order.side,
+                        wallet=wallet,
                     )
                 except ValueError as e:
                     log.warning("Paper: failed to sell position on %s trigger: %s", triggered, e)
@@ -2623,7 +2716,8 @@ class PaperEngine:
         print(div)
         print("  POLYALPHA — PAPER TRADING SUMMARY")
         print(div)
-        print(f"  {'Balance':<22} ${self._balance:>10.2f}")
+        current_balance = self.balance
+        print(f"  {'Balance':<22} ${current_balance:>10.2f}")
         print(f"  {'Total invested':<22} ${total_invested:>10.2f}")
         print(f"  {'Total fees paid':<22} ${total_fees:>10.4f}")
         print(f"  {'Total rebates earned':<22} ${total_rebates:>10.4f}")
@@ -2733,13 +2827,27 @@ class PaperEngine:
         )
         return order
 
-    def _fill_limit(self, order: PaperOrder, current_price: float) -> None:
+    def _fill_limit(self, order: PaperOrder, current_price: float, wallet: Optional["PaperWallet"] = None) -> None:
         """Fill a pending limit order at *current_price* (balance already reserved)."""
+        # Find the wallet this order belongs to
+        if wallet is None:
+            try:
+                _, wallet = self._find_order_across_wallets(order.id)
+            except OrderNotFound:
+                log.error("Paper: order %s not found in any wallet, cannot fill", order.id[:8])
+                order.status = "cancelled"
+                return
+
+        def _refund(w: "PaperWallet", order: PaperOrder) -> None:
+            w.balance += order.amount
+            if not self._use_multi_wallet:
+                self._balance = w.balance
+
         # Validate current price
         if current_price <= 0:
             log.warning("Paper: invalid current price %.4f for limit order %s, cancelling", current_price, order.id[:8])
             order.status = "cancelled"
-            self._balance += order.amount  # refund
+            _refund(wallet, order)
             return
         
         # Check fill probability
@@ -2749,7 +2857,7 @@ class PaperEngine:
                 order.id[:8], self._config.fill_probability
             )
             order.status = "cancelled"
-            self._balance += order.amount  # refund
+            _refund(wallet, order)
             return
 
         # Apply slippage to limit order fill
@@ -2760,7 +2868,7 @@ class PaperEngine:
                 order.id[:8]
             )
             order.status = "cancelled"
-            self._balance += order.amount  # refund
+            _refund(wallet, order)
             return
 
         # Calculate fee and rebate
@@ -2773,7 +2881,7 @@ class PaperEngine:
                 order.id[:8], order.amount, actual_price
             )
             order.status = "cancelled"
-            self._balance += order.amount  # refund
+            _refund(wallet, order)
             return
         
         fee, rebate_amount, rebate_rate, fee_type = self._calculate_fee(order.amount, actual_price, shares, is_maker=True)
@@ -2796,13 +2904,13 @@ class PaperEngine:
         order.rebate_amount = rebate_amount
         order.rebate_rate = rebate_rate
 
-        # Resolve the question string from any existing position in this market
+        # Resolve the question string from any existing position in this wallet/market
         question = next(
-            (p.question for p in self._positions.values() if p.market_id == order.market_id),
+            (p.question for p in wallet._positions.values() if p.market_id == order.market_id),
             "",
         )
         self._upsert_position(
-            order.market_id, order.slug, question, order.side, shares, actual_price, order.id,
+            order.market_id, order.slug, question, order.side, shares, actual_price, order.id, wallet=wallet,
         )
         log.info(
             "Paper: limit filled %s %.4f shares @ %.3f  fee=$%.4f  rebate=$%.4f",
