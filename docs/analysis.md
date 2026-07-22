@@ -3,7 +3,7 @@
 The analysis module provides data fetching, indicator calculation, signal generation, and delta change analysis. Access via `polyalpha.analysis` or direct imports.
 
 ```python
-from polyalpha.analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator, DeltaCalculator
+from polyalpha.analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator, DeltaCalculator, ChainlinkStreamer, ChainlinkStreamerConfig
 ```
 
 ---
@@ -512,6 +512,129 @@ simple = delta.delta()
 pct_change = delta.delta_percent()
 acceleration = delta.delta_acceleration()
 smoothed = delta.delta_smoothed(period=5, smooth_period=3)
+```
+
+---
+
+## ChainlinkStreamer
+
+Real-time Chainlink price streaming from Polymarket WebSocket.
+
+```python
+from polyalpha.analysis import ChainlinkStreamer, ChainlinkStreamerConfig
+```
+
+### ChainlinkStreamerConfig
+
+Configuration for the price streamer.
+
+```python
+config = ChainlinkStreamerConfig(
+    ws_url="wss://ws-live-data.polymarket.com",
+    symbol_map={
+        "BTC": "btc/usd",
+        "ETH": "eth/usd",
+        "SOL": "sol/usd",
+        "XRP": "xrp/usd",
+        "DOGE": "doge/usd",
+    },
+    timeout=30,
+    reconnect_delay=5.0,
+)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `ws_url` | `str` | `"wss://ws-live-data.polymarket.com"` | Polymarket WebSocket URL |
+| `symbol_map` | `dict` | BTC, ETH, SOL, XRP, DOGE | Asset to WebSocket symbol mapping |
+| `timeout` | `int` | `30` | WebSocket timeout in seconds |
+| `reconnect_delay` | `float` | `5.0` | Reconnection delay in seconds |
+
+### ChainlinkStreamer
+
+Stream live Chainlink prices from Polymarket WebSocket.
+
+```python
+streamer = ChainlinkStreamer()
+```
+
+#### Events
+
+| Event | Callback Signature | Description |
+|-------|-------------------|-------------|
+| `price` | `(symbol: str, price: float, timestamp: datetime)` | Price update |
+| `error` | `(exc: Exception)` | Connection or parsing error |
+| `connect` | `()` | Successful connection |
+| `disconnect` | `()` | Connection lost |
+
+#### Methods
+
+##### `on(event)`
+
+Register a callback for an event.
+
+```python
+@streamer.on("price")
+def on_price(symbol: str, price: float, timestamp: datetime):
+    print(f"{symbol}: ${price:.2f}")
+```
+
+##### `start(symbol, background=False)`
+
+Start streaming prices for a symbol.
+
+```python
+# Blocking mode
+streamer.start("BTC")
+
+# Background mode
+streamer.start("BTC", background=True)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `symbol` | `str` | — | Asset symbol (e.g., `"BTC"`, `"ETH"`) |
+| `background` | `bool` | `False` | Run in background thread if True |
+
+##### `stop()`
+
+Stop streaming.
+
+```python
+streamer.stop()
+```
+
+### Example
+
+```python
+from polyalpha.analysis import ChainlinkStreamer
+
+# Create streamer
+streamer = ChainlinkStreamer()
+
+# Register callbacks
+@streamer.on("price")
+def on_price(symbol: str, price: float, timestamp):
+    print(f"[{timestamp.strftime('%H:%M:%S')}] {symbol}: ${price:.2f}")
+
+@streamer.on("error")
+def on_error(exc: Exception):
+    print(f"Error: {exc}")
+
+@streamer.on("connect")
+def on_connect():
+    print("Connected")
+
+# Start streaming
+streamer.start("BTC")
+```
+
+### Requirements
+
+Requires `websockets` library:
+
+```bash
+pip install websockets>=12.0
 ```
 
 ---

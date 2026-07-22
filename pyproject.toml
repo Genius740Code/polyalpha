@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polyalpha"
-version = "0.2.01"
+version = "0.2.2"
 description = "Python SDK for Polymarket — market discovery, real-time price streaming, and paper trading"
 readme = "README.md"
 license = {file = "License.md"}

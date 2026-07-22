@@ -59,6 +59,7 @@ from .data_feed import DataFeed, DataFeedConfig
 from .delta import DeltaCalculator
 from .indicators import IndicatorCalculator
 from .signals import SignalGenerator
+from .streaming import ChainlinkStreamer, ChainlinkStreamerConfig
 
 __all__ = [
     "DataFeed",
@@ -66,4 +67,6 @@ __all__ = [
     "DeltaCalculator",
     "IndicatorCalculator",
     "SignalGenerator",
+    "ChainlinkStreamer",
+    "ChainlinkStreamerConfig",
 ]

@@ -68,8 +68,8 @@ class SensitiveDataFilter(logging.Filter):
         # Transaction hashes (0x followed by 64 hex chars) - check this before private keys
         (r'0x[a-f0-9]{64}', lambda m: f"{m.group(0)[:10]}...{m.group(0)[-4:]}"),
         # Private keys (long hex strings, typically 64+ chars, but not starting with 0x to avoid conflict)
-        # Negative lookbehind excludes content hashes (sha256:, md5:, hash=, etc.)
-        (r'(?<!sha256:|md5:|sha1:|hash=|checksum=|digest=)\b[a-f0-9]{64,}\b', lambda m: f"{m.group(0)[:8]}...REDACTED"),
+        # Use positive lookahead to exclude content hashes (sha256:, md5:, hash=, etc.)
+        (r'\b(?!(?:sha256:|md5:|sha1:|hash=|checksum=|digest=))[a-f0-9]{64,}\b', lambda m: f"{m.group(0)[:8]}...REDACTED"),
         # API keys in common formats
         (r'api_key["\']?\s*[:=]\s*["\']?[^"\']{8,}["\']?', 'api_key=***REDACTED***'),
         (r'API[_-]?KEY["\']?\s*[:=]\s*["\']?[^"\']{8,}["\']?', 'API_KEY=***REDACTED***'),

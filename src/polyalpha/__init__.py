@@ -139,7 +139,7 @@ from .trading.real import RealTradingConfig, RealOrder, RealPosition, WalletMana
 from .trading.auto_redeem import AutoRedeemConfig
 from .report import ReportPreset
 from .bots import Sniper, Tracker
-from .analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator
+from .analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator, ChainlinkStreamer, ChainlinkStreamerConfig
 from .database import TradeDatabase
 from .orderbook import (
     BacktestEngine,
@@ -192,7 +192,7 @@ from .ai import (
     TradingSignal,
 )
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 __all__ = [
     # Main entry point
@@ -245,6 +245,8 @@ __all__ = [
     "DataFeedConfig",
     "IndicatorCalculator",
     "SignalGenerator",
+    "ChainlinkStreamer",
+    "ChainlinkStreamerConfig",
     # AI
     "OpenRouterClient",
     "MarketAnalysis",
