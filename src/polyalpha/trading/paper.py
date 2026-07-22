@@ -772,10 +772,10 @@ class PaperEngine:
                 per_wallet = float(amount) / len(self._wallet_manager.wallets)
                 for w in self._wallet_manager.get_all_wallets():
                     w.set_balance(per_wallet)
-            log.info("Paper: multi-wallet balance set to $%.2f", amount)
+            log.debug("Paper: multi-wallet balance set to $%.2f", amount)
         else:
             self._balance = float(amount)
-            log.info("Paper: balance set to $%.2f", amount)
+            log.debug("Paper: balance set to $%.2f", amount)
 
     def set_config(self, config: PaperConfig) -> None:
         """Update the paper trading configuration."""
@@ -910,7 +910,7 @@ class PaperEngine:
 
         # Log warnings if any
         if checks["warnings"]:
-            log.info("Paper: pre-trade checks warnings: %s", checks["warnings"])
+            log.debug("Paper: pre-trade checks warnings: %s", checks["warnings"])
 
         return checks
 
@@ -1219,7 +1219,7 @@ class PaperEngine:
         # Check if price moved too much (no fill)
         price_change_pct = abs(actual_price - target_price) / target_price
         if price_change_pct > self._config.max_slippage_no_fill:
-            log.info(
+            log.debug(
                 "Paper: slippage %.2f%% exceeds max %.2f%% - order not filled",
                 price_change_pct * 100,
                 self._config.max_slippage_no_fill * 100
@@ -1401,7 +1401,7 @@ class PaperEngine:
         # Apply slippage if configured
         actual_price, filled = self._apply_slippage(price, side)
         if not filled:
-            log.info("Paper: market order not filled due to slippage threshold")
+            log.debug("Paper: market order not filled due to slippage threshold")
             # Create a cancelled order
             order_id = _new_id()
             order = PaperOrder(
@@ -1501,7 +1501,7 @@ class PaperEngine:
         wallet.balance -= amount  # reserve
         if not self._use_multi_wallet:
             self._balance = wallet.balance
-        log.info(
+        log.debug(
             "Paper: limit %s @ %.3f $%.2f reserved — balance $%.2f",
             side, price, amount, wallet.balance,
         )
@@ -1659,7 +1659,7 @@ class PaperEngine:
         self._apply_execution_delay()
         actual_price, filled = self._apply_slippage(price, side)
         if not filled:
-            log.info("Paper: market order not filled due to slippage threshold")
+            log.debug("Paper: market order not filled due to slippage threshold")
             order_id = _new_id()
             order = PaperOrder(
                 id=order_id,
@@ -1774,7 +1774,7 @@ class PaperEngine:
         self._apply_execution_delay()
         actual_price, filled = self._apply_slippage(current_price, side)
         if not filled:
-            log.info("Paper: sell order not filled due to slippage threshold")
+            log.debug("Paper: sell order not filled due to slippage threshold")
             order_id = _new_id()
             order = PaperOrder(
                 id=order_id,
@@ -2575,7 +2575,7 @@ class PaperEngine:
             # Execute triggered order
             if triggered:
                 order.tp_sl_triggered_by = triggered
-                log.info(
+                log.debug(
                     "Paper: %s triggered for order %s @ %.3f (trigger: %.3f)",
                     "STOP-LOSS" if triggered == "sl" else "TAKE-PROFIT",
                     order.id[:8], current_price, sl_trigger if triggered == "sl" else tp_trigger,
@@ -2821,7 +2821,7 @@ class PaperEngine:
         wallet._orders[order.id] = order
 
         self._upsert_position(market.id, market.slug, market.question, side, shares, price, order.id, wallet=wallet)
-        log.info(
+        log.debug(
             "Paper: filled %s %.4f shares @ %.3f  fee=$%.4f  rebate=$%.4f  balance=$%.2f",
             side, shares, price, fee, rebate_amount, wallet.balance,
         )
@@ -2852,7 +2852,7 @@ class PaperEngine:
         
         # Check fill probability
         if not self._check_fill_probability():
-            log.info(
+            log.debug(
                 "Paper: limit order %s not filled due to fill probability %.2f",
                 order.id[:8], self._config.fill_probability
             )
@@ -2863,7 +2863,7 @@ class PaperEngine:
         # Apply slippage to limit order fill
         actual_price, filled = self._apply_slippage(current_price, order.side)
         if not filled:
-            log.info(
+            log.debug(
                 "Paper: limit order %s not filled due to slippage threshold",
                 order.id[:8]
             )
@@ -2912,7 +2912,7 @@ class PaperEngine:
         self._upsert_position(
             order.market_id, order.slug, question, order.side, shares, actual_price, order.id, wallet=wallet,
         )
-        log.info(
+        log.debug(
             "Paper: limit filled %s %.4f shares @ %.3f  fee=$%.4f  rebate=$%.4f",
             order.side, shares, actual_price, fee, rebate_amount,
         )

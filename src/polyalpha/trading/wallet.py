@@ -359,8 +359,8 @@ class RealWallet:
         self.balance = self.wallet_manager.get_balance()
         self.allowance = self.wallet_manager.get_allowance()
         if self.config and self.config.log_balance_updates:
-            log.info("RealWallet %s: balance=%.2f, allowance=%.2f",
-                     self.wallet_id, self.balance, self.allowance)
+            log.debug("RealWallet %s: balance=%.2f, allowance=%.2f",
+                      self.wallet_id, self.balance, self.allowance)
 
     def get_summary(self) -> dict:
         """Get wallet summary statistics."""

@@ -398,13 +398,13 @@ class Sniper:
             # Check RSI
             if self.config.ta_rsi_threshold is not None:
                 rsi_ok = self._ta_signals.rsi_above(self.config.ta_rsi_threshold)
-                self._log.info("TA: RSI > %.1f: %s", self.config.ta_rsi_threshold, rsi_ok)
+                self._log.debug("TA: RSI > %.1f: %s", self.config.ta_rsi_threshold, rsi_ok)
                 conditions_met = conditions_met and rsi_ok
 
             # Check SMA
             if self.config.ta_sma_period is not None:
                 sma_ok = self._ta_signals.price_above_sma(self.config.ta_sma_period)
-                self._log.info("TA: Price > SMA(%d): %s", self.config.ta_sma_period, sma_ok)
+                self._log.debug("TA: Price > SMA(%d): %s", self.config.ta_sma_period, sma_ok)
                 conditions_met = conditions_met and sma_ok
 
             return conditions_met
@@ -589,7 +589,7 @@ class Sniper:
             return False
         
         if current_session not in self.config.allowed_market_sessions:
-            self._log.info(
+            self._log.debug(
                 "Current session '%s' not in allowed sessions %s, skipping trade",
                 current_session,
                 self.config.allowed_market_sessions
@@ -703,7 +703,7 @@ class Sniper:
             if self._check_ta_conditions():
                 self._place_order()
             else:
-                self._log.info("Technical analysis conditions not met, skipping entry")
+                self._log.debug("Technical analysis conditions not met, skipping entry")
 
     # ── Window Management ─────────────────────────────────────────────────────
 
@@ -755,7 +755,7 @@ class Sniper:
                           order.side, order.price, order.amount)
 
             if self.config.log_trades:
-                self._log.info("Order ID: %s", order.id[:8])
+                self._log.debug("Order ID: %s", order.id[:8])
 
         except Exception as exc:
             self._log.error("Order placement failed: %s", exc)

@@ -346,7 +346,7 @@ class TransactionSigner:
             # Sign transaction
             signed_txn = account.sign_transaction(transaction_dict)
             
-            log.info("Signed transaction (nonce: %s)", transaction_dict.get('nonce'))
+            log.debug("Signed transaction (nonce: %s)", transaction_dict.get('nonce'))
             
             return SigningResult(
                 success=True,
@@ -390,7 +390,7 @@ class TransactionSigner:
             proposer = transaction_dict.get('from', '')
             tx = self._multisig_wallet.propose_transaction(transaction_dict, proposer)
             
-            log.info("Proposed transaction for multi-sig: %s", tx.tx_id)
+            log.debug("Proposed transaction for multi-sig: %s", tx.tx_id)
             
             return SigningResult(
                 success=True,
@@ -470,7 +470,7 @@ class TransactionSigner:
         
         try:
             tx_hash = self._w3.eth.send_raw_transaction(signed_transaction.rawTransaction)
-            log.info("Broadcasted transaction: %s", tx_hash.hex())
+            log.debug("Broadcasted transaction: %s", tx_hash.hex())
             return tx_hash.hex()
         except Exception as e:
             log.error("Failed to broadcast transaction: %s", e)
@@ -511,7 +511,7 @@ class TransactionSigner:
             try:
                 receipt = self._w3.eth.get_transaction_receipt(tx_hash)
                 if receipt:
-                    log.info("Transaction confirmed: %s", tx_hash)
+                    log.debug("Transaction confirmed: %s", tx_hash)
                     return receipt
             except TransactionNotFound:
                 pass

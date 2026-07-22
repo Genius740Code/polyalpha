@@ -278,7 +278,7 @@ class WalletSecurity:
                 credentials.access_count += 1
                 self._save_wallet(wallet_address, credentials)
                 
-                log.info("Accessed wallet: %s (access count: %d)", mask_address(wallet_address), credentials.access_count)
+                log.debug("Accessed wallet: %s (access count: %d)", mask_address(wallet_address), credentials.access_count)
                 return private_key
             except Exception as e:
                 log.error("Failed to decrypt private key for wallet %s: %s", mask_address(wallet_address), e)

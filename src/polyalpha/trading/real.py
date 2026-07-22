@@ -930,8 +930,8 @@ class RiskManager:
         self._check_and_reset_daily()
         self.daily_pnl += pnl
         self.daily_trades += 1
-        log.info("RiskManager: Recorded trade P&L: $%.2f (Daily: $%.2f, Trades: %d)", 
-                 pnl, self.daily_pnl, self.daily_trades)
+        log.debug("RiskManager: Recorded trade P&L: $%.2f (Daily: $%.2f, Trades: %d)", 
+                  pnl, self.daily_pnl, self.daily_trades)
 
     def initialize_daily_balance(self, balance: float) -> None:
         """
@@ -1409,7 +1409,7 @@ class WalletManager:
         """Refresh balance from blockchain."""
         self._balance = self.get_balance()
         if self._log_balance_updates:
-            log.info("Balance refreshed: $%.2f", self._balance)
+            log.debug("Balance refreshed: $%.2f", self._balance)
 
     def wait_for_transaction(self, tx_hash: str, timeout: int = 120, poll_interval: float = 1.0) -> dict:
         """
@@ -1947,7 +1947,7 @@ class RealTradingEngine:
             self._balance = self._wallet.get_balance()
             self._allowance = self._wallet.get_allowance()
             if self._config.log_balance_updates:
-                log.info("Balance: $%.2f, Allowance: $%.2f", self._balance, self._allowance)
+                log.debug("Balance: $%.2f, Allowance: $%.2f", self._balance, self._allowance)
 
     # ── Multi-Wallet Support ─────────────────────────────────────────────────────
 
@@ -2209,7 +2209,7 @@ class RealTradingEngine:
 
         # Log warnings if any
         if checks["warnings"]:
-            log.info("Real: pre-trade checks warnings: %s", checks["warnings"])
+            log.debug("Real: pre-trade checks warnings: %s", checks["warnings"])
 
         return checks
 
@@ -2349,7 +2349,7 @@ class RealTradingEngine:
             self._save_order_to_db(order, wallet=active_wallet)
 
         if config.log_all_orders:
-            log.info(
+            log.debug(
                 "Order placed: %s %s $%.2f @ $%.4f",
                 market.slug, side, amount, price
             )
@@ -2570,8 +2570,8 @@ class RealTradingEngine:
         # Handle partial fills
         if filled_size > 0 and filled_size < order.shares:
             if order.status != "partially_filled":
-                log.info("Order %s partially filled: %.2f/%.2f shares",
-                        order_id, filled_size, order.shares)
+                log.debug("Order %s partially filled: %.2f/%.2f shares",
+                         order_id, filled_size, order.shares)
                 order.status = "partially_filled"
 
             order.filled_shares = filled_size
@@ -2660,8 +2660,8 @@ class RealTradingEngine:
         order : RealOrder
             Filled order
         """
-        log.info("Order fill callback: %s %s $%.2f @ $%.4f",
-                order.slug, order.side, order.amount, order.price)
+        log.debug("Order fill callback: %s %s $%.2f @ $%.4f",
+                 order.slug, order.side, order.amount, order.price)
 
         risk_manager = self._resolve_risk_manager()
         risk_manager.record_trade(0.0)
@@ -2833,7 +2833,7 @@ class RealTradingEngine:
 
     def sync_positions_from_chain(self) -> None:
         """Fetch real positions from the blockchain using Alchemy."""
-        log.info("Syncing positions from blockchain...")
+        log.debug("Syncing positions from blockchain...")
 
         if self._use_multi_wallet and self._real_wallet_manager:
             for wallet in self._real_wallet_manager.get_all_wallets():
@@ -3124,8 +3124,8 @@ class RealTradingEngine:
                 new_trail_price = current_price - position.trail_sl
                 if new_trail_price > old_trail_price:
                     position.trail_sl_price = new_trail_price
-                    log.info("Trailing stop updated for %s %s: $%.4f -> $%.4f", 
-                             position.slug, position.side, old_trail_price, new_trail_price)
+                    log.debug("Trailing stop updated for %s %s: $%.4f -> $%.4f", 
+                              position.slug, position.side, old_trail_price, new_trail_price)
                 
                 if current_price <= position.trail_sl_price:
                     triggered.append(key)
@@ -3136,7 +3136,7 @@ class RealTradingEngine:
                 new_trail_price = current_price + position.trail_sl
                 if new_trail_price < old_trail_price:
                     position.trail_sl_price = new_trail_price
-                    log.info("Trailing stop updated for %s %s: $%.4f -> $%.4f", 
+                    log.debug("Trailing stop updated for %s %s: $%.4f -> $%.4f", 
                              position.slug, position.side, old_trail_price, new_trail_price)
                 
                 if current_price >= position.trail_sl_price:

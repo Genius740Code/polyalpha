@@ -55,7 +55,7 @@
 
 ---
 
-## Phase 4: Clean Up Log Hygiene (LOW)
+## Phase 4: Clean Up Log Hygiene (LOW) — DONE
 
 | # | Issue | Fix |
 |---|-------|-----|
@@ -67,7 +67,7 @@
 
 ---
 
-## Phase 5: Documentation & Configuration (LOW)
+## Phase 5: Documentation & Configuration (LOW) — DONE
 
 | # | Item | Action |
 |---|------|--------|
