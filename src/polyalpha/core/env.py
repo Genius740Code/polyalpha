@@ -56,6 +56,8 @@ def get_env_config() -> dict[str, Any]:
     This function loads the following environment variables:
     - POLYALPHA_BALANCE: Paper trading balance (float, default: 100.0)
     - POLYALPHA_LOG_LEVEL: Logging level (str, default: "WARNING")
+    - POLYALPHA_LOG_FILE: Optional file path for log persistence (str)
+    - POLYALPHA_LOG_FORMAT: Log format, "text" or "json" (str, default: "text")
     - POLYALPHA_RATE_LIMIT: API rate limit (int or None)
     - POLYALPHA_TIMEOUT: HTTP timeout (int, default: 10)
     - POLYALPHA_RETRIES: HTTP retries (int, default: 3)
@@ -82,6 +84,8 @@ def get_env_config() -> dict[str, Any]:
     return {
         "balance": _get("BALANCE", default=100.0, var_type=float),
         "log_level": _get("LOG_LEVEL", default="WARNING", var_type=str),
+        "log_file": _get("LOG_FILE", var_type=str),
+        "log_format": _get("LOG_FORMAT", default="text", var_type=str),
         "rate_limit": _get("RATE_LIMIT", var_type=int),
         "timeout": _get("TIMEOUT", default=10, var_type=int),
         "retries": _get("RETRIES", default=3, var_type=int),

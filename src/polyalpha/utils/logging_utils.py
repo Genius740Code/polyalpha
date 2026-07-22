@@ -5,9 +5,15 @@ This module provides custom logging filters and utilities to prevent
 sensitive data from being exposed in log files.
 """
 
+import json
 import logging
 import re
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+
+DEFAULT_LOG_FORMAT = "[%(asctime)s] %(levelname)-8s %(name)s %(message)s"
+DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 class SensitiveDataFilter(logging.Filter):
@@ -107,6 +113,14 @@ class SensitiveDataFilter(logging.Filter):
             for arg in record.args:
                 if isinstance(arg, str):
                     new_args.append(self.redact_string(arg))
+                elif isinstance(arg, (bytes, bytearray)):
+                    try:
+                        decoded = arg.decode("utf-8", errors="replace")
+                        new_args.append(self.redact_string(decoded))
+                    except Exception:
+                        new_args.append(arg)
+                elif isinstance(arg, (int, float)):
+                    new_args.append(arg)
                 else:
                     new_args.append(arg)
             record.args = tuple(new_args)
@@ -165,6 +179,32 @@ class SensitiveDataFormatter(logging.Formatter):
         
         # Finally redact the formatted message to catch any remaining sensitive data
         return self.filter.redact_string(formatted)
+
+
+class JSONFormatter(logging.Formatter):
+    """
+    JSON-structured log formatter with sensitive data redaction.
+
+    Produces machine-parseable JSON log lines with all fields explicit.
+    """
+
+    def __init__(self, redact_file_paths: bool = False):
+        super().__init__()
+        self.filter = SensitiveDataFilter(redact_file_paths=redact_file_paths)
+
+    def format(self, record: logging.LogRecord) -> str:
+        self.filter.filter(record)
+        formatted = super().format(record)
+        safe_msg = self.filter.redact_string(formatted)
+        return json.dumps({
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "module": record.module,
+            "line": record.lineno,
+            "message": safe_msg,
+            "process": record.process,
+        })
 
 
 def setup_sensitive_data_logging(

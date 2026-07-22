@@ -26,23 +26,75 @@ Quick start
 """
 
 import logging
+import os
+import sys
 
-# Set up sensitive data filtering for all logs using a custom formatter
-from .utils.logging_utils import SensitiveDataFormatter
+from .utils.logging_utils import (
+    DEFAULT_LOG_FORMAT,
+    DEFAULT_DATE_FORMAT,
+    JSONFormatter,
+    SensitiveDataFormatter,
+)
 
-# Get the root logger and configure it with sensitive data formatter
-_root_logger = logging.getLogger()
-# Remove any existing handlers to avoid duplicates
-_root_logger.handlers.clear()
+_log = logging.getLogger("polyalpha")
+_log.setLevel(logging.INFO)
+_log.propagate = False
 
-# Create a handler with the sensitive data formatter
-_handler = logging.StreamHandler()
-_handler.setFormatter(SensitiveDataFormatter(redact_file_paths=False))
-_root_logger.addHandler(_handler)
 
-# Set default level if not already configured
-if _root_logger.level == logging.WARNING:
-    _root_logger.setLevel(logging.INFO)
+class _LevelFilter(logging.Filter):
+    """Allow records below a threshold level through."""
+    def __init__(self, max_level: int):
+        super().__init__()
+        self.max_level = max_level
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno < self.max_level
+
+
+def _setup_logging() -> None:
+    """Configure polyalpha logging: stdout for INFO, stderr for WARNING+, file optional."""
+    if _log.handlers:
+        return
+    fmt = os.environ.get("POLYALPHA_LOG_FORMAT", "text")
+    log_file = os.environ.get("POLYALPHA_LOG_FILE")
+
+    if fmt == "json":
+        formatter = JSONFormatter(redact_file_paths=False)
+    else:
+        formatter = SensitiveDataFormatter(
+            fmt=DEFAULT_LOG_FORMAT,
+            datefmt=DEFAULT_DATE_FORMAT,
+            redact_file_paths=False,
+        )
+
+    handler_stdout = logging.StreamHandler(sys.stdout)
+    handler_stdout.setLevel(logging.INFO)
+    handler_stdout.addFilter(_LevelFilter(logging.WARNING))
+    handler_stdout.setFormatter(formatter)
+    _log.addHandler(handler_stdout)
+
+    handler_stderr = logging.StreamHandler(sys.stderr)
+    handler_stderr.setLevel(logging.WARNING)
+    handler_stderr.setFormatter(formatter)
+    _log.addHandler(handler_stderr)
+
+    if log_file:
+        try:
+            from logging.handlers import RotatingFileHandler
+
+            handler_file = RotatingFileHandler(
+                log_file, maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8"
+            )
+            handler_file.setLevel(logging.DEBUG)
+            handler_file.setFormatter(formatter)
+            _log.addHandler(handler_file)
+        except Exception as exc:
+            _log.warning("Failed to set up log file %s: %s", log_file, exc)
+
+
+_setup_logging()
+
+
+_setup_logging()
 
 from .client import Client
 from .core import Market

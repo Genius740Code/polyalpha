@@ -4067,7 +4067,7 @@ class RealTradingEngine:
         if confirm:
             response = input("Resume trading? (yes/no): ").strip().lower()
             if response not in ("yes", "y"):
-                print("Trading remains halted.")
+                log.info("Trading remains halted.")
                 return
 
         self._emergency_mode = False
