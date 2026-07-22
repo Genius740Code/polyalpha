@@ -29,6 +29,7 @@ from .trading.real import RealTradingConfig
 from .trading.auto_redeem import AutoRedeemConfig
 from .orderbook import ClobBookClient, OrderBookFeed
 from .core.env import get_paper_config_from_env
+from .utils.logging_utils import new_correlation_id, track_duration
 
 
 class Client:
@@ -86,6 +87,9 @@ class Client:
         self._log = logging.getLogger("polyalpha")
         self._log.setLevel(getattr(logging, log_level.upper(), logging.WARNING))
 
+        self._cid = new_correlation_id()
+        self._log.info("Client initialising (cid=%s)", self._cid[:8])
+
         # Load paper config from environment if requested
         if paper_config_from_env and paper_config is None:
             env_config = get_paper_config_from_env()
@@ -112,16 +116,33 @@ class Client:
                 config=real_config,
                 db_path=db_path,
             )
+            self._log.info("Real trading enabled")
+        else:
+            self._log.info("Real trading disabled (set private_key + rpc_url + polymarket_api_key)")
+
+        if self.ai:
+            self._log.info("AI analysis enabled via OpenRouter")
+        else:
+            self._log.info("AI analysis disabled (set openrouter_api_key)")
+
+        if db_path:
+            self._log.info("Database path: %s", db_path)
 
         self._timeout = timeout
         self._retries = retries
+        self._log.info(
+            "Client ready — balance=%.1f, timeout=%d, retries=%d, rate_limit=%s",
+            balance, timeout, retries, rate_limit or "unlimited",
+        )
 
     def close(self) -> None:
         """Clean up resources (HTTP connections, etc.)."""
+        self._log.info("Client closing — releasing resources")
         self.markets.close()
         self._clob.close()
         if self.ai:
             self.ai.close()
+        self._log.info("Client closed")
 
     def __enter__(self):
         """Context manager entry."""

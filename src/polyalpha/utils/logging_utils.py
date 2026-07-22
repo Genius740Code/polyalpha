@@ -8,12 +8,43 @@ sensitive data from being exposed in log files.
 import json
 import logging
 import re
+import time
+from contextvars import ContextVar
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Optional, Generator
+import uuid
 
 
 DEFAULT_LOG_FORMAT = "[%(asctime)s] %(levelname)-8s %(name)s %(message)s"
 DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+# ── Correlation ID (contextvars – flows through threads/async without explicit passing) ────
+
+_correlation_id: ContextVar[str] = ContextVar("_correlation_id", default="")
+
+
+def set_correlation_id(cid: str) -> None:
+    """Set a correlation ID for the current context (thread / async task)."""
+    _correlation_id.set(cid)
+
+
+def get_correlation_id() -> str:
+    """Return the current correlation ID, or an empty string if unset."""
+    return _correlation_id.get()
+
+
+def new_correlation_id() -> str:
+    """Generate and set a new UUID correlation ID, returning it."""
+    cid = str(uuid.uuid4())
+    _correlation_id.set(cid)
+    return cid
+
+
+def clear_correlation_id() -> None:
+    """Clear the correlation ID for the current context."""
+    _correlation_id.set("")
 
 
 class SensitiveDataFilter(logging.Filter):
@@ -139,7 +170,7 @@ class SensitiveDataFormatter(logging.Formatter):
     ensuring that sensitive data is redacted even when using complex formatting.
     """
 
-    def __init__(self, fmt=None, datefmt=None, style='%', redact_file_paths=False):
+    def __init__(self, fmt=None, datefmt=None, style='%', redact_file_paths=False, include_correlation_id=True):
         """
         Initialize the formatter.
         
@@ -153,9 +184,12 @@ class SensitiveDataFormatter(logging.Formatter):
             Formatting style (%, {, or $)
         redact_file_paths : bool
             If True, also redact file paths from logs
+        include_correlation_id : bool
+            If True, prepend [cid=...] when a correlation ID is set
         """
         super().__init__(fmt, datefmt, style)
         self.filter = SensitiveDataFilter(redact_file_paths=redact_file_paths)
+        self.include_correlation_id = include_correlation_id
 
     def format(self, record: logging.LogRecord) -> str:
         """
@@ -177,6 +211,11 @@ class SensitiveDataFormatter(logging.Formatter):
         # Then format normally
         formatted = super().format(record)
         
+        # Prepend correlation ID if set
+        cid = get_correlation_id()
+        if self.include_correlation_id and cid:
+            formatted = f"[cid={cid[:8]}] {formatted}"
+        
         # Finally redact the formatted message to catch any remaining sensitive data
         return self.filter.redact_string(formatted)
 
@@ -188,15 +227,16 @@ class JSONFormatter(logging.Formatter):
     Produces machine-parseable JSON log lines with all fields explicit.
     """
 
-    def __init__(self, redact_file_paths: bool = False):
+    def __init__(self, redact_file_paths: bool = False, include_correlation_id: bool = True):
         super().__init__()
         self.filter = SensitiveDataFilter(redact_file_paths=redact_file_paths)
+        self.include_correlation_id = include_correlation_id
 
     def format(self, record: logging.LogRecord) -> str:
         self.filter.filter(record)
         formatted = super().format(record)
         safe_msg = self.filter.redact_string(formatted)
-        return json.dumps({
+        entry = {
             "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
@@ -204,7 +244,11 @@ class JSONFormatter(logging.Formatter):
             "line": record.lineno,
             "message": safe_msg,
             "process": record.process,
-        })
+        }
+        cid = get_correlation_id()
+        if self.include_correlation_id and cid:
+            entry["correlation_id"] = cid
+        return json.dumps(entry)
 
 
 def setup_sensitive_data_logging(
@@ -284,6 +328,40 @@ def mask_transaction_hash(tx_hash: str, visible_chars: int = 10) -> str:
     if not tx_hash or len(tx_hash) < visible_chars + 4:
         return "***REDACTED***"
     return f"{tx_hash[:visible_chars]}...{tx_hash[-4:]}"
+
+
+# ── Performance tracking ─────────────────────────────────────────────────────
+
+@contextmanager
+def track_duration(
+    operation: str,
+    logger: logging.Logger,
+    threshold_ms: float = 1000.0,
+    level: int = logging.WARNING,
+) -> Generator[None, None, None]:
+    """
+    Context manager that logs a warning if *operation* takes longer than *threshold_ms*.
+
+    Parameters
+    ----------
+    operation : str
+        Human-readable operation name for the log message.
+    logger : logging.Logger
+        Logger to write to.
+    threshold_ms : float
+        Duration threshold in milliseconds (default 1000 = 1 second).
+    level : int
+        Log level when threshold is exceeded (default WARNING).
+    """
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        if elapsed_ms >= threshold_ms:
+            logger.log(level, "%s took %.0fms (threshold: %.0fms)", operation, elapsed_ms, threshold_ms)
+        else:
+            logger.log(logging.DEBUG, "%s took %.0fms", operation, elapsed_ms)
 
 
 def mask_private_key(private_key: str, visible_chars: int = 8) -> str:

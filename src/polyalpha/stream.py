@@ -92,6 +92,8 @@ class Stream:
     ``connect``  ()                         — fired on every successful connect
     """
 
+    STALE_DATA_SECONDS = 30.0
+
     def __init__(
         self,
         market:      Market,
@@ -155,6 +157,10 @@ class Stream:
         self._ping_count: int = 0
         self._pong_count: int = 0
         self._connection_quality: float = 1.0  # 0.0 to 1.0
+
+        # Stale data tracking
+        self._last_price_time: float = time.time()
+        self._stale_warned: bool = False
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -234,6 +240,7 @@ class Stream:
     def _run_with_retry(self) -> None:
         """Connect, reconnect on drops, give up after ``self.retries`` failures."""
         consecutive_failures = 0
+        high_retry_warned = False
 
         while not self._stop.is_set():
             # Check circuit breaker before attempting connection
@@ -256,6 +263,14 @@ class Stream:
                     log.error("Stream: max retries (%d) exceeded — giving up", self.retries)
                     self._emit("error", exc)
                     return
+
+                # Warn if retries are getting high (>50% of budget used)
+                if consecutive_failures > self.retries // 2 and not high_retry_warned:
+                    log.warning(
+                        "Stream: high retry rate (%d/%d) — network may be unreliable",
+                        consecutive_failures, self.retries,
+                    )
+                    high_retry_warned = True
 
                 # Calculate exponential backoff with positive-only jitter
                 base_delay = self.retry_delay * (WS_BACKOFF_FACTOR ** (consecutive_failures - 1))
@@ -316,7 +331,7 @@ class Stream:
         self._emit("connect")
 
     def _ping_loop(self, ws) -> None:
-        """Send text 'PING' every WS_PING_INTERVAL seconds."""
+        """Send text 'PING' every WS_PING_INTERVAL seconds and check for stale data."""
         while not self._stop.is_set():
             time.sleep(WS_PING_INTERVAL)
             if self._stop.is_set():
@@ -326,6 +341,7 @@ class Stream:
                 self._ping_count += 1
                 ws.send("PING")
                 log.debug("Stream: → PING")
+                self._check_stale_data()
             except Exception:
                 break   # socket gone; _on_ws_close will trigger reconnect
 
@@ -467,6 +483,18 @@ class Stream:
             pass
         self._publish_prices()
 
+    def _check_stale_data(self) -> None:
+        """Log a warning if no price update has been received for STALE_DATA_SECONDS."""
+        elapsed = time.time() - self._last_price_time
+        if elapsed > self.STALE_DATA_SECONDS and not self._stale_warned:
+            log.warning(
+                "Stream: no price update for %.0fs (market %s) — data may be stale",
+                elapsed, self.market.slug,
+            )
+            self._stale_warned = True
+        elif elapsed <= self.STALE_DATA_SECONDS:
+            self._stale_warned = False
+
     def _publish_prices(self) -> None:
         """Map per-token prices → (up, down) and emit a 'price' event."""
         tokens = self.market.tokens
@@ -492,6 +520,7 @@ class Stream:
                 changed   = True
 
         if changed:
+            self._last_price_time = time.time()
             # Only emit if price change exceeds threshold
             if (abs(self.up - self._last_emitted_up) >= self._price_threshold or
                 abs(self.down - self._last_emitted_down) >= self._price_threshold):
