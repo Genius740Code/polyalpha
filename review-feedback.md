@@ -47,16 +47,9 @@ Move to `__init__` or cache at module level. A bot running 5m timeframes gets 28
 
 `CrossedAbove` and `CrossedBelow` were mutating `self._prev` on every call. Now state is stored in `TickContext._cross_state[id(self)]` so a shared condition works independently across bots:
 
-### 4. add `sell` / `close_position` to TickContext
+### 4. ~~add `sell` / `close_position` to TickContext~~ ✅ Done
 
-Bot only has `ctx.buy()` and `ctx.limit()`. Many strategies need to exit:
-
-```python
-@bot.on_tick
-def s(ctx):
-    if has_position and ctx.price.down > 0.8:
-        ctx.close_position("UP")  # doesn't exist
-```
+Added `ctx.close_position(side, amount=None)` — delegates to `PaperEngine.sell_position`. Amount is optional (defaults to full position).
 
 ### 5. publish a "15-line sniper" example
 

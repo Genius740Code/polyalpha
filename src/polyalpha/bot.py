@@ -181,6 +181,25 @@ class TickContext:
             market=self._market, side=side, price=price, amount=amount
         )
 
+    def close_position(self, side: str, amount: Optional[float] = None):
+        """
+        Close (sell) an open position.
+
+        Parameters
+        ----------
+        side : "UP" | "DOWN"
+            The side of the position to close.
+        amount : float, optional
+            USDC amount to sell. Defaults to the full position.
+
+        Returns
+        -------
+        PaperOrder
+        """
+        return self._client.paper.sell_position(
+            market=self._market, side=side, amount=amount
+        )
+
     # ── Indicators (optional — requires analysis deps) ──────────────────────
 
     def _get_price_series(self):
