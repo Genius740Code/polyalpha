@@ -41,6 +41,17 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# Optional indicator deps — imported once at module level, not per property call.
+try:
+    import pandas as pd
+except ImportError:
+    pd = None  # type: ignore[assignment]
+
+try:
+    from .analysis._native_ta import rsi as _rsi, sma as _sma, ema as _ema
+except ImportError:
+    _rsi = _sma = _ema = None
+
 
 # ── Price Snapshot ─────────────────────────────────────────────────────────────
 
@@ -175,13 +186,10 @@ class TickContext:
         """Lazy-load the price history as a pandas Series."""
         if getattr(self, "_cached_series", None) is not None:
             return self._cached_series
-        try:
-            import pandas as pd
-        except ImportError:
+        if pd is None:
             raise RuntimeError(
                 "Indicators require 'pandas'. Install: pip install pandas"
-            ) from None
-
+            )
         if len(self._price_history) < 14:
             return None
         self._cached_series = pd.Series(list(self._price_history))
@@ -194,42 +202,36 @@ class TickContext:
     @property
     def rsi(self) -> Optional[float]:
         """RSI(14) — requires pandas."""
-        import pandas as _pd
         series = self._get_price_series()
-        if series is None:
+        if series is None or _rsi is None:
             return None
         try:
-            from ..analysis._native_ta import rsi as _rsi
             val = _rsi(series, 14).iloc[-1]
-            return None if _pd.isna(val) else float(val)
+            return None if pd.isna(val) else float(val)
         except Exception:
             return None
 
     @property
     def sma_20(self) -> Optional[float]:
         """SMA(20) — requires pandas."""
-        import pandas as _pd
         series = self._get_price_series()
-        if series is None:
+        if series is None or _sma is None:
             return None
         try:
-            from ..analysis._native_ta import sma as _sma
             val = _sma(series, 20).iloc[-1]
-            return None if _pd.isna(val) else float(val)
+            return None if pd.isna(val) else float(val)
         except Exception:
             return None
 
     @property
     def ema_12(self) -> Optional[float]:
         """EMA(12) — requires pandas."""
-        import pandas as _pd
         series = self._get_price_series()
-        if series is None:
+        if series is None or _ema is None:
             return None
         try:
-            from ..analysis._native_ta import ema as _ema
             val = _ema(series, 12).iloc[-1]
-            return None if _pd.isna(val) else float(val)
+            return None if pd.isna(val) else float(val)
         except Exception:
             return None
 
