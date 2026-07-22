@@ -1,333 +1,150 @@
 # Streaming
 
-`client.stream(market)` returns a `Stream` object that connects to the Polymarket CLOB WebSocket and delivers real-time price updates. It auto-reconnects on drops and sends keepalive pings automatically.
-
----
-
-## Quick start
-
-```python
-market = client.markets.latest("BTC", "5m")
-stream = client.stream(market)
-
-@stream.on("price")
-def on_price(up: float, down: float):
-    print(f"UP={up:.4f}  DOWN={down:.4f}")
-
-stream.start()  # blocks until the market closes or stream.stop() is called
-```
-
----
-
-## Creating a stream
+Real-time price streaming via the Polymarket CLOB WebSocket.
 
 ```python
 stream = client.stream(market)
-stream = client.stream(market, retries=5)  # override reconnect budget
 ```
 
-The stream does not connect until you call `.start()`. Register all your handlers first.
+## Stream Constructor
 
----
-
-## Registering event handlers
-
-Use `@stream.on("event_name")` as a decorator, or `stream.add_handler("event_name", fn)` without one.
-
-```python
-# Decorator style
-@stream.on("price")
-def handler(up, down): ...
-
-# Functional style (useful when building handlers dynamically)
-stream.add_handler("price", lambda up, down: print(up, down))
-```
-
-Multiple handlers for the same event are all called in registration order. Exceptions raised in a handler are logged and swallowed so they don't crash the stream.
-
----
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `market` | `Market` | — | The market to subscribe to |
+| `retries` | `int` | `10` | Maximum reconnect attempts |
+| `retry_delay` | `float` | `3.0` | Base back-off delay in seconds |
+| `price_threshold` | `float` | `0.0001` | Minimum price change to emit a `price` event |
+| `enable_circuit_breaker` | `bool` | `True` | Enable circuit breaker for cascading failure protection |
 
 ## Events
 
-### `price` — up and down prices updated
+| Event | Callback Signature | Description |
+|-------|-------------------|-------------|
+| `"price"` | `(up: float, down: float)` | Emitted on any mid-price change exceeding `price_threshold` |
+| `"book"` | `(data: dict)` | Raw order-book snapshot |
+| `"trade"` | `(data: dict)` | Last matched trade |
+| `"close"` | `()` | Market resolved — stream closes cleanly |
+| `"error"` | `(exc: Exception)` | Unrecoverable error |
+| `"connect"` | `()` | Fired on every successful connect |
 
+## Registering Handlers
+
+**Decorator syntax:**
 ```python
 @stream.on("price")
-def on_price(up: float, down: float):
-    print(f"UP={up:.4f}  DOWN={down:.4f}")
+def on_price(up, down):
+    if up > 0.6:
+        print(f"UP is strong at {up:.4f}")
 ```
 
-Emitted whenever the mid-price changes for either the UP or DOWN token. Both values are always provided together. This is the most commonly used event.
-
-`up` and `down` are also readable as attributes at any time without registering a handler:
-
+**`add_handler()` method:**
 ```python
-print(stream.up, stream.down)
+def on_close():
+    print("Market resolved")
+
+stream.add_handler("close", on_close)
 ```
 
----
+## Starting the Stream
 
-### `book` — full order-book snapshot
+### Blocking (sync)
 
 ```python
-@stream.on("book")
-def on_book(data: dict):
-    bids = data.get("bids", [])
-    asks = data.get("asks", [])
-    print(f"Best bid: {bids[0]['price'] if bids else 'none'}")
+stream.start()
+# blocks until the stream stops (market resolved or error)
 ```
 
-Received once on connect per token as the CLOB sends the initial state. `data` is the raw dict from the WebSocket.
-
----
-
-### `trade` — last matched trade
+### Background thread
 
 ```python
-@stream.on("trade")
-def on_trade(data: dict):
-    print(f"Trade at {data.get('price')} for token {data.get('asset_id')}")
+stream.start(background=True)
+# returns immediately, runs in a daemon thread
 ```
 
-Emitted when a `last_trade_price` message arrives. `data` is the raw dict.
-
----
-
-### `connect` — successful connection (including reconnects)
+Stop it later:
 
 ```python
+stream.stop()
+```
+
+### Async
+
+```python
+await stream.run_async()
+```
+
+Requires `pip install websockets` (the async variant uses the `websockets` library instead of `websocket-client`).
+
+## Stream Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `stream.up` | `float` | Latest UP price (always readable, no callback needed) |
+| `stream.down` | `float` | Latest DOWN price |
+| `stream.running` | `bool` | True while the background thread is alive |
+| `stream.connection_quality` | `float` | 0.0 to 1.0 (1.0 = excellent) |
+| `stream.circuit_breaker_state` | `str \| None` | Circuit breaker state, or `None` if disabled |
+
+## Reconnection Logic
+
+The stream auto-reconnects on unexpected disconnects:
+
+1. **Exponential backoff** — delay = `retry_delay * 2^(attempt-1)` plus ±20% random jitter
+2. **Max retries** — defaults to 10 attempts; emits `error` and stops after exhausting the budget
+3. **High-retry warning** — logged when >50% of retry budget is consumed
+4. **Stale data check** — warns if no price update for 30 seconds
+
+## Keepalive Protocol
+
+- Client sends text `"PING"` every 10 seconds
+- Server replies with `"PONG"`
+- Server may also send `"PING"` — reply is `"PONG"`
+- Missing the window causes a silent server-side disconnect
+
+The keepalive runs automatically in a daemon thread (sync) or asyncio task (async).
+
+## Rate Limiting
+
+Incoming messages are rate-limited with a token bucket (default 100 messages per second) to prevent flood-driven memory growth.
+
+## Circuit Breaker
+
+When enabled (default), the circuit breaker opens after 5 consecutive failures and blocks reconnection attempts for 60 seconds. It attempts recovery with 2 consecutive successes before fully closing.
+
+## Price Threshold
+
+A `price` event is only emitted when the price change exceeds `price_threshold` (default 0.0001). This reduces noise when the market is flat. The `up` and `down` properties always reflect the latest tick regardless of the threshold.
+
+## Example: Full Stream Lifecycle
+
+```python
+import polyalpha
+import time
+
+polyalpha.load_env_file()
+client = polyalpha.Client(balance=100.0)
+
+market = client.markets.latest("BTC", "5m")
+stream = client.stream(market, price_threshold=0.0005)
+
+@stream.on("price")
+def on_price(up, down):
+    print(f"[{time.strftime('%H:%M:%S')}] UP={up:.4f}  DOWN={down:.4f}")
+
 @stream.on("connect")
 def on_connect():
     print("Connected!")
-```
 
-Fires once each time a WebSocket connection is established, including after automatic reconnects.
-
----
-
-### `close` — market resolved
-
-```python
 @stream.on("close")
 def on_close():
-    print("Market resolved — stream done")
-```
+    print("Market resolved")
 
-Emitted when the server sends a `market_resolved` message. After this the stream stops cleanly; no reconnect is attempted.
-
----
-
-### `error` — unrecoverable failure
-
-```python
 @stream.on("error")
-def on_error(exc: Exception):
-    print(f"Stream failed: {exc}")
-```
+def on_error(exc):
+    print(f"Stream error: {exc}")
 
-Emitted when the retry budget is exhausted or an unexpected exception occurs. The stream will not reconnect after this.
-
----
-
-## Starting the stream
-
-### Blocking mode (default)
-
-```python
-stream.start()
-```
-
-Blocks the calling thread until the stream stops (market resolved, `stream.stop()` called, or error).
-
-### Background mode
-
-```python
 stream.start(background=True)
-# your code continues here
-
-# ... later
+time.sleep(30)
 stream.stop()
-```
-
-Runs in a daemon thread. The program exits if the main thread ends, which also kills background streams.
-
-```python
-# Check if the background stream is alive
-if stream.running:
-    print("Stream is active")
-```
-
----
-
-## Stopping the stream
-
-```python
-stream.stop()
-```
-
-Sets the stop flag and closes the WebSocket cleanly. If the stream is in background mode, the thread exits within one ping interval (≤10 s).
-
----
-
-## Reconnection behaviour
-
-The stream reconnects automatically on WebSocket drops. Each failure adds a delay:
-
-```
-delay = retry_delay × attempt_number
-```
-
-Default values (from `constants.py`):
-
-| Constant | Default | Description |
-|---|---|---|
-| `WS_MAX_RETRIES` | 10 | Give up after this many consecutive failures |
-| `WS_RETRY_DELAY` | 3.0 s | Base delay multiplied by attempt number |
-| `WS_PING_INTERVAL` | 10 s | How often the client sends a text `PING` |
-
-Override retries for a single stream:
-
-```python
-stream = client.stream(market, retries=20)
-```
-
----
-
-## Protocol details
-
-The SDK implements Polymarket's text-based keepalive protocol internally — you don't need to handle this yourself:
-
-- On connect, subscribes with `{"type": "market", "assets_ids": [...], "custom_feature_enabled": true}`
-- Sends text `"PING"` every 10 seconds
-- Responds to server-sent `"PING"` with `"PONG"` immediately
-- Missing the ping window causes a silent server-side disconnect, which triggers an automatic reconnect
-
----
-
-## Practical patterns
-
-### Background stream with a trading loop
-
-```python
-import time
-import polyalpha
-
-client = polyalpha.Client()
-market = client.markets.latest("BTC", "5m")
-stream = client.stream(market)
-
-prices = []
-
-@stream.on("price")
-def on_price(up, down):
-    prices.append(up)
-
-@stream.on("close")
-def on_close():
-    print("Market closed, stopping")
-
-stream.start(background=True)
-
-while stream.running:
-    if len(prices) >= 10:
-        avg = sum(prices[-10:]) / 10
-        print(f"10-tick average UP price: {avg:.4f}")
-    time.sleep(2)
-```
-
-### Trigger a paper order on a price threshold
-
-```python
-market = client.markets.latest("ETH", "5m")
-stream = client.stream(market)
-ordered = False
-
-@stream.on("price")
-def on_price(up, down):
-    global ordered
-    if not ordered and up > 0.65:
-        order = client.paper.buy(market, side="UP", amount=25.0)
-        print("Placed order:", order)
-        ordered = True
-
-stream.start()
-```
-
----
-
-## Price-aware trading with attached streams
-
-When you attach a stream to the paper or real trading engine, `buy()` automatically uses live streamed prices instead of stale market prices. This prevents silent correctness issues where you might execute orders at outdated prices.
-
-### Automatic price selection
-
-```python
-market = client.markets.latest("BTC", "5m")
-stream = client.stream(market)
-
-# Attach the stream to enable price-aware trading
-client.paper.attach_stream(stream, market)
-stream.start(background=True)
-
-# This buy() will automatically use the live stream price
-order = client.paper.buy(market, side="UP", amount=10.0)
-```
-
-**Price selection priority:**
-1. **Live stream price** (if stream is attached and running) - most accurate
-2. **Market price** (from API) - may be stale if market is near closing
-3. **Fallback price** (0.5) - only if no valid price is available
-
-### Staleness warnings
-
-The engine automatically detects and warns about potentially stale prices:
-
-- **Market closing soon** (< 30 seconds): Warns that market price may be stale
-- **Market closed**: Warns that market is closed and price may be invalid
-- **Stream not running**: Falls back to market price with appropriate logging
-
-### Manual price control
-
-If you need explicit control over prices (e.g., for limit orders), you can still specify prices directly:
-
-```python
-# Limit order with explicit price - ignores stream
-order = client.paper.limit(market, side="UP", price=0.60, amount=10.0)
-```
-
-### Real trading
-
-The same price-aware behavior applies to real trading:
-
-```python
-# Real trading also uses live stream prices when available
-client.real.attach_stream(stream, market)
-stream.start(background=True)
-
-order = client.real.buy(market, side="UP", confidence=0.7)
-```
-
-### Multiple markets in parallel
-
-```python
-import polyalpha
-
-client = polyalpha.Client()
-streams = []
-
-for asset in ["BTC", "ETH", "SOL"]:
-    market = client.markets.latest(asset, "5m")
-    s = client.stream(market)
-
-    @s.on("price")
-    def on_price(up, down, asset=asset):
-        print(f"{asset}  UP={up:.4f}  DOWN={down:.4f}")
-
-    s.start(background=True)
-    streams.append(s)
-
-# Wait for all to finish
-import time
-while any(s.running for s in streams):
-    time.sleep(1)
+client.close()
 ```
