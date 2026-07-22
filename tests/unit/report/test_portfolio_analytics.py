@@ -449,7 +449,7 @@ class TestNetFeesWithRebates:
 
     def test_rebates_deducted(self, empty_engine):
         """Test net fees deducts rebates."""
-        empty_engine._total_rebates_earned = 5.0
+        empty_engine._fee_manager.total_rebates_earned = 5.0
         empty_engine._balance = 1000.0
         pa = PortfolioAnalytics(empty_engine)
         pnl = pa.get_portfolio_pnl()

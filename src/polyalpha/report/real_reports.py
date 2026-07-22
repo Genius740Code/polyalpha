@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 if TYPE_CHECKING:
-    from ..trading.paper import PaperEngine
+    from ..trading.paper_engine import PaperEngine
     from ..trading.real import RealTradingEngine
 
 def generate_risk_exposure(engine: Union["PaperEngine", "RealTradingEngine"]) -> str:

@@ -30,7 +30,9 @@ from ..core import (
 if TYPE_CHECKING:
     from .real import RealTradingConfig
 
-from .paper import PaperConfig, PaperOrder, PaperPosition, RiskManager
+from .paper_config import PaperConfig
+from .paper_types import PaperOrder, PaperPosition
+from .paper_risk import RiskManager
 
 log = logging.getLogger(__name__)
 

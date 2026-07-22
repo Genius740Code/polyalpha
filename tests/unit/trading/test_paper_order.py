@@ -346,8 +346,8 @@ def test_rebate_tracking_enabled(make_market):
     order = engine.buy(market, side="UP", amount=10.0)
     
     # Check rebate tracking
-    assert engine._total_fees_paid > 0
-    assert engine._total_volume == 10.0
+    assert engine._fee_manager.total_fees_paid > 0
+    assert engine._fee_manager.total_volume == 10.0
     assert order.fee_type == "taker"
     assert order.rebate_amount >= 0
     assert order.rebate_rate >= 0
@@ -365,7 +365,7 @@ def test_rebate_tracking_disabled(make_market):
     # Check no rebates
     assert order.rebate_amount == 0.0
     assert order.rebate_rate == 0.0
-    assert engine._total_rebates_earned == 0.0
+    assert engine._fee_manager.total_rebates_earned == 0.0
 
 
 @pytest.mark.unit
@@ -386,23 +386,23 @@ def test_volume_based_rebate_tiers(make_market):
     market = make_market()
     
     # Start at 0% rebate
-    assert engine._get_volume_rebate_rate() == 0.0
+    assert engine._fee_manager._get_volume_rebate_rate() == 0.0
     
     # Trade $50 - still 0%
     engine.buy(market, side="UP", amount=50.0)
-    assert engine._get_volume_rebate_rate() == 0.0
+    assert engine._fee_manager._get_volume_rebate_rate() == 0.0
     
     # Trade $100 more - now 10% tier
     engine.buy(market, side="UP", amount=100.0)
-    assert engine._get_volume_rebate_rate() == 0.10
+    assert engine._fee_manager._get_volume_rebate_rate() == 0.10
     
     # Trade $400 more - now 15% tier
     engine.buy(market, side="UP", amount=400.0)
-    assert engine._get_volume_rebate_rate() == 0.15
+    assert engine._fee_manager._get_volume_rebate_rate() == 0.15
     
     # Trade $500 more - now 20% tier
     engine.buy(market, side="UP", amount=500.0)
-    assert engine._get_volume_rebate_rate() == 0.20
+    assert engine._fee_manager._get_volume_rebate_rate() == 0.20
 
 
 @pytest.mark.unit
@@ -564,9 +564,9 @@ def test_rebate_accumulation_across_trades(make_market):
         engine.buy(market, side="UP", amount=20.0)
     
     # Check accumulation
-    assert engine._total_volume == 100.0
-    assert engine._total_fees_paid > 0
-    assert engine._total_rebates_earned > 0
+    assert engine._fee_manager.total_volume == 100.0
+    assert engine._fee_manager.total_fees_paid > 0
+    assert engine._fee_manager.total_rebates_earned > 0
     
     # Each trade should have rebate
     filled_orders = [o for o in engine.orders() if o.status == "filled"]

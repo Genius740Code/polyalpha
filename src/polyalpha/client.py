@@ -24,7 +24,7 @@ from .core import Market
 from .markets import MarketClient
 from .stream import Stream
 from .trading import PaperEngine, RealTradingEngine
-from .trading.paper import PaperConfig
+from .trading.paper_config import PaperConfig
 from .trading.real import RealTradingConfig
 from .trading.auto_redeem import AutoRedeemConfig
 from .orderbook import ClobBookClient, OrderBookFeed

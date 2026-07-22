@@ -1,4 +1,5 @@
-from .paper import PaperEngine, PaperOrder, PaperPosition
+from .paper_engine import PaperEngine
+from .paper_types import PaperOrder, PaperPosition
 from .real import (
     RealTradingEngine,
     RealTradingConfig,

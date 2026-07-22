@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional, Union
 
 if TYPE_CHECKING:
-    from ..trading.paper import PaperEngine
+    from ..trading.paper_engine import PaperEngine
     from ..trading.real import RealTradingEngine
 
 

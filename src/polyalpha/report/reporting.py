@@ -43,7 +43,7 @@ from .portfolio_analytics import (
 from .records import TradeRecord, extract_trades
 
 if TYPE_CHECKING:
-    from ..trading.paper import PaperEngine
+    from ..trading.paper_engine import PaperEngine
     from ..trading.real import RealTradingEngine
 
 log = logging.getLogger(__name__)

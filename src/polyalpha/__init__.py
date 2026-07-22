@@ -134,7 +134,7 @@ from .core.env import load_env_file, get_env_config
 from .stream import Stream
 from .bot import Bot
 from .trading import PaperEngine, RealTradingEngine
-from .trading.paper import PaperConfig
+from .trading.paper_config import PaperConfig
 from .trading.real import RealTradingConfig, RealOrder, RealPosition, WalletManager
 from .trading.auto_redeem import AutoRedeemConfig
 from .report import ReportPreset

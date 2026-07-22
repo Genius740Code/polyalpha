@@ -46,7 +46,7 @@ from .metrics import (
 from .records import TradeRecord, extract_trades, build_equity_curve
 
 if TYPE_CHECKING:
-    from ..trading.paper import PaperEngine
+    from ..trading.paper_engine import PaperEngine
     from ..trading.real import RealTradingEngine
 
 log = logging.getLogger(__name__)
@@ -261,8 +261,8 @@ class PortfolioAnalytics:
         
         # Net fees (after rebates if available)
         net_fees = total_fees
-        if hasattr(self._engine, '_total_rebates_earned'):
-            net_fees = total_fees - self._engine._total_rebates_earned
+        if hasattr(self._engine, '_fee_manager') and hasattr(self._engine._fee_manager, 'total_rebates_earned'):
+            net_fees = total_fees - self._engine._fee_manager.total_rebates_earned
         
         return PortfolioPnL(
             total_pnl=total_pnl,

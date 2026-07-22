@@ -54,7 +54,7 @@ from .records import TradeRecord, extract_trades
 from .terminal import render_terminal
 
 if TYPE_CHECKING:
-    from ..trading.paper import PaperEngine
+    from ..trading.paper_engine import PaperEngine
     from ..trading.real import RealTradingEngine
 
 log = logging.getLogger(__name__)
