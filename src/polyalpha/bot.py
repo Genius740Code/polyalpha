@@ -18,6 +18,7 @@ discover → stream → tick → resolve → rollover → repeat
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
@@ -419,6 +420,40 @@ class Bot:
         finally:
             self._cleanup()
 
+    async def run_async(self) -> None:
+        """
+        Start the bot using async IO.
+
+        Runs multiple bots concurrently in a single event loop:
+
+            async def main():
+                await asyncio.gather(
+                    bot1.run_async(),
+                    bot2.run_async(),
+                    bot3.run_async(),
+                )
+
+        Runs indefinitely until stop() is called or an unrecoverable
+        error occurs.
+        """
+        self._log.info(
+            "Bot starting (async): %s %s | balance=$%.2f | paper=%s",
+            self.asset, self.timeframe, self._client.paper.balance, self.paper_mode,
+        )
+        self._maybe_build_strategy()
+        self._stop_event.clear()
+
+        try:
+            while not self._stop_event.is_set():
+                await self._run_cycle_async()
+        except asyncio.CancelledError:
+            self._log.info("Bot cancelled")
+        except Exception:
+            self._log.exception("Bot fatal error")
+            raise
+        finally:
+            self._cleanup()
+
     def stop(self) -> None:
         """Signal the bot to stop gracefully."""
         self._log.info("Bot stopping...")
@@ -455,6 +490,19 @@ class Bot:
         # Stream has ended — resolve and rollover
         self._resolve()
         self._rollover()
+
+    async def _run_cycle_async(self) -> None:
+        """Async single market cycle: discover → stream → tick → resolve → rollover."""
+        try:
+            self._discover()
+            await self._stream_prices_async()
+        except MarketNotFound:
+            self._log.warning("No market found, retrying in 30s...")
+            await self._asleep(30)
+            return
+
+        self._resolve()
+        await self._rollover_async()
 
     def _discover(self) -> None:
         """Discover the latest market for the configured asset/timeframe."""
@@ -494,6 +542,44 @@ class Bot:
         # Start blocking — returns when stream ends
         self._stream.start(background=False)
 
+    async def _stream_prices_async(self) -> None:
+        """Set up stream and call strategy on every price tick (async version)."""
+        self._stream = self._client.stream(self._market)
+        self._client.paper.attach_stream(self._stream, self._market)
+        self._ctx = TickContext(self)
+
+        @self._stream.on("price")
+        def on_price(up: float, down: float):
+            if self._stop_event.is_set():
+                return
+            self._tick_count += 1
+            if self._ctx:
+                self._ctx.record_price(up)
+            if self._strategy and self._ctx:
+                try:
+                    self._strategy(self._ctx)
+                except Exception as exc:
+                    self._log.exception("Strategy error: %s", exc)
+
+        @self._stream.on("close")
+        def on_close():
+            self._log.info("Market closed: %s", self._market.slug)
+
+        await self._stream.run_async()
+
+    async def _rollover_async(self) -> None:
+        """Clean up and prepare for next cycle (async version)."""
+        if self._stream:
+            try:
+                self._stream.stop()
+            except Exception:
+                pass
+            self._stream = None
+        self._market = None
+        self._ctx = None
+        self._log.info("Rolling over to next market...")
+        await self._asleep(2)
+
     def _resolve(self) -> None:
         """Wait for resolution and record outcome."""
         if not self._market:
@@ -528,6 +614,13 @@ class Bot:
             if self._stop_event.is_set():
                 break
             time.sleep(0.1)
+
+    async def _asleep(self, seconds: float) -> None:
+        """Async sleep, checking stop_event periodically."""
+        for _ in range(int(seconds * 10)):
+            if self._stop_event.is_set():
+                break
+            await asyncio.sleep(0.1)
 
     def _cleanup(self) -> None:
         """Clean up resources."""

@@ -41,6 +41,7 @@ Usage
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import random
@@ -162,6 +163,9 @@ class Stream:
         self._last_price_time: float = time.time()
         self._stale_warned: bool = False
 
+        # Async stop signal
+        self._async_stop: asyncio.Event | None = None
+
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def on(self, event: str) -> Callable:
@@ -209,9 +213,66 @@ class Stream:
         else:
             self._run_with_retry()
 
+    async def run_async(self) -> None:
+        """
+        Start the stream asynchronously.
+
+        Uses the ``websockets`` library instead of ``websocket-client``.
+        Returns when the stream stops (market resolved or stop() called).
+
+        Example
+        -------
+        >>> stream = client.stream(market)
+        >>> @stream.on("price")
+        ... def on_price(up, down):
+        ...     print(f"UP={up:.4f}  DOWN={down:.4f}")
+        >>> await stream.run_async()
+        """
+        self._stop.clear()
+        self._async_stop = asyncio.Event()
+
+        consecutive_failures = 0
+        high_retry_warned = False
+
+        while not self._is_stopped():
+            try:
+                await self._connect_async()
+                return
+            except StreamDisconnected as exc:
+                consecutive_failures += 1
+                if consecutive_failures > self.retries:
+                    log.error("Stream: max retries (%d) exceeded — giving up", self.retries)
+                    self._emit("error", exc)
+                    return
+
+                if consecutive_failures > self.retries // 2 and not high_retry_warned:
+                    log.warning(
+                        "Stream: high retry rate (%d/%d) — network may be unreliable",
+                        consecutive_failures, self.retries,
+                    )
+                    high_retry_warned = True
+
+                base_delay = self.retry_delay * (WS_BACKOFF_FACTOR ** (consecutive_failures - 1))
+                delay = base_delay + base_delay * WS_JITTER * random.random()
+
+                log.warning(
+                    "Stream: disconnected (attempt %d/%d) — retrying in %.1fs",
+                    consecutive_failures, self.retries, delay,
+                )
+                await asyncio.sleep(delay)
+
+            except Exception as exc:
+                log.exception("Stream: unexpected error: %s", exc)
+                self._emit("error", exc)
+                return
+        else:
+            self._async_stop = None
+
     def stop(self) -> None:
         """Signal the stream to stop and close the WebSocket cleanly."""
         self._stop.set()
+        if self._async_stop:
+            self._async_stop.set()
         if self._ws:
             try:
                 self._ws.close()  # type: ignore[union-attr]
@@ -307,8 +368,110 @@ class Stream:
         # Disable the library's binary WebSocket ping — we use text PING/PONG
         ws.run_forever(ping_interval=None, ping_timeout=None)
 
-        if not self._stop.is_set():
+        if not self._is_stopped():
             raise StreamDisconnected("WebSocket closed unexpectedly")
+
+    def _is_stopped(self) -> bool:
+        """Check if the stream has been signalled to stop (works for sync and async)."""
+        if self._stop.is_set():
+            return True
+        if self._async_stop and self._async_stop.is_set():
+            return True
+        return False
+
+    async def _connect_async(self) -> None:
+        """Open the WebSocket asynchronously and process messages until close."""
+        import websockets
+
+        token_ids = [t for t in self.market.tokens if t]
+        if not token_ids:
+            raise StreamDisconnected("Market has no token IDs to subscribe to")
+
+        async with websockets.connect(CLOB_WS) as ws:
+            self._emit("connect")
+
+            await ws.send(json.dumps({
+                "type": "market",
+                "assets_ids": token_ids,
+                "custom_feature_enabled": True,
+            }))
+
+            ping_task = asyncio.create_task(self._ping_loop_async(ws))
+
+            try:
+                async for raw in ws:
+                    if self._is_stopped():
+                        break
+                    self._on_message_async(ws, raw)
+            except websockets.ConnectionClosed:
+                pass
+            finally:
+                ping_task.cancel()
+                try:
+                    await ping_task
+                except asyncio.CancelledError:
+                    pass
+
+    async def _send_pong(self, ws) -> None:
+        """Send a PONG response to the server."""
+        try:
+            await ws.send("PONG")
+        except Exception:
+            pass
+
+    async def _ping_loop_async(self, ws) -> None:
+        """Send text 'PING' at intervals and check for stale data."""
+        while not self._is_stopped():
+            await asyncio.sleep(WS_PING_INTERVAL)
+            if self._is_stopped():
+                break
+            try:
+                self._last_ping_time = time.time()
+                self._ping_count += 1
+                await ws.send("PING")
+                log.debug("Stream: → PING")
+                self._check_stale_data()
+            except Exception:
+                break
+
+    def _on_message_async(self, ws, raw: str) -> None:
+        """Handle a raw WebSocket message in the async path (no rate limiting for WS)."""
+        if raw == "PING":
+            try:
+                asyncio.ensure_future(self._send_pong(ws))
+                log.debug("Stream: ← PING → PONG")
+            except Exception:
+                pass
+            return
+
+        if raw == "PONG":
+            self._last_pong_time = time.time()
+            self._pong_count += 1
+            if self._last_ping_time > 0:
+                rtt = self._last_pong_time - self._last_ping_time
+                if rtt < 1.0:
+                    self._connection_quality = min(1.0, self._connection_quality * 0.9 + 0.1)
+                elif rtt < 3.0:
+                    self._connection_quality = max(0.5, self._connection_quality * 0.95)
+                else:
+                    self._connection_quality = max(0.0, self._connection_quality * 0.8 - 0.1)
+            return
+
+        if raw in ("[]", ""):
+            return
+
+        try:
+            msg = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            log.debug("Stream: non-JSON frame: %r", raw[:80])
+            return
+
+        if isinstance(msg, list):
+            for item in msg:
+                if isinstance(item, dict):
+                    self._dispatch(item)
+        elif isinstance(msg, dict):
+            self._dispatch(msg)
 
     def _on_open(self, ws, token_ids: list[str]) -> None:
         log.info("Stream: connected — subscribing to %d token(s)", len([mask_transaction_hash(t) for t in token_ids]))
