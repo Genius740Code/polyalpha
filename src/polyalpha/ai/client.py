@@ -77,7 +77,11 @@ class OpenRouterClient:
         # Track total usage
         self._total_cost = 0.0
         self._total_tokens = 0
-    
+
+    def __repr__(self) -> str:
+        masked_key = f"{self.api_key[:8]}...{self.api_key[-4:]}" if len(self.api_key) > 12 else "***"
+        return f"OpenRouterClient(model={self.model!r}, api_key={masked_key})"
+
     def close(self) -> None:
         """Clean up HTTP client."""
         self._client.close()

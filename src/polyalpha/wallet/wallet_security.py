@@ -299,7 +299,7 @@ class WalletSecurity:
             
             del self._wallets[wallet_address]
             self._delete_wallet(wallet_address)
-            log.info("Removed wallet: %s", wallet_address)
+            log.info("Removed wallet: %s", mask_address(wallet_address))
     
     def list_wallets(self) -> List[str]:
         """

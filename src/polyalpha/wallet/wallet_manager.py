@@ -504,7 +504,7 @@ class WalletManager:
         if address in self._wallets:
             self._wallets[address].password = new_password
         
-        log.info("Rotated password for wallet: %s", mask_address(address))
+        log.info("Rotated credentials for wallet: %s", mask_address(address))
     
     def shutdown(self) -> None:
         """Shutdown wallet manager."""

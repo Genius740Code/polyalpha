@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from ..utils.logging_utils import mask_address
+
 if TYPE_CHECKING:
     from .paper import PaperEngine
     from .real import RealTradingEngine
@@ -259,7 +261,7 @@ class AutoRedeemEngine:
             # Check outcome filter
             outcome = getattr(pos, 'outcome', None)
             if self._config.only_winning and outcome != "WON":
-                log.debug(f"Skipping losing position: {pos_key}")
+                log.debug("Skipping losing position: %s", mask_address(pos_key))
                 continue
             
             # Check minimum age
@@ -267,7 +269,7 @@ class AutoRedeemEngine:
             if resolved_at:
                 age_hours = (now - resolved_at).total_seconds() / 3600
                 if age_hours < self._config.min_age_hours:
-                    log.debug(f"Position too young ({age_hours:.1f}h < {self._config.min_age_hours}h): {pos_key}")
+                    log.debug("Position too young (%.1fh < %.1fh): %s", age_hours, self._config.min_age_hours, mask_address(pos_key))
                     continue
             
             # Calculate value

@@ -179,9 +179,9 @@ class AuditLogger:
         level = logging.INFO if event.success else logging.WARNING
         msg = f"[AUDIT] {event.event_type.value}"
         if event.wallet_address:
-            msg += f" | wallet: {event.wallet_address[:8]}..."
+            msg += f" | wallet: {mask_address(event.wallet_address)}"
         if event.actor:
-            msg += f" | actor: {event.actor[:8]}..."
+            msg += f" | actor: {mask_address(event.actor)}"
         if not event.success:
             msg += f" | FAILED: {event.error_message}"
         

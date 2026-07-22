@@ -29,6 +29,8 @@ from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue, Empty
 
+from ..utils.logging_utils import mask_address
+
 from .security import (
     DatabaseEncryption,
     AuthenticationManager,
@@ -1733,7 +1735,7 @@ class TradeDatabase:
             cache_key = self._generate_cache_key(filters, sort_by, sort_order, limit, offset)
             if cache_key in self._query_cache and self._is_cache_entry_valid(cache_key):
                 self._cache_hits += 1
-                log.debug("Cache hit for key: %s", cache_key)
+                log.debug("Cache hit for key: %s...", cache_key[:40] if cache_key else cache_key)
                 return self._query_cache[cache_key]
             else:
                 self._cache_misses += 1
@@ -1871,7 +1873,7 @@ class TradeDatabase:
                     self._cache_ttl.pop(oldest_key, None)
                 self._query_cache[cache_key] = trades
                 self._cache_ttl[cache_key] = time.time()
-                log.debug("Cached %d trades with key: %s", len(trades), cache_key)
+                log.debug("Cached %d trades with key: %s...", len(trades), cache_key[:40] if cache_key else cache_key)
         
             return trades
     
@@ -2395,7 +2397,7 @@ class TradeDatabase:
             # Upload file
             s3_client.upload_file(str(self.db_path), bucket, object_key)
             
-            log.info("Database backup uploaded to S3: s3://%s/%s", bucket, object_key)
+            log.info("Database backup uploaded to S3: s3://%s/%s", bucket, mask_address(object_key))
         except ClientError as e:
             log.error("S3 backup failed: %s", e)
             raise

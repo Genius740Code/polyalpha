@@ -415,7 +415,7 @@ class ClobClient:
 
                 if status_code == 400:
                     body = e.response.text
-                    log.error("Order rejected (400): %s", body)
+                    log.error("Order rejected (400): reason=%s", str(e)[:200])
                     raise OrderRejected(f"Order rejected by CLOB: {body}")
 
                 if status_code == 401:

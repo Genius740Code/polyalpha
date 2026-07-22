@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable, Optional, List
 from enum import Enum
 
+from ..utils.logging_utils import mask_address
 from ..core import (
     InsufficientBalance,
     OrderNotFound,
@@ -109,7 +110,7 @@ class PaperWallet:
         """Add or update a position for this wallet."""
         key = f"{position.market_id}:{position.side}"
         self._positions[key] = position
-        log.debug("PaperWallet %s: position %s added/updated", self.wallet_id, key)
+        log.debug("PaperWallet %s: position %s added/updated", self.wallet_id, mask_address(key))
     
     def get_position(self, market_id: str, side: str) -> PaperPosition:
         """Get a position by market and side."""
@@ -127,7 +128,7 @@ class PaperWallet:
         key = f"{market_id}:{side}"
         if key in self._positions:
             del self._positions[key]
-            log.debug("PaperWallet %s: position %s removed", self.wallet_id, key)
+            log.debug("PaperWallet %s: position %s removed", self.wallet_id, mask_address(key))
     
     def get_summary(self) -> dict:
         """Get wallet summary statistics."""
