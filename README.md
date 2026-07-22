@@ -1,6 +1,6 @@
 # polyalpha
 
-Python SDK for Polymarket — market discovery, real-time price streaming, and paper trading.
+Python SDK for [Polymarket](https://polymarket.com) — discover prediction markets, stream live prices, trade paper or real, run bots with composable strategy conditions, analyse with 20+ TA indicators and AI signals, track P&L with full reporting, and manage wallets.
 
 ```bash
 pip install polyalpha
@@ -14,235 +14,421 @@ pip install polyalpha
 import polyalpha
 
 client = polyalpha.Client()
-
-# Fetch the active BTC 5-minute market
 market = client.markets.latest("BTC", "5m")
-market.show()
+
+stream = client.stream(market)
+@stream.on("price")
+def on_price(up, down):
+    print(f"UP={up:.4f}  DOWN={down:.4f}")
+stream.start(background=True)
+
+client.paper.buy(market, side="UP", amount=10.0)
+client.paper.summary()
 ```
 
 ---
 
 ## Market discovery
 
-```python
-client = polyalpha.Client()
-
-# Latest market for any asset / timeframe
-market = client.markets.latest("BTC",  "5m")
-market = client.markets.latest("ETH",  "15m")
-market = client.markets.latest("SOL",  "1h")
-
-# Direct slug lookup
-market = client.markets.get("btc-updown-5m-1751234700")
-
-# Keyword search
-markets = client.markets.search("ETH 15m")   # → list[Market]
-
-# All active markets at a timeframe
-markets = client.markets.available("5m")     # → list[Market]
-```
-
-**Supported assets:** BTC, ETH, SOL, XRP, DOGE  
-**Supported timeframes:** 5m, 15m, 1h, 4h, 24h
-
-### Market object
+Find any Up/Down market by asset + timeframe, slug, keyword, or browse all active.
 
 ```python
-market.id           # Gamma condition / event ID
-market.slug         # "btc-updown-5m-1751234700"
-market.question     # "Will BTC be higher in 5 minutes?"
-market.end_time     # ISO-8601 window close time
-market.volume       # float (USDC)
-market.liquidity    # float (USDC)
-market.up_price     # float — current UP mid-price
-market.down_price   # float — current DOWN mid-price
-market.up_token     # CLOB token ID for the UP leg
-market.down_token   # CLOB token ID for the DOWN leg
-market.url          # https://polymarket.com/event/…
-market.active       # bool
-market.closed       # bool
-
-market.show()       # print formatted summary
-market.dump()       # → dict  (raw excluded)
-market.json()       # → JSON string
+client.markets.latest("BTC", "5m")
+client.markets.latest("ETH", "15m")
+client.markets.latest("SOL", "1h")
+client.markets.get("btc-updown-5m-1751234700")
+client.markets.search("ETH 15m")
+client.markets.available("5m")      # all active 5m markets
 ```
+
+**Assets:** BTC, ETH, SOL, XRP, DOGE, HYPE, BNB  
+**Timeframes:** 5m, 15m, 1h, 4h, 24h
 
 ---
 
 ## Price streaming
 
+WebSocket stream with auto-reconnect, PING keepalive, and five event hooks.
+
 ```python
 stream = client.stream(market)
 
-@stream.on("price")
-def on_price(up: float, down: float):
-    print(f"UP={up:.4f}  DOWN={down:.4f}")
+@stream.on("price")   def on_price(up, down): ...
+@stream.on("book")    def on_book(data): ...
+@stream.on("trade")   def on_trade(data): ...
+@stream.on("close")   def on_close(): ...
+@stream.on("error")   def on_error(exc): ...
 
-@stream.on("book")
-def on_book(data: dict):
-    print(data["bids"][0], data["asks"][0])
+stream.start()                    # blocking
+stream.start(background=True)     # daemon thread
+stream.stop()
 
-@stream.on("trade")
-def on_trade(data: dict):
-    print(data["price"], data["size"])
-
-@stream.on("close")
-def on_close():
-    print("Market resolved")
-
-@stream.on("error")
-def on_error(exc: Exception):
-    print(f"Error: {exc}")
-
-@stream.on("connect")
-def on_connect():
-    print("Connected")
-
-stream.start()                  # blocking
-stream.start(background=True)   # daemon thread
-stream.stop()                   # clean shutdown
+# Latest prices without a handler
+stream.up
+stream.down
 ```
 
-The stream auto-reconnects on drops using exponential back-off.
-A text `PING` keepalive is sent every 10 seconds to prevent silent server-side disconnects.
-
-Latest prices are always available without a handler:
-
-```python
-print(stream.up, stream.down)
-```
+See [`examples/stream.py`](./examples/stream.py) and [`examples/async_stream.py`](./examples/async_stream.py).
 
 ---
 
 ## Paper trading
 
+Simulate orders with configurable fees, slippage, execution delay, and risk limits. Attach a stream for live P&L.
+
 ```python
 client = polyalpha.Client(balance=500.0)
 
-# Market fill — executes immediately at the current price
-order = client.paper.buy(market, side="UP", amount=10.0)
-
-# Limit order — queued until the streamed price crosses the threshold
-order = client.paper.limit(market, side="UP", price=0.92, amount=25.0)
-
-# Cancel a pending limit and refund the reserved balance
+client.paper.buy(market, side="UP", amount=10.0)
+client.paper.sell(market, side="UP", amount=5.0)
+client.paper.limit(market, side="UP", price=0.92, amount=25.0)
 client.paper.cancel(order.id)
+client.paper.cancel_all()
 
-# Inspect
-client.paper.open()             # → list[PaperOrder]  (pending limits)
-client.paper.orders()           # → list[PaperOrder]  (all orders)
-client.paper.positions()        # → list[PaperPosition]  (live)
-client.paper.all_positions()    # → list[PaperPosition]  (all, incl. resolved)
-client.paper.balance            # float
+client.paper.positions()       # open positions
+client.paper.all_positions()   # all, incl. resolved
+client.paper.balance
+client.paper.summary()         # P&L table
 
-# Wire a stream for auto-fill and live P&L updates
-stream = client.stream(market)
+# Advanced order types
+client.paper.buy(market, side="UP", amount=10.0,
+    trailing_stop=0.05,         # 5% trailing stop
+    stop_loss=0.10,             # 10% stop-loss
+    take_profit=0.50,           # 50% take-profit
+    oco_group="group1")         # one-cancels-other
+
+# Attach a stream for auto-fill + live P&L
 client.paper.attach_stream(stream, market)
-stream.start(background=True)
 
-# Resolve after market settles
+# Resolve after settlement
 client.paper.resolve(market, outcome="UP")
-
-# Print P&L table
-client.paper.summary()
 ```
 
-### PaperOrder
+See [`examples/paper.py`](./examples/paper.py) and [`examples/advanced_orders.py`](./examples/advanced_orders.py).
+
+### Paper config & presets
+
+Tune realism: fee model, slippage, fill probability, execution delay, risk limits.
 
 ```python
-order.id          # UUID string
-order.side        # "UP" | "DOWN"
-order.price       # fill price (or limit threshold if still open)
-order.amount      # USDC spent
-order.shares      # shares received after 2% taker fee
-order.fee         # USDC fee paid
-order.status      # "open" | "filled" | "cancelled"
-order.is_limit    # bool
-order.filled_at   # datetime (UTC) or None
-order.dump()      # → dict
+from polyalpha import PaperConfig
+
+config = PaperConfig.REALISTIC    # 2s delay, polymarket fees, 85% fill prob
+config = PaperConfig.AGGRESSIVE   # no delay, high fill prob
+config = PaperConfig.CONSERVATIVE # slippage, low fill prob
+config = PaperConfig.TEST         # zero fees, instant, 100% fill
+
+client = polyalpha.Client(balance=500.0, paper_config=config)
+# or load from .env:
+client = polyalpha.Client(paper_config_from_env=True)
 ```
 
-### PaperPosition
+### Built-in presets
+
+| Preset | Slippage | Delay | Fee | Fill prob |
+|---|---|---|---|---|
+| `CONSERVATIVE` | 0.1% | 1s | 2% | 85% |
+| `BALANCED` | 0.02% | ~1s | 2% | 92% |
+| `AGGRESSIVE` | 0% | 0 | 2% | 100% |
+| `REALISTIC` | 0.03% | 2s | polymarket | 85% |
+| `STRESS` | 0.1% | 5s | polymarket | 70% |
+| `TEST` | 0% | 0 | 0% | 100% |
+
+---
+
+## Bots
+
+Bot handles the full lifecycle: discover → stream → tick → resolve → rollover → repeat.
 
 ```python
-pos.side           # "UP" | "DOWN"
-pos.shares         # float
-pos.avg_price      # volume-weighted average entry price
-pos.current_price  # live price (updated from stream)
-pos.cost_basis     # shares × avg_price
-pos.current_value  # shares × current_price (or 0/shares if resolved)
-pos.pnl            # current_value − cost_basis
-pos.pnl_pct        # pnl / cost_basis × 100
-pos.resolved       # bool
-pos.outcome        # "WON" | "LOST" | None
-pos.dump()         # → dict
+bot = polyalpha.Bot("BTC", "5m", balance=500)
+
+@bot.on_tick
+def strategy(ctx):
+    if ctx.price.up > 0.9 and ctx.rsi > 50:
+        ctx.buy("UP", 20)
+
+bot.run()  # blocking, auto-rollover
+```
+
+### TickContext
+
+```python
+ctx.price.up / ctx.price.down   # current prices
+ctx.balance                     # paper balance
+ctx.positions                   # open positions
+ctx.pnl                         # realised P&L
+ctx.rsi / ctx.sma_20 / ctx.ema_12   # indicators (requires pandas)
+ctx.tick_count / ctx.trade_count
+ctx.buy("UP", 20)               # market buy
+ctx.limit("UP", 0.92, 25)       # limit order
+ctx.close_position("UP")        # close position
+```
+
+### Composable conditions
+
+Use declarative conditions with `and_`, `or_`, `not_` (or `&`, `|`, `~`).
+
+```python
+from polyalpha.conditions import rsi_above, price_above, and_
+
+bot.when(and_(rsi_above(50), price_above("up", 0.9))).buy("UP", 20)
+bot.when(rsi_below(30) & price_below("down", 0.15)).buy("DOWN", 20)
+bot.run()
+```
+
+**Built-in conditions:** `rsi_above`, `rsi_below`, `price_above`, `price_below`, `price_change_pct_above`, `sma_above`, `sma_below`, `trending_up`, `trending_down`, `volatility_above`, `volume_above`, `min_tick_count`, `max_spend`, `stopped`
+
+See [`examples/bot_simple.py`](./examples/bot_simple.py).
+
+---
+
+## Real trading
+
+Trade live on Polymarket via CLOB with EIP-712 signing.
+
+```python
+client = polyalpha.Client(
+    private_key="0x...",
+    rpc_url="https://polygon-rpc.com",
+    polymarket_api_key="...",
+)
+
+client.real.buy(market, side="UP", amount=10.0)
+client.real.cancel(order.id)
+client.real.positions()
+client.real.order_history()
+```
+
+**Real trading presets:** `conservative`, `balanced`, `aggressive`, `scalp`, `dca`, `test`.
+
+See [`examples/real_trading.py`](./examples/real_trading.py) and [`examples/clob_client_example.py`](./examples/clob_client_example.py).
+
+---
+
+## Auto-redeem
+
+Schedule automatic redemption of winning positions.
+
+```python
+from polyalpha import AutoRedeemConfig
+
+config = AutoRedeemConfig(time_interval="1d", min_value_usd=100.0)
+client.paper.set_auto_redeem_config(config)
+client.paper.auto_redeem.start_scheduler()
+
+# Manual
+client.paper.auto_redeem.redeem()
+client.paper.auto_redeem.get_redeem_history()
+```
+
+Triggers: time interval, market count, value threshold. Safety: dry-run, min age, max value caps.
+
+See [`examples/auto_redeem.py`](./examples/auto_redeem.py).
+
+---
+
+## Order book
+
+REST snapshots + optional WebSocket deltas, in-memory O(1) manager, analytics, and backtestable strategies.
+
+```python
+# REST
+feed = client.orderbook(market)
+feed.refresh()
+feed.bids[:3]
+feed.asks[:3]
+
+# Attach stream for live updates
+feed.attach_stream(client.stream(market))
+
+# Analytics
+from polyalpha.orderbook import estimate_fill, book_summary, cumulative_depth
+estimate_fill(snapshot, side="UP", amount=100.0)
+
+# Strategies + backtesting
+from polyalpha.orderbook import MomentumStrategy, SpreadStrategy, BacktestEngine
+```
+
+**Strategies:** `MomentumStrategy`, `MeanReversionStrategy`, `SpreadStrategy` (market making), `ImbalanceStrategy`.
+
+See [`examples/orderbook_example.py`](./examples/orderbook_example.py).
+
+---
+
+## Technical analysis
+
+Multi-source data feed and 20+ TA indicators.
+
+```python
+from polyalpha.analysis import DataFeed, IndicatorCalculator, SignalGenerator
+
+feed = DataFeed(DataFeedConfig(source="binance", timeframe="5m"))
+data = feed.fetch("BTC")
+
+ind = IndicatorCalculator(data)
+ind.rsi(14)
+ind.bollinger_bands(20, 2.0)
+ind.macd(12, 26, 9)
+ind.adx(14)
+ind.atr(14)
+ind.stochastic(14, 3, 3)
+ind.obv()
+
+sig = SignalGenerator(ind)
+sig.rsi_above(50)
+sig.price_above_sma(20)
+sig.bollinger_breakout("upper")
+sig.macd_crossover()
+sig.summary()  # all signals at once
+```
+
+**Data sources:** `binance` (default), `chainlink`, `coingecko`, `custom`.
+
+See [`examples/analysis.py`](./examples/analysis.py).
+
+---
+
+## AI-powered signals
+
+Analyse markets and generate trading signals via OpenRouter.
+
+```python
+client = polyalpha.Client(openrouter_api_key="sk-or-...")
+
+analysis = client.ai.analyse(market)
+analysis.sentiment    # "bullish" | "bearish" | "neutral"
+analysis.confidence   # 0.0 – 1.0
+analysis.reasoning    # markdown explanation
+
+signal = client.ai.signal(market)
+signal.action         # "BUY" | "SELL" | "HOLD"
+signal.side           # "UP" | "DOWN" | None
+signal.strength       # 0.0 – 1.0
+```
+
+See [`examples/ai_trading.py`](./examples/ai_trading.py).
+
+---
+
+## Reporting
+
+Generate terminal summaries, interactive HTML dashboards, and PNG snapshots of paper-trading performance.
+
+```python
+client.paper.report.show()                    # terminal (rich tables)
+client.paper.report.html(open_browser=True)   # interactive HTML
+client.paper.report.save_png("report.png")    # requires kaleido
+```
+
+**30+ metrics:** Sharpe, Sortino, Calmar, Omega, Kelly criterion, VaR, CVaR, profit factor, win rate, average win/loss, max drawdown, recovery factor.
+
+**12 charts:** equity curve, underwater drawdown, P&L per trade, win/loss distribution, monthly returns, rolling Sharpe, correlation matrix, P&L hourly heatmap.
+
+See [`examples/report.py`](./examples/report.py) and [`examples/reporting.py`](./examples/reporting.py).
+
+---
+
+## Database
+
+SQLite-backed trade persistence with optional encryption.
+
+```python
+client = polyalpha.Client(db_path="./trades.db")
+
+db = client.paper.db
+db.get_statistics(start_date="2026-01-01", end_date="2026-07-22")
+db.get_trades(market_slug="btc-updown-*")
+db.export_json("trades.json")
+db.export_csv("trades.csv")
+```
+
+See [`examples/database_example.py`](./examples/database_example.py) and [`examples/database_security_example.py`](./examples/database_security_example.py).
+
+---
+
+## Sniper bot
+
+Time-window execution bot with configurable thresholds and auto-rollover.
+
+```python
+from polyalpha import Sniper, SniperConfig
+
+Sniper(SniperConfig(
+    asset="BTC", timeframe="5m",
+    balance=500.0, window_seconds=30,
+    side="UP", order_size=25.0,
+    auto_rollover=True,
+)).run()
+```
+
+See [`examples/sniper.py`](./examples/sniper.py) and [`examples/sniper_ta.py`](./examples/sniper_ta.py).
+
+---
+
+## Tracker
+
+Real-time P&L tracking with JSON/CSV export.
+
+```python
+from polyalpha import Tracker
+
+tracker = Tracker(client.paper)
+tracker.sync()
+tracker.summary()
+tracker.export_json("trades.json")
+tracker.export_csv("trades.csv")
+```
+
+See [`examples/tracker.py`](./examples/tracker.py).
+
+---
+
+## Wallet management
+
+Multi-wallet paper trading and secure wallet storage (AES-256, multi-sig, audit logging).
+
+```python
+from polyalpha.trading import PaperWallet
+
+client.paper.add_wallet(PaperWallet(balance=1000.0, name="trader-1"))
+client.paper.switch_wallet("trader-1")
+```
+
+See [`examples/multi_wallet_paper.py`](./examples/multi_wallet_paper.py).
+
+---
+
+## Errors
+
+Typed exceptions for every failure mode:
+
+```python
+from polyalpha import (
+    PolyalphaError,          # base
+    MarketNotFound,          # slug not found
+    MarketClosed,            # window closed
+    StreamDisconnected,      # WS retry exhausted
+    InsufficientBalance,     # balance too low
+    OrderNotFound,           # unknown order
+    OrderRejected,           # CLOB rejection
+    OrderTimeout,            # not filled
+    RiskLimitExceeded,       # risk check failed
+    NetworkError,            # HTTP/WS failure
+)
 ```
 
 ---
 
-## Auto-Redeem
+## Logging
 
-Automatically redeem resolved positions based on configurable triggers (time intervals, market count, or value thresholds).
+| Variable | Default | Description |
+|---|---|---|
+| `POLYALPHA_LOG_LEVEL` | `WARNING` | DEBUG / INFO / WARNING / ERROR |
+| `POLYALPHA_LOG_FILE` | — | File path (10 MB rotate) |
+| `POLYALPHA_LOG_FORMAT` | `text` | `text` or `json` |
 
-```python
-import polyalpha
-from polyalpha import AutoRedeemConfig
-
-client = polyalpha.Client(balance=1000.0)
-
-# Simple daily auto-redeem
-config = AutoRedeemConfig(
-    time_interval="1d",  # Redeem daily
-    min_value_usd=100.0,  # Only when value >= $100
-)
-
-client.paper.set_auto_redeem_config(config)
-client.paper.auto_redeem.start_scheduler()
-```
-
-### Configuration Options
-
-```python
-AutoRedeemConfig(
-    # Trigger modes
-    trigger_on_time=True,   # Enable time-based triggers
-    trigger_on_count=True,  # Enable count-based triggers
-    trigger_on_value=False, # Enable value-based triggers
-    
-    # Time-based
-    time_interval="1d",    # "1h", "6h", "1d", "1w"
-    redeem_at_time=None,   # Specific time "14:00" UTC
-    
-    # Count-based
-    min_markets=10,         # Redeem after N markets
-    max_markets=100,        # Force redeem at N (safety)
-    
-    # Value-based
-    min_value_usd=100.0,    # Redeem when value >= $100
-    max_value_usd=10000.0, # Force redeem at $10k (safety)
-    
-    # Safety
-    require_confirmation=False,  # Confirm before redeeming
-    dry_run=False,               # Simulate without executing
-    only_winning=False,          # Only redeem winning positions
-    min_age_hours=1,             # Wait N hours after resolution
-)
-```
-
-### Manual Redemption
-
-```python
-# Check for redeemable positions
-positions = client.paper.auto_redeem.check_positions()
-print(f"Found {len(positions)} positions to redeem")
-
-# Manually redeem
-result = client.paper.auto_redeem.redeem(positions)
-print(f"Redeemed {result.redeemed_count} positions")
-
-# View history
-history = client.paper.auto_redeem.get_redeem_history()
-```
+Sensitive data (keys, addresses, tokens) is auto-redacted in both formats.
 
 ---
 
@@ -250,72 +436,53 @@ history = client.paper.auto_redeem.get_redeem_history()
 
 ```python
 client = polyalpha.Client(
-    balance   = 100.0,      # paper USDC balance
-    timeout   = 10,         # HTTP timeout (seconds)
-    retries   = 3,          # retries on 5xx errors
-    log_level = "WARNING",  # "DEBUG" | "INFO" | "WARNING" | "ERROR"
-    rate_limit = None,      # max API requests per second (default: unlimited)
+    balance         = 100.0,        # paper USDC balance
+    timeout         = 10,           # HTTP timeout (s)
+    retries         = 3,            # HTTP retries
+    log_level       = "WARNING",
+    rate_limit      = None,         # requests/s
+    paper_config    = None,         # PaperConfig instance
+    paper_config_from_env = False,
+    db_path         = None,         # SQLite path
+    openrouter_api_key = None,      # AI features
+    private_key     = None,         # real trading key
+    rpc_url         = None,         # Polygon RPC
+    polymarket_api_key = None,      # CLOB API key
+    real_config     = None,         # RealTradingConfig
 )
 ```
 
-**Rate limiting:** Optional token-bucket rate limiter to prevent API abuse. Set to an integer (e.g., `10` for 10 requests/second) or `None` for unlimited.
-
 ---
 
-## Error handling
+## Examples index
 
-```python
-from polyalpha import (
-    MarketNotFound,       # no active market for that slug / asset+timeframe
-    MarketClosed,         # market exists but window has closed
-    StreamDisconnected,   # WS dropped and retry budget exhausted
-    InsufficientBalance,  # paper balance too low
-    OrderNotFound,        # cancel/lookup of unknown order ID
-)
-
-try:
-    market = client.markets.latest("BTC", "5m")
-except polyalpha.MarketNotFound as exc:
-    print(f"Not found: {exc}")
-```
-
----
-
-## Logging
-
-Logging is configured via environment variables, set either in `.env` or exported in the shell.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `POLYALPHA_LOG_LEVEL` | `WARNING` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `POLYALPHA_LOG_FILE` | *(none)* | File path for persistent logs (rotated at 10 MB, 3 backups) |
-| `POLYALPHA_LOG_FORMAT` | `text` | Output format: `text` (human-readable) or `json` (machine-parseable JSON lines) |
-
-By default `INFO`-level and above messages go to stdout, while `WARNING`+ go to stderr. Set `POLYALPHA_LOG_LEVEL=DEBUG` to see detailed per-operation logs.
-
-### Privacy
-
-Log messages are automatically scrubbed for sensitive data before being written. The following are redacted:
-
-- **Wallet addresses** — any `0x`-prefixed 40-hex string → shown as `0x1234...5678`
-- **Private keys** — any bare 64+ hex character string → shown as `0xdeadbe...REDACTED`
-- **Transaction hashes** — any `0x`-prefixed 64-hex string → shown as `0x12345678...abcd`
-- **API keys, tokens, passwords, secrets** — in `key=value` or `KEY: value` syntax
-- **Bearer tokens and JWTs** — the token portion is replaced with `***REDACTED***`
-
-This applies to all output formats (`text` and `json`). Redaction happens at the message level before the record is formatted, so raw sensitive data is never persisted to log files or streams.
-
----
-
-## Examples
-
-```bash
-python examples/market.py --asset BTC --timeframe 5m
-python examples/market.py --rate-limit 10
-python examples/stream.py --asset ETH --timeframe 15m --log DEBUG
-python examples/paper.py  --side UP   --amount 25 --limit 0.92
-python examples/auto_redeem.py
-```
+| File | What it shows |
+|---|---|
+| [`examples/market.py`](./examples/market.py) | Market discovery and slug resolution |
+| [`examples/stream.py`](./examples/stream.py) | Price streaming with all event hooks |
+| [`examples/paper.py`](./examples/paper.py) | Paper trading — buy, sell, limit, summary |
+| [`examples/advanced_orders.py`](./examples/advanced_orders.py) | Trailing stop, OCO, take-profit |
+| [`examples/bot_simple.py`](./examples/bot_simple.py) | Bot with on_tick strategy |
+| [`examples/sniper.py`](./examples/sniper.py) | Sniper time-window bot |
+| [`examples/sniper_ta.py`](./examples/sniper_ta.py) | Sniper + technical analysis |
+| [`examples/analysis.py`](./examples/analysis.py) | TA data feed, indicators, signals |
+| [`examples/ai_trading.py`](./examples/ai_trading.py) | AI-powered analysis + signals |
+| [`examples/orderbook_example.py`](./examples/orderbook_example.py) | Order book REST + WS + analytics |
+| [`examples/report.py`](./examples/report.py) | Report engine — show, HTML, PNG |
+| [`examples/reporting.py`](./examples/reporting.py) | Full reporting with metrics + charts |
+| [`examples/real_trading.py`](./examples/real_trading.py) | Live CLOB trading |
+| [`examples/auto_redeem.py`](./examples/auto_redeem.py) | Scheduled auto-redeem |
+| [`examples/tracker.py`](./examples/tracker.py) | P&L tracker + export |
+| [`examples/multi_wallet_paper.py`](./examples/multi_wallet_paper.py) | Multi-wallet paper trading |
+| [`examples/database_example.py`](./examples/database_example.py) | SQLite trade persistence |
+| [`examples/database_security_example.py`](./examples/database_security_example.py) | Encrypted database |
+| [`examples/async_bots.py`](./examples/async_bots.py) | Async bot strategies |
+| [`examples/risk_management.py`](./examples/risk_management.py) | Risk limits and controls |
+| [`examples/pairsum_arb.py`](./examples/pairsum_arb.py) | Arbitrage example |
+| [`examples/pre_trade_checks.py`](./examples/pre_trade_checks.py) | Pre-trade validation |
+| [`examples/fee_rebates.py`](./examples/fee_rebates.py) | Fee rebate tracking |
+| [`examples/portfolio_analytics.py`](./examples/portfolio_analytics.py) | Portfolio-level analysis |
+| [`examples/weather_config_example.py`](./examples/weather_config_example.py) | Weather market example |
 
 ---
 
@@ -324,19 +491,26 @@ python examples/auto_redeem.py
 ```
 src/polyalpha/
 ├── __init__.py          Public API surface
-├── client.py            Client — main entry point
-├── markets.py           MarketClient — Gamma API + slug resolution
+├── client.py            Client — single entry point
+├── markets.py           MarketClient — discovery
 ├── stream.py            Stream — WebSocket price feed
-├── core/
-│   ├── __init__.py
-│   ├── constants.py     Endpoints, timeframes, assets, tuning knobs
-│   ├── errors.py        Typed exceptions
-│   └── market.py        Market dataclass
-└── trading/
-    ├── __init__.py
-    └── paper.py         PaperEngine, PaperOrder, PaperPosition
-examples/
-├── market.py
-├── stream.py
-└── paper.py
+├── bot.py               Bot — lifecycle runner
+├── conditions.py        Composable strategy conditions
+│
+├── core/                Constants, errors, market models, env
+├── trading/             PaperEngine, RealTradingEngine, auto-redeem, retry
+├── orderbook/           REST + WS book, manager, strategies, backtest
+├── analysis/            DataFeed, 20+ indicators, 30+ signals
+├── ai/                  OpenRouterClient, MarketAnalysis, TradingSignal
+├── report/              ReportEngine, metrics (30+), charts (12), HTML
+├── bots/                Sniper, Tracker
+├── database/            SQLite, encryption, auth
+├── wallet/              WalletSecurity, MultiSig, TransactionSigner, AuditLogger
+└── utils/               Sensitive-data logging
 ```
+
+---
+
+## License
+
+MIT
