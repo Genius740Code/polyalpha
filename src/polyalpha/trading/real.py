@@ -68,6 +68,7 @@ from ..core import (
 )
 from .clob_client import ClobClient
 from .alchemy_client import AlchemyClient
+from .wallet import RealWallet, RealTradingWalletManager, WalletSelectionStrategy
 from .error_handling import (
     CircuitBreaker,
     ErrorRecoveryManager,
@@ -1615,6 +1616,11 @@ class RealTradingEngine:
         self._transaction_rollback = TransactionRollbackManager()
         self._disaster_recovery = DisasterRecovery()
 
+        # Multi-wallet mode
+        self._use_multi_wallet: bool = False
+        self._real_wallet_manager: Optional[RealTradingWalletManager] = None
+        self._active_wallet_id: Optional[str] = None
+
         # Initialize balance
         self.refresh_balance()
 
@@ -1935,10 +1941,181 @@ class RealTradingEngine:
 
     def refresh_balance(self) -> None:
         """Refresh balance from blockchain."""
-        self._balance = self._wallet.get_balance()
-        self._allowance = self._wallet.get_allowance()
-        if self._config.log_balance_updates:
-            log.info("Balance: $%.2f, Allowance: $%.2f", self._balance, self._allowance)
+        if self._use_multi_wallet and self._real_wallet_manager:
+            self._real_wallet_manager.refresh_all_balances()
+        else:
+            self._balance = self._wallet.get_balance()
+            self._allowance = self._wallet.get_allowance()
+            if self._config.log_balance_updates:
+                log.info("Balance: $%.2f, Allowance: $%.2f", self._balance, self._allowance)
+
+    # ── Multi-Wallet Support ─────────────────────────────────────────────────────
+
+    @property
+    def is_multi_wallet(self) -> bool:
+        """Check if multi-wallet mode is enabled."""
+        return self._use_multi_wallet
+
+    @property
+    def wallets(self) -> Optional[RealTradingWalletManager]:
+        """Get the real wallet manager if multi-wallet mode is enabled."""
+        return self._real_wallet_manager if self._use_multi_wallet else None
+
+    def enable_multi_wallet(
+        self,
+        wallet_manager: RealTradingWalletManager,
+        wallet_id: Optional[str] = None,
+    ) -> None:
+        """
+        Enable multi-wallet trading mode.
+
+        Parameters
+        ----------
+        wallet_manager : RealTradingWalletManager
+            Wallet manager with configured wallets
+        wallet_id : str, optional
+            Initially active wallet ID (default: first wallet)
+        """
+        if not wallet_manager.get_all_wallets():
+            raise ValueError("Wallet manager must have at least one wallet")
+
+        self._real_wallet_manager = wallet_manager
+        self._use_multi_wallet = True
+
+        if wallet_id:
+            self._active_wallet_id = wallet_id
+        else:
+            first = wallet_manager.get_all_wallets()[0]
+            self._active_wallet_id = first.wallet_id
+
+        log.info(
+            "RealTradingEngine: multi-wallet mode enabled with %d wallets (active: %s)",
+            len(wallet_manager.get_all_wallets()),
+            self._active_wallet_id,
+        )
+
+    def disable_multi_wallet(self) -> None:
+        """Disable multi-wallet mode and return to single-wallet operation."""
+        self._use_multi_wallet = False
+        self._real_wallet_manager = None
+        self._active_wallet_id = None
+        log.info("RealTradingEngine: multi-wallet mode disabled")
+
+    def set_active_wallet(self, wallet_id: str) -> None:
+        """Set the active wallet by ID. Only valid in multi-wallet mode."""
+        if not self._use_multi_wallet or not self._real_wallet_manager:
+            raise RuntimeError("Multi-wallet mode is not enabled")
+        self._real_wallet_manager.get_wallet(wallet_id)  # validate exists
+        self._active_wallet_id = wallet_id
+        log.info("RealTradingEngine: active wallet set to %s", wallet_id)
+
+    def _get_active_wallet(self) -> RealWallet:
+        """Get the currently active wallet in multi-wallet mode."""
+        if not self._use_multi_wallet or not self._real_wallet_manager:
+            raise RuntimeError("Multi-wallet mode is not enabled")
+        return self._real_wallet_manager.get_wallet(self._active_wallet_id)
+
+    def _resolve_orders(self) -> dict:
+        """Get orders dict from active wallet or single-wallet mode."""
+        if self._use_multi_wallet:
+            return self._get_active_wallet().orders
+        return self._orders
+
+    def _resolve_positions(self) -> dict:
+        """Get positions dict from active wallet or single-wallet mode."""
+        if self._use_multi_wallet:
+            return self._get_active_wallet().positions
+        return self._positions
+
+    def _resolve_balance(self) -> float:
+        """Get balance from active wallet or single-wallet mode."""
+        if self._use_multi_wallet:
+            return self._get_active_wallet().balance
+        return self._balance
+
+    def _set_balance(self, value: float) -> None:
+        """Set balance on active wallet or single-wallet mode."""
+        if self._use_multi_wallet:
+            self._get_active_wallet().balance = value
+        else:
+            self._balance = value
+
+    def _resolve_allowance(self) -> float:
+        """Get allowance from active wallet or single-wallet mode."""
+        if self._use_multi_wallet:
+            return self._get_active_wallet().allowance
+        return self._allowance
+
+    def _set_allowance(self, value: float) -> None:
+        """Set allowance on active wallet or single-wallet mode."""
+        if self._use_multi_wallet:
+            self._get_active_wallet().allowance = value
+        else:
+            self._allowance = value
+
+    def _resolve_wallet(self):
+        """Get WalletManager from active wallet or single-wallet mode."""
+        if self._use_multi_wallet:
+            return self._get_active_wallet().wallet_manager
+        return self._wallet
+
+    def _resolve_clob(self):
+        """Get ClobClient from active wallet or single-wallet mode."""
+        if self._use_multi_wallet:
+            return self._get_active_wallet().clob_client
+        return self._clob_client
+
+    def _resolve_config(self):
+        """Get config from active wallet or single-wallet mode."""
+        if self._use_multi_wallet:
+            return self._get_active_wallet().config or self._config
+        return self._config
+
+    def _resolve_risk_manager(self):
+        """Get risk manager from active wallet or single-wallet mode."""
+        if self._use_multi_wallet:
+            rm = self._get_active_wallet().risk_manager
+            if rm is not None:
+                return rm
+        return self._risk_manager
+
+    def _resolve_config_and_risk(self):
+        """Convenience: return (config, risk_manager) for current wallet."""
+        if self._use_multi_wallet:
+            wallet = self._get_active_wallet()
+            cfg = wallet.config or self._config
+            rm = wallet.risk_manager if wallet.risk_manager is not None else self._risk_manager
+            return cfg, rm
+        return self._config, self._risk_manager
+
+    def _find_order_across_wallets(self, order_id: str):
+        """Find an order across all wallets. Returns (order, wallet) or (None, None)."""
+        if not self._use_multi_wallet or not self._real_wallet_manager:
+            if order_id in self._orders:
+                return self._orders[order_id], None
+            return None, None
+        return self._real_wallet_manager.find_order_across_wallets(order_id)
+
+    def _find_position_across_wallets(self, market_id: str, side: str):
+        """Find a position across all wallets. Returns (position, wallet) or (None, None)."""
+        if not self._use_multi_wallet or not self._real_wallet_manager:
+            key = f"{market_id}:{side}"
+            if key in self._positions:
+                return self._positions[key], None
+            return None, None
+        return self._real_wallet_manager.find_position_across_wallets(market_id, side)
+
+    def _get_all_orders_across_wallets(self) -> dict:
+        """Get all orders across all wallets."""
+        if not self._use_multi_wallet or not self._real_wallet_manager:
+            return self._orders
+        return self._real_wallet_manager.get_all_orders()
+
+    def _get_all_positions_across_wallets(self) -> dict:
+        """Get all positions across all wallets."""
+        if not self._use_multi_wallet or not self._real_wallet_manager:
+            return self._positions
+        return self._real_wallet_manager.get_all_positions()
 
     # ── Pre-Trade Checks ─────────────────────────────────────────────────────────
 
@@ -1978,6 +2155,9 @@ class RealTradingEngine:
         ... else:
         ...     order = client.real.buy(market, side="UP", amount=10.0)
         """
+        balance = self._resolve_balance()
+        allowance = self._resolve_allowance()
+
         checks = {
             "balance_ok": True,
             "allowance_ok": True,
@@ -1988,18 +2168,18 @@ class RealTradingEngine:
         }
 
         # Check balance
-        if amount > self._balance:
+        if amount > balance:
             checks["balance_ok"] = False
             checks["can_proceed"] = False
             checks["warnings"].append(
-                f"Insufficient balance: need ${amount:.2f}, have ${self._balance:.2f}"
+                f"Insufficient balance: need ${amount:.2f}, have ${balance:.2f}"
             )
 
         # Check CLOB allowance (real trading specific)
-        if self._allowance < amount:
+        if allowance < amount:
             checks["allowance_ok"] = False
             checks["warnings"].append(
-                f"Insufficient CLOB allowance: need ${amount:.2f}, have ${self._allowance:.2f}. "
+                f"Insufficient CLOB allowance: need ${amount:.2f}, have ${allowance:.2f}. "
                 f"Call approve_spender() to increase allowance."
             )
             # Allowance warning doesn't block trade (can be auto-approved), but warn user
@@ -2078,8 +2258,15 @@ class RealTradingEngine:
 
         side = _validate_side(side)
 
+        # Resolve wallet-aware state
+        config, risk_manager = self._resolve_config_and_risk()
+        balance = self._resolve_balance()
+        positions = self._resolve_positions()
+        orders = self._resolve_orders()
+
         # Sync balance from chain to avoid divergence
         self.refresh_balance()
+        balance = self._resolve_balance()
 
         # Track if user explicitly provided a price (for limit vs market order)
         user_provided_price = price is not None
@@ -2087,7 +2274,7 @@ class RealTradingEngine:
         # 1. Calculate position size if not provided
         if amount is None:
             amount = self._position_sizer.calculate_size(
-                self._balance, market, side, confidence, price
+                balance, market, side, confidence, price
             )
 
         # 2. Run pre-trade checks
@@ -2098,12 +2285,12 @@ class RealTradingEngine:
             )
 
         # 3. Validate against risk limits
-        self._risk_manager.validate_order(amount, self._balance, market, self._positions)
+        risk_manager.validate_order(amount, balance, market, positions)
 
         # 4. Check balance
-        if amount > self._balance:
+        if amount > balance:
             raise InsufficientBalance(
-                f"Order amount ${amount:.2f} exceeds balance ${self._balance:.2f}"
+                f"Order amount ${amount:.2f} exceeds balance ${balance:.2f}"
             )
 
         # 5. Get price with stream awareness (prefers live stream price if available)
@@ -2115,7 +2302,7 @@ class RealTradingEngine:
         shares, fee = self._calculate_shares_and_fee(amount, price, is_maker=is_maker)
 
         # 7. Require confirmation if enabled
-        if confirm and self._config.require_confirmation:
+        if confirm and config.require_confirmation:
             self._require_confirmation(market, side, amount, price, shares, fee)
 
         # 8. Place order on CLOB
@@ -2143,24 +2330,25 @@ class RealTradingEngine:
             created_at=datetime.now(timezone.utc),
             stop_loss=stop_loss,
             take_profit=take_profit,
-            sizing_strategy=self._config.position_sizing,
+            sizing_strategy=config.position_sizing,
             confidence=confidence,
         )
 
         # 10. Update balance (fee comes out of amount, not on top)
-        self._balance -= amount
+        self._set_balance(self._resolve_balance() - amount)
 
         # 11. Store order
-        self._orders[order.id] = order
+        orders[order.id] = order
 
         # 12. Update position
         self._update_position(market, side, order)
 
         # 13. Save to database
         if self._db_enabled:
-            self._save_order_to_db(order)
+            active_wallet = self._get_active_wallet() if self._use_multi_wallet else None
+            self._save_order_to_db(order, wallet=active_wallet)
 
-        if self._config.log_all_orders:
+        if config.log_all_orders:
             log.info(
                 "Order placed: %s %s $%.2f @ $%.4f",
                 market.slug, side, amount, price
@@ -2273,17 +2461,16 @@ class RealTradingEngine:
         order_id : str
             Order ID to cancel
         """
-        if order_id not in self._orders:
+        order, wallet = self._find_order_across_wallets(order_id)
+        if order is None:
             raise OrderNotFound(f"Order {order_id} not found")
-
-        order = self._orders[order_id]
 
         if order.status not in ("open", "pending"):
             log.warning("Order %s is not open (status: %s)", order_id, order.status)
             return
 
-        # Cancel on CLOB (placeholder)
-        self._cancel_clob_order(order_id)
+        # Cancel on CLOB
+        self._cancel_clob_order(order_id, wallet=wallet)
 
         order.status = "cancelled"
         log.info("Order %s cancelled", order_id)
@@ -2302,13 +2489,15 @@ class RealTradingEngine:
         RealOrder
             Order object
         """
-        if order_id not in self._orders:
+        order, _ = self._find_order_across_wallets(order_id)
+        if order is None:
             raise OrderNotFound(f"Order {order_id} not found")
-        return self._orders[order_id]
+        return order
 
     def open_orders(self) -> list[RealOrder]:
         """Get all open orders."""
-        return [o for o in self._orders.values() if o.status in ("open", "pending")]
+        orders = self._get_all_orders_across_wallets()
+        return [o for o in orders.values() if o.status in ("open", "pending")]
 
     def poll_order_status(self, order_id: str) -> dict:
         """
@@ -2331,22 +2520,25 @@ class RealTradingEngine:
         NetworkError
             If polling fails after retries
         """
-        if order_id not in self._orders:
+        order, _ = self._find_order_across_wallets(order_id)
+        if order is None:
             raise OrderNotFound(f"Order {order_id} not found")
 
-        order = self._orders[order_id]
         order.last_status_check = datetime.now(timezone.utc)
         order.status_check_attempts += 1
 
+        clob = self._resolve_clob()
+        config = self._resolve_config()
+
         try:
-            status_response = self._clob_client.get_order_status(order_id)
+            status_response = clob.get_order_status(order_id)
             log.debug("Order %s status: %s", order_id, status_response.get("status"))
             return status_response
         except Exception as e:
             log.error("Failed to poll order %s status (attempt %d): %s",
                      order_id, order.status_check_attempts, e)
-            if order.status_check_attempts >= self._config.retry_attempts:
-                raise NetworkError(f"Order status polling failed after {self._config.retry_attempts} attempts: {e}")
+            if order.status_check_attempts >= config.retry_attempts:
+                raise NetworkError(f"Order status polling failed after {config.retry_attempts} attempts: {e}")
             raise
 
     def update_order_fill_status(self, order_id: str) -> None:
@@ -2360,10 +2552,9 @@ class RealTradingEngine:
         order_id : str
             Order ID to update
         """
-        if order_id not in self._orders:
+        order, _ = self._find_order_across_wallets(order_id)
+        if order is None:
             raise OrderNotFound(f"Order {order_id} not found")
-
-        order = self._orders[order_id]
 
         # Skip if order is already in final state
         if order.status in ("filled", "cancelled", "expired"):
@@ -2433,17 +2624,14 @@ class RealTradingEngine:
         avg_price : float
             Average fill price
         """
-        # Find the position for this order
+        positions = self._resolve_positions()
         position_key = f"{order.market_id}:{order.side}"
         
-        if position_key not in self._positions:
-            # Position doesn't exist yet, create it with partial fill
-            log.warning("Position not found for partial fill order %s, creating new position",
-                       order.id)
-            # This shouldn't normally happen as position is created on order placement
+        if position_key not in positions:
+            log.warning("Position not found for partial fill order %s", order.id)
             return
 
-        position = self._positions[position_key]
+        position = positions[position_key]
 
         # Calculate additional shares from this partial fill
         new_shares = filled_shares - position.shares
@@ -2475,10 +2663,8 @@ class RealTradingEngine:
         log.info("Order fill callback: %s %s $%.2f @ $%.4f",
                 order.slug, order.side, order.amount, order.price)
 
-        # Record trade in risk manager for daily P&L tracking
-        # Note: This is a simplified P&L calculation
-        # Real P&L would be calculated on position exit
-        self._risk_manager.record_trade(0.0)
+        risk_manager = self._resolve_risk_manager()
+        risk_manager.record_trade(0.0)
 
     def check_order_timeout(self, order_id: str) -> bool:
         """
@@ -2494,19 +2680,18 @@ class RealTradingEngine:
         bool
             True if order has timed out
         """
-        if order_id not in self._orders:
+        order, _ = self._find_order_across_wallets(order_id)
+        if order is None:
             raise OrderNotFound(f"Order {order_id} not found")
 
-        order = self._orders[order_id]
+        config = self._resolve_config()
 
-        # Only check timeout for pending/open orders
         if order.status not in ("pending", "open", "partially_filled"):
             return False
 
-        # Check if order has exceeded timeout
         if order.created_at:
             elapsed = (datetime.now(timezone.utc) - order.created_at).total_seconds()
-            if elapsed > self._config.order_timeout:
+            if elapsed > config.order_timeout:
                 log.warning("Order %s timed out after %.1f seconds (status: %s)",
                            order_id, elapsed, order.status)
                 return True
@@ -2523,8 +2708,9 @@ class RealTradingEngine:
             Dictionary mapping order_id to new status
         """
         status_updates = {}
+        orders = self._get_all_orders_across_wallets()
 
-        for order_id, order in list(self._orders.items()):
+        for order_id, order in list(orders.items()):
             if order.status in ("pending", "open", "partially_filled"):
                 try:
                     old_status = order.status
@@ -2534,7 +2720,6 @@ class RealTradingEngine:
                 except Exception as e:
                     log.error("Failed to update order %s status: %s", order_id, e)
 
-                    # Check for timeout
                     if self.check_order_timeout(order_id):
                         status_updates[order_id] = "timeout"
 
@@ -2542,34 +2727,25 @@ class RealTradingEngine:
 
     # ── Position Management ───────────────────────────────────────────────────────
 
-    def sync_positions_from_chain(self) -> None:
-        """
-        Fetch real positions from the blockchain using Alchemy.
-
-        Calculates balances from on-chain transfers and derives fill prices
-        by (1) matching against existing order records, (2) using Gamma
-        metadata mid-price, (3) querying CLOB orderbook mid-price, and
-        (4) falling back to a conservative estimate.
-        """
-        log.info("Syncing positions from blockchain...")
-        address = self._wallet.address
+    def _sync_single_wallet_positions(self, address: str, clob_client, positions_dict: dict) -> None:
+        """Sync positions for a single wallet address into the given positions dict."""
         balances = self._alchemy_client.get_token_balances(address)
         transfers = self._alchemy_client.get_asset_transfers(address)
 
-        # Build token IDs list
         token_ids = list(balances.keys())
         if not token_ids:
             return
 
         metadata = self._alchemy_client.fetch_polymarket_metadata(token_ids)
 
-        # Index transfers by token_id for fast lookup
         transfers_by_token: dict[str, list[dict]] = {}
         for t in transfers:
             for m in t.get("erc1155Metadata", []):
                 tid = m.get("tokenId", "")
                 if tid:
                     transfers_by_token.setdefault(tid, []).append(t)
+
+        orders = self._get_all_orders_across_wallets()
 
         for token_id, amount in balances.items():
             if amount <= 0:
@@ -2581,7 +2757,6 @@ class RealTradingEngine:
             question = meta.get("question", "Unknown Market")
             gamma_price = float(meta.get("price", 0.0))
 
-            # Determine side from metadata
             side = meta.get("side", "UP")
             clob_token_ids = meta.get("clobTokenIds", "")
             if isinstance(clob_token_ids, str) and clob_token_ids:
@@ -2590,23 +2765,19 @@ class RealTradingEngine:
                     token_dec = str(int(token_id, 16)) if token_id.startswith("0x") else token_id
                     side = "UP" if tokens[0] == token_dec else "DOWN"
 
-            # ── Derive fill price (multi-strategy) ────────────────────────
             fill_price = None
 
-            # Strategy 1: from existing order records with actual fills
-            for order in self._orders.values():
+            for order in orders.values():
                 if order.market_id == market_id and order.side == side and order.avg_fill_price > 0:
                     fill_price = order.avg_fill_price
                     break
 
-            # Strategy 2: from Gamma metadata current price
             if fill_price is None and gamma_price > 0:
                 fill_price = gamma_price
 
-            # Strategy 3: from CLOB orderbook mid-price
             if fill_price is None:
                 try:
-                    ob = self._clob_client.get_orderbook(token_id)
+                    ob = clob_client.get_orderbook(token_id)
                     bids = ob.get("bids", [])
                     asks = ob.get("asks", [])
                     best_bid = float(bids[0][0]) if bids else 0.0
@@ -2620,19 +2791,16 @@ class RealTradingEngine:
                 except Exception:
                     pass
 
-            # Strategy 4: reuse existing position avg_price if already tracked
             position_key = f"{market_id}:{side}"
-            if fill_price is None and position_key in self._positions:
-                fill_price = self._positions[position_key].avg_price
+            if fill_price is None and position_key in positions_dict:
+                fill_price = positions_dict[position_key].avg_price
 
-            # Final fallback
             if fill_price is None or fill_price <= 0:
                 fill_price = FALLBACK_PRICE
 
             cost_basis = amount * fill_price
             current_price = gamma_price if gamma_price > 0 else fill_price
 
-            # ── Entry time from incoming transfers ────────────────────────
             entry_time = None
             incoming = [t for t in transfers_by_token.get(token_id, [])
                         if t.get("to", "").lower() == address.lower()]
@@ -2661,9 +2829,28 @@ class RealTradingEngine:
                 entry_time=entry_time,
             )
 
-            self._positions[position_key] = position
+            positions_dict[position_key] = position
 
-        log.info(f"Synced {len(balances)} live positions from chain.")
+    def sync_positions_from_chain(self) -> None:
+        """Fetch real positions from the blockchain using Alchemy."""
+        log.info("Syncing positions from blockchain...")
+
+        if self._use_multi_wallet and self._real_wallet_manager:
+            for wallet in self._real_wallet_manager.get_all_wallets():
+                try:
+                    self._sync_single_wallet_positions(
+                        wallet.address,
+                        wallet.clob_client,
+                        wallet.positions,
+                    )
+                except Exception as e:
+                    log.error("Failed to sync positions for wallet %s: %s", wallet.wallet_id, e)
+        else:
+            self._sync_single_wallet_positions(
+                self._wallet.address,
+                self._clob_client,
+                self._positions,
+            )
 
     def positions(self) -> list[RealPosition]:
         """Get all open positions."""
@@ -2671,7 +2858,8 @@ class RealTradingEngine:
         if now - self._last_position_sync > self._position_sync_ttl:
             self.sync_positions_from_chain()
             self._last_position_sync = now
-        return [p for p in self._positions.values() if not p.resolved]
+        positions = self._get_all_positions_across_wallets()
+        return [p for p in positions.values() if not p.resolved]
 
     def all_positions(self) -> list[RealPosition]:
         """Get all positions including resolved ones."""
@@ -2679,7 +2867,8 @@ class RealTradingEngine:
         if now - self._last_position_sync > self._position_sync_ttl:
             self.sync_positions_from_chain()
             self._last_position_sync = now
-        return list(self._positions.values())
+        positions = self._get_all_positions_across_wallets()
+        return list(positions.values())
 
     def show_positions(self, show_all: bool = False, verbose: bool = True) -> None:
         """
@@ -2700,7 +2889,8 @@ class RealTradingEngine:
         from ..report.terminal import render_positions
 
         positions = self.all_positions() if show_all else self.positions()
-        render_positions(positions, self._orders, show_all=show_all, verbose=verbose)
+        orders = self._get_all_orders_across_wallets()
+        render_positions(positions, orders, show_all=show_all, verbose=verbose)
 
     def position_history(self) -> dict:
         """
@@ -2726,13 +2916,14 @@ class RealTradingEngine:
         losses = [p for p in closed_pos if p.outcome == "LOST"]
 
         # Calculate holding times for closed positions
+        orders = self._get_all_orders_across_wallets()
         holding_times = []
         for pos in closed_pos:
             if pos.order_ids:
                 fill_times = [
-                    self._orders[oid].filled_at 
+                    orders[oid].filled_at 
                     for oid in pos.order_ids 
-                    if oid in self._orders and self._orders[oid].filled_at
+                    if oid in orders and orders[oid].filled_at
                 ]
                 if fill_times:
                     holding_time = (max(fill_times) - min(fill_times)).total_seconds()
@@ -2780,10 +2971,10 @@ class RealTradingEngine:
         RealPosition
             Position object
         """
-        key = f"{market_id}:{side}"
-        if key not in self._positions:
+        position, _ = self._find_position_across_wallets(market_id, side)
+        if position is None:
             raise PositionNotFound(f"No position for {market_id} {side}")
-        return self._positions[key]
+        return position
 
     def set_stop_loss(
         self,
@@ -2808,12 +2999,10 @@ class RealTradingEngine:
         >>> client.real.set_stop_loss(market, side="UP", stop_price=0.45)
         """
         side = _validate_side(side)
-        position_key = f"{market.id}:{side}"
-        
-        if position_key not in self._positions:
+        position, _ = self._find_position_across_wallets(market.id, side)
+        if position is None:
             raise PositionNotFound(f"No position found for {market.slug} {side}")
         
-        position = self._positions[position_key]
         position.stop_loss = stop_price
         
         log.info("Stop loss set at $%.4f for %s %s", stop_price, market.slug, side)
@@ -2841,12 +3030,10 @@ class RealTradingEngine:
         >>> client.real.set_take_profit(market, side="UP", profit_price=0.55)
         """
         side = _validate_side(side)
-        position_key = f"{market.id}:{side}"
-        
-        if position_key not in self._positions:
+        position, _ = self._find_position_across_wallets(market.id, side)
+        if position is None:
             raise PositionNotFound(f"No position found for {market.slug} {side}")
         
-        position = self._positions[position_key]
         position.take_profit = profit_price
         
         log.info("Take profit set at $%.4f for %s %s", profit_price, market.slug, side)
@@ -2874,12 +3061,17 @@ class RealTradingEngine:
         >>> client.real.set_trailing_stop(market, side="UP", trail_distance=0.05)
         """
         side = _validate_side(side)
-        position_key = f"{market.id}:{side}"
-        
-        if position_key not in self._positions:
+        position, _ = self._find_position_across_wallets(market.id, side)
+        if position is None:
             raise PositionNotFound(f"No position found for {market.slug} {side}")
         
-        position = self._positions[position_key]
+        if not hasattr(position, 'trail_sl'):
+            position.trail_sl = None
+        if not hasattr(position, 'trail_sl_price'):
+            position.trail_sl_price = None
+        
+        position.trail_sl = trail_distance
+        position.trail_sl_price = position.current_price - trail_distance if side == "UP" else position.current_price + trail_distance
         
         # Add trailing stop fields to position if not already present
         if not hasattr(position, 'trail_sl'):
@@ -2907,22 +3099,20 @@ class RealTradingEngine:
             List of position keys that had trailing stops triggered
         """
         triggered = []
+        positions = self._get_all_positions_across_wallets()
         
-        for key, position in self._positions.items():
+        for key, position in positions.items():
             if position.resolved:
                 continue
             
-            # Check if position has trailing stop enabled
             if not hasattr(position, 'trail_sl') or position.trail_sl is None:
                 continue
             
-            # Get current price for this position
             token_id = None
             if hasattr(position, 'token_id'):
                 token_id = position.token_id
             else:
-                # Try to derive from market_id
-                token_id = position.market_id  # Fallback
+                token_id = position.market_id
             
             if token_id not in market_updates:
                 continue
@@ -2930,36 +3120,42 @@ class RealTradingEngine:
             current_price = market_updates[token_id]
             old_trail_price = position.trail_sl_price
             
-            # Update trailing stop price based on favorable price movement
             if position.side == "UP":
-                # For long positions, trail price moves up with price
                 new_trail_price = current_price - position.trail_sl
                 if new_trail_price > old_trail_price:
                     position.trail_sl_price = new_trail_price
                     log.info("Trailing stop updated for %s %s: $%.4f -> $%.4f", 
                              position.slug, position.side, old_trail_price, new_trail_price)
                 
-                # Check if stop triggered
                 if current_price <= position.trail_sl_price:
                     triggered.append(key)
                     log.warning("Trailing stop triggered for %s %s at $%.4f", 
                               position.slug, position.side, current_price)
                     
-            else:  # DOWN
-                # For short positions, trail price moves down with price
+            else:
                 new_trail_price = current_price + position.trail_sl
                 if new_trail_price < old_trail_price:
                     position.trail_sl_price = new_trail_price
                     log.info("Trailing stop updated for %s %s: $%.4f -> $%.4f", 
                              position.slug, position.side, old_trail_price, new_trail_price)
                 
-                # Check if stop triggered
                 if current_price >= position.trail_sl_price:
                     triggered.append(key)
                     log.warning("Trailing stop triggered for %s %s at $%.4f", 
                               position.slug, position.side, current_price)
         
         return triggered
+
+    def _find_position_by_key_across_wallets(self, position_key: str):
+        """Find a position by composite key across all wallets."""
+        if not self._use_multi_wallet or not self._real_wallet_manager:
+            if position_key in self._positions:
+                return self._positions[position_key], None
+            return None, None
+        for wallet in self._real_wallet_manager.get_all_wallets():
+            if position_key in wallet.positions:
+                return wallet.positions[position_key], wallet
+        return None, None
 
     def execute_trailing_stop_exit(self, position_key: str) -> None:
         """
@@ -2970,20 +3166,22 @@ class RealTradingEngine:
         position_key : str
             Position key in format "{market_id}:{side}"
         """
-        if position_key not in self._positions:
+        position, wallet = self._find_position_by_key_across_wallets(position_key)
+        if position is None:
             log.warning("Position %s not found for trailing stop exit", position_key)
             return
-        
-        position = self._positions[position_key]
         
         log.info("Executing trailing stop exit for %s %s at $%.4f",
                  position.slug, position.side, position.current_price)
         
         try:
+            clob = self._resolve_clob() if wallet is None else wallet.clob_client
+            orders = self._resolve_orders() if wallet is None else wallet.orders
+            
             token_id = position.market_id
             current_price = position.current_price
             
-            order_response = self._clob_client.place_order(
+            order_response = clob.place_order(
                 token_id=token_id,
                 side="sell",
                 price=current_price,
@@ -3004,14 +3202,14 @@ class RealTradingEngine:
                 is_limit=False,
                 created_at=datetime.now(timezone.utc),
             )
-            self._orders[order.id] = order
+            orders[order.id] = order
             
             position.resolved = True
             position.outcome = "STOPPED"
             
             log.info("Trailing stop exit executed for %s %s: order=%s",
                      position.slug, position.side, order.id)
-                     
+                    
         except Exception as e:
             log.error("Failed to execute trailing stop exit for %s %s: %s",
                       position.slug, position.side, e)
@@ -3059,34 +3257,30 @@ class RealTradingEngine:
         >>> # Add $50 more to a winning UP position
         >>> order = client.real.scale_position(market, side="UP", add_amount=50.0, confidence=0.7)
         """
-        if not self._config.enable_position_scaling:
-            raise RiskLimitExceeded("Position scaling is disabled in configuration")
-
         side = _validate_side(side)
-        position_key = f"{market.id}:{side}"
-
-        if position_key not in self._positions:
+        position, wallet = self._find_position_across_wallets(market.id, side)
+        if position is None:
             raise PositionNotFound(f"No position found for {market.slug} {side}")
 
-        position = self._positions[position_key]
+        config = self._resolve_config_and_risk(wallet)
 
-        # Check if position has reached maximum scale additions
-        if position.scale_count >= self._config.max_scale_additions:
+        if not config.enable_position_scaling:
+            raise RiskLimitExceeded("Position scaling is disabled in configuration")
+
+        if position.scale_count >= config.max_scale_additions:
             raise RiskLimitExceeded(
                 f"Position has been scaled {position.scale_count} times, "
-                f"maximum is {self._config.max_scale_additions}"
+                f"maximum is {config.max_scale_additions}"
             )
 
-        # Check if position is profitable enough before allowing scaling
-        min_profit_pct = self._config.min_profit_for_scaling
+        min_profit_pct = config.min_profit_for_scaling
         if position.pnl_pct < min_profit_pct * 100:
             raise RiskLimitExceeded(
                 f"Position profit {position.pnl_pct:.1f}% is below minimum {min_profit_pct*100:.1f}% for scaling"
             )
 
-        # Calculate maximum additional size based on risk limits
         current_exposure = self._get_market_exposure(market.id)
-        max_add_amount = self._config.max_position_size - current_exposure
+        max_add_amount = config.max_position_size - current_exposure
         if add_amount > max_add_amount:
             log.warning("Requested scale amount $%.2f exceeds limit, capping at $%.2f", add_amount, max_add_amount)
             add_amount = max_add_amount
@@ -3145,19 +3339,20 @@ class RealTradingEngine:
         >>> # Reduce position by 50%
         >>> order = client.real.reduce_position(market, side="UP", reduce_pct=0.5, reason="profit_taking")
         """
-        if not self._config.enable_position_reduction:
-            raise RiskLimitExceeded("Position reduction is disabled in configuration")
-
         side = _validate_side(side)
-        position_key = f"{market.id}:{side}"
-
-        if position_key not in self._positions:
+        position, wallet = self._find_position_across_wallets(market.id, side)
+        if position is None:
             raise PositionNotFound(f"No position found for {market.slug} {side}")
+
+        config = self._resolve_config_and_risk(wallet)
+
+        if not config.enable_position_reduction:
+            raise RiskLimitExceeded("Position reduction is disabled in configuration")
 
         if not 0 < reduce_pct <= 1:
             raise ValueError("reduce_pct must be between 0 and 1")
 
-        position = self._positions[position_key]
+
         shares_to_reduce = position.shares * reduce_pct
 
         # Calculate amount to spend on opposite side to reduce position
@@ -3181,57 +3376,26 @@ class RealTradingEngine:
     ) -> RealOrder:
         """
         Hedge a position by taking an opposite position in the same market.
-
-        This reduces risk by taking a counter-position that can offset losses
-        if the original position moves against you.
-
-        Parameters
-        ----------
-        market : Market
-            Market object
-        side : str
-            "UP" or "DOWN" - the side of the position to hedge
-        hedge_pct : float, optional
-            Percentage of position to hedge (0.0 to 1.0, default: 0.5)
-
-        Returns
-        -------
-        RealOrder
-            The order that was placed to hedge the position
-
-        Raises
-        ------
-        PositionNotFound
-            If no existing position exists for this market/side
-        ValueError
-            If hedge_pct is not between 0 and 1
-        RiskLimitExceeded
-            If hedging is disabled or hedge ratio exceeds maximum
-
-        Example
-        -------
-        >>> # Hedge 50% of a UP position with a DOWN position
-        >>> order = client.real.hedge_position(market, side="UP", hedge_pct=0.5)
         """
-        if not self._config.enable_hedging:
-            raise RiskLimitExceeded("Position hedging is disabled in configuration")
-
         side = _validate_side(side)
-        position_key = f"{market.id}:{side}"
-
-        if position_key not in self._positions:
+        position, wallet = self._find_position_across_wallets(market.id, side)
+        if position is None:
             raise PositionNotFound(f"No position found for {market.slug} {side}")
+
+        config = self._resolve_config_and_risk(wallet)
+
+        if not config.enable_hedging:
+            raise RiskLimitExceeded("Position hedging is disabled in configuration")
 
         if not 0 < hedge_pct <= 1:
             raise ValueError("hedge_pct must be between 0 and 1")
 
-        # Check if hedge ratio exceeds maximum
-        if hedge_pct > self._config.max_hedge_ratio:
+        if hedge_pct > config.max_hedge_ratio:
             raise RiskLimitExceeded(
-                f"Hedge ratio {hedge_pct:.1%} exceeds maximum {self._config.max_hedge_ratio:.1%}"
+                f"Hedge ratio {hedge_pct:.1%} exceeds maximum {config.max_hedge_ratio:.1%}"
             )
 
-        position = self._positions[position_key]
+
 
         # Calculate hedge amount based on position value
         hedge_amount = position.cost_basis * hedge_pct
@@ -3726,98 +3890,96 @@ class RealTradingEngine:
         for position_key in triggered_trailing_stops:
             self.execute_trailing_stop_exit(position_key)
 
+    def _check_stop_losses_for_wallet(self, positions, risk_manager, market_id: str, up_price: float, down_price: float, wallet=None) -> list[tuple]:
+        """Check stop losses for positions in a single wallet. Returns list of (position, wallet) pairs to exit."""
+        triggered = []
+        for position in positions.values():
+            if position.market_id != market_id or position.resolved:
+                continue
+            if position.stop_loss is None:
+                continue
+            current_price = up_price if position.side == "UP" else down_price
+            if risk_manager.check_stop_loss(position, current_price):
+                triggered.append((position, wallet))
+        return triggered
+
+    def _check_take_profits_for_wallet(self, positions, risk_manager, market_id: str, up_price: float, down_price: float, wallet=None) -> list[tuple]:
+        """Check take profits for positions in a single wallet. Returns list of (position, wallet) pairs to exit."""
+        triggered = []
+        for position in positions.values():
+            if position.market_id != market_id or position.resolved:
+                continue
+            if position.take_profit is None:
+                continue
+            current_price = up_price if position.side == "UP" else down_price
+            if risk_manager.check_take_profit(position, current_price):
+                triggered.append((position, wallet))
+        return triggered
+
     def _check_and_execute_stop_losses(self, market_id: str, up_price: float, down_price: float) -> None:
         """
         Check and execute stop loss orders based on current prices.
-
-        Parameters
-        ----------
-        market_id : str
-            Market ID to check
-        up_price : float
-            Current UP token price
-        down_price : float
-            Current DOWN token price
         """
-        for position_key, position in self._positions.items():
-            if position.market_id != market_id or position.resolved:
-                continue
-
-            if position.stop_loss is None:
-                continue
-
-            current_price = up_price if position.side == "UP" else down_price
-            should_trigger = self._risk_manager.check_stop_loss(position, current_price)
-
-            if should_trigger:
-                log.warning(
-                    "Stop loss triggered for %s %s: current=%.4f, stop=%.4f",
-                    position.slug, position.side, current_price, position.stop_loss
+        all_triggered = []
+        if self._use_multi_wallet and self._real_wallet_manager:
+            for w in self._real_wallet_manager.get_all_wallets():
+                rm = w.risk_manager if w.risk_manager is not None else self._risk_manager
+                all_triggered.extend(
+                    self._check_stop_losses_for_wallet(w.positions, rm, market_id, up_price, down_price, w)
                 )
-                self._execute_exit_order(position, "STOP_LOSS")
+        else:
+            all_triggered.extend(
+                self._check_stop_losses_for_wallet(self._positions, self._risk_manager, market_id, up_price, down_price)
+            )
+
+        for position, wallet in all_triggered:
+            log.warning(
+                "Stop loss triggered for %s %s", position.slug, position.side
+            )
+            self._execute_exit_order(position, "STOP_LOSS", wallet=wallet)
 
     def _check_and_execute_take_profits(self, market_id: str, up_price: float, down_price: float) -> None:
         """
         Check and execute take profit orders based on current prices.
-
-        Parameters
-        ----------
-        market_id : str
-            Market ID to check
-        up_price : float
-            Current UP token price
-        down_price : float
-            Current DOWN token price
         """
-        for position_key, position in self._positions.items():
-            if position.market_id != market_id or position.resolved:
-                continue
-
-            if position.take_profit is None:
-                continue
-
-            current_price = up_price if position.side == "UP" else down_price
-            should_trigger = self._risk_manager.check_take_profit(position, current_price)
-
-            if should_trigger:
-                log.info(
-                    "Take profit triggered for %s %s: current=%.4f, target=%.4f",
-                    position.slug, position.side, current_price, position.take_profit
+        all_triggered = []
+        if self._use_multi_wallet and self._real_wallet_manager:
+            for w in self._real_wallet_manager.get_all_wallets():
+                rm = w.risk_manager if w.risk_manager is not None else self._risk_manager
+                all_triggered.extend(
+                    self._check_take_profits_for_wallet(w.positions, rm, market_id, up_price, down_price, w)
                 )
-                self._execute_exit_order(position, "TAKE_PROFIT")
+        else:
+            all_triggered.extend(
+                self._check_take_profits_for_wallet(self._positions, self._risk_manager, market_id, up_price, down_price)
+            )
 
-    def _execute_exit_order(self, position: RealPosition, reason: str) -> None:
+        for position, wallet in all_triggered:
+            log.info(
+                "Take profit triggered for %s %s", position.slug, position.side
+            )
+            self._execute_exit_order(position, "TAKE_PROFIT", wallet=wallet)
+
+    def _execute_exit_order(self, position: RealPosition, reason: str, wallet=None) -> None:
         """
         Execute an exit order for a position (stop loss, take profit, or trailing stop).
-
-        Parameters
-        ----------
-        position : RealPosition
-            Position to exit
-        reason : str
-            Reason for exit ("STOP_LOSS", "TAKE_PROFIT", "TRAILING_STOP")
         """
         try:
-            # Determine token_id for sell order
-            token_id = position.market_id  # Simplified - would need actual token mapping
-
-            # Calculate current price
+            token_id = position.market_id
             current_price = position.current_price
 
-            # Place market sell order
             order_response = self._place_clob_order(
                 token_id,
                 "sell",
                 current_price,
                 position.shares,
-                "market"
+                "market",
+                wallet=wallet,
             )
 
-            # Update position status
             position.resolved = True
             position.outcome = reason
 
-            # Calculate final P&L
             if position.side == "UP":
                 exit_value = position.shares * current_price
             else:
@@ -3830,7 +3992,6 @@ class RealTradingEngine:
                 position.slug, position.side, reason, position.pnl
             )
 
-            # Save to database if enabled
             if self._db_enabled:
                 self._save_exit_to_db(position, reason, current_price)
 
@@ -4108,7 +4269,8 @@ class RealTradingEngine:
         print(f"Fee:       ${fee:.4f}")
         print(f"Net Trade: ${amount - fee:.2f}")
         print(f"Total:     ${amount:.2f}")
-        print(f"Balance:   ${self._balance:.2f}")
+        balance = self._resolve_balance()
+        print(f"Balance:   ${balance:.2f}")
         print("=" * 60)
 
         response = input("\nConfirm this order? (yes/no): ").strip().lower()
@@ -4125,9 +4287,11 @@ class RealTradingEngine:
         price: float,
         size: float,
         order_type: str,
+        wallet=None,
     ) -> dict:
         """Place order on CLOB."""
-        return self._clob_client.place_order(
+        clob = self._resolve_clob() if wallet is None else wallet.clob_client
+        return clob.place_order(
             token_id=token_id,
             side=side,
             price=price,
@@ -4135,20 +4299,23 @@ class RealTradingEngine:
             order_type=order_type,
         )
 
-    def _cancel_clob_order(self, order_id: str) -> None:
+    def _cancel_clob_order(self, order_id: str, wallet=None) -> None:
         """Cancel order on CLOB."""
-        self._clob_client.cancel_order(order_id)
+        clob = self._resolve_clob() if wallet is None else wallet.clob_client
+        clob.cancel_order(order_id)
 
-    def _update_position(self, market, side: str, order: RealOrder) -> None:
+    def _update_position(self, market, side: str, order: RealOrder, wallet=None) -> None:
         """Update position after order fill."""
         key = f"{market.id}:{side}"
+        if wallet is not None and self._use_multi_wallet:
+            positions = wallet.positions
+        else:
+            positions = self._resolve_positions()
 
-        if key in self._positions:
-            # Update existing position
-            position = self._positions[key]
+        if key in positions:
+            position = positions[key]
             position.order_ids.append(order.id)
 
-            # Volume-weighted average price
             total_shares = position.shares + order.shares
             position.avg_price = (
                 (position.avg_price * position.shares + order.price * order.shares)
@@ -4158,7 +4325,6 @@ class RealTradingEngine:
             position.cost_basis = position.shares * position.avg_price
             position.current_value = position.shares * order.price
         else:
-            # Create new position
             position = RealPosition(
                 market_id=market.id,
                 slug=market.slug,
@@ -4171,22 +4337,26 @@ class RealTradingEngine:
                 current_value=order.amount,
                 order_ids=[order.id],
             )
-            self._positions[key] = position
+            positions[key] = position
 
     def _get_market_exposure(self, market_id: str) -> float:
         """Get total exposure for a market."""
         exposure = 0.0
-        for key, position in self._positions.items():
+        positions = self._get_all_positions_across_wallets()
+        for position in positions.values():
             if position.market_id == market_id and not position.resolved:
                 exposure += position.cost_basis
         return exposure
 
-    def _save_order_to_db(self, order: RealOrder) -> None:
+    def _save_order_to_db(self, order: RealOrder, wallet=None) -> None:
         """Save real order to database."""
         if not self._db_enabled or self._db is None:
             return
 
         try:
+            wallet_obj = wallet if (wallet is not None and self._use_multi_wallet) else self._resolve_wallet()
+            addr = wallet_obj.get_address() if hasattr(wallet_obj, 'get_address') else str(wallet_obj)
+
             self._db.save_trade(
                 market_slug=order.slug,
                 market_id=order.market_id,
@@ -4206,7 +4376,7 @@ class RealTradingEngine:
                 take_profit=order.take_profit,
                 tx_hash=order.tx_hash,
                 is_real_trade=True,
-                wallet_address=self._wallet.get_address(),
+                wallet_address=addr,
                 order_id=order.id,
                 status=order.status,
             )
