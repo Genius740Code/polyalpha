@@ -43,17 +43,9 @@ def rsi(self) -> Optional[float]:
 
 Move to `__init__` or cache at module level. A bot running 5m timeframes gets 288 ticks/day — this is 288 redundant imports for every indicator.
 
-### 3. make conditions stateless
+### 3. ~~make conditions stateless~~ ✅ Done
 
-`CrossedAbove` and `CrossedBelow` mutate `self._prev` on every call. This means:
-
-```python
-c = crossed_above("UP", 0.9)
-bot1.when(c).buy("UP", 20).run()  # mutates c._prev
-bot2.when(c).buy("DOWN", 10).run()  # gets wrong state
-```
-
-Solutions: either clone the condition per use, or make `_prev` a dict keyed by some context id, or store state externally (e.g. in the Bot).
+`CrossedAbove` and `CrossedBelow` were mutating `self._prev` on every call. Now state is stored in `TickContext._cross_state[id(self)]` so a shared condition works independently across bots:
 
 ### 4. add `sell` / `close_position` to TickContext
 

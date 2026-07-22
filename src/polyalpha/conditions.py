@@ -169,6 +169,9 @@ class CrossedAbove(Condition):
     """
     True when the side's price crossed *above* the threshold since the
     last tick. Returns False on the first tick (no history to compare).
+
+    State is stored in the TickContext's ``_cross_state`` dict so the
+    condition can be safely shared across independent Bot instances.
     """
 
     def __init__(self, side: str, threshold: float):
@@ -176,15 +179,16 @@ class CrossedAbove(Condition):
             raise ValueError(f"side must be 'UP' or 'DOWN', got {side!r}")
         self._side = side.lower()
         self._threshold = threshold
-        self._prev: Optional[float] = None
 
     def __call__(self, ctx: TickContext) -> bool:
         price = ctx.price.up if self._side == "up" else ctx.price.down
-        if self._prev is None:
-            self._prev = price
+        key = id(self)
+        prev = ctx._cross_state.get(key)
+        if prev is None:
+            ctx._cross_state[key] = price
             return False
-        crossed = self._prev <= self._threshold < price
-        self._prev = price
+        crossed = prev <= self._threshold < price
+        ctx._cross_state[key] = price
         return crossed
 
 
@@ -192,6 +196,9 @@ class CrossedBelow(Condition):
     """
     True when the side's price crossed *below* the threshold since the
     last tick. Returns False on the first tick.
+
+    State is stored in the TickContext's ``_cross_state`` dict so the
+    condition can be safely shared across independent Bot instances.
     """
 
     def __init__(self, side: str, threshold: float):
@@ -199,15 +206,16 @@ class CrossedBelow(Condition):
             raise ValueError(f"side must be 'UP' or 'DOWN', got {side!r}")
         self._side = side.lower()
         self._threshold = threshold
-        self._prev: Optional[float] = None
 
     def __call__(self, ctx: TickContext) -> bool:
         price = ctx.price.up if self._side == "up" else ctx.price.down
-        if self._prev is None:
-            self._prev = price
+        key = id(self)
+        prev = ctx._cross_state.get(key)
+        if prev is None:
+            ctx._cross_state[key] = price
             return False
-        crossed = self._prev >= self._threshold > price
-        self._prev = price
+        crossed = prev >= self._threshold > price
+        ctx._cross_state[key] = price
         return crossed
 
 

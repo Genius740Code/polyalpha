@@ -99,6 +99,7 @@ class TickContext:
         self._market = bot._market
         self._stream = bot._stream
         self._price_history: deque[float] = deque(maxlen=200)
+        self._cross_state: dict[int, float] = {}
 
     # ── Prices ──────────────────────────────────────────────────────────────
 

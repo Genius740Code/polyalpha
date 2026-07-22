@@ -52,6 +52,7 @@ class FakeCtx:
     def __init__(self, rsi: Optional[float] = None, up: float = 0.0, down: float = 0.0):
         self.rsi = rsi
         self.price = FakePrice(up=up, down=down)
+        self._cross_state: dict[int, float] = {}
 
 
 # ── Condition base class ───────────────────────────────────────────────────────
@@ -318,86 +319,136 @@ class TestPriceBelow:
 class TestCrossedAbove:
     def test_first_tick_returns_false(self):
         c = CrossedAbove("UP", 0.5)
-        assert c(FakeCtx(up=0.9)) is False
+        ctx = FakeCtx(up=0.9)
+        assert c(ctx) is False
 
     def test_crosses_above_on_second_tick(self):
         c = CrossedAbove("UP", 0.5)
-        c(FakeCtx(up=0.3))  # first tick — records prev
-        assert c(FakeCtx(up=0.9)) is True
+        ctx = FakeCtx(up=0.3)
+        c(ctx)  # first tick — records prev
+        ctx.price.up = 0.9
+        assert c(ctx) is True
 
     def test_no_cross_stays_below(self):
         c = CrossedAbove("UP", 0.5)
-        c(FakeCtx(up=0.3))
-        assert c(FakeCtx(up=0.4)) is False
+        ctx = FakeCtx(up=0.3)
+        c(ctx)
+        ctx.price.up = 0.4
+        assert c(ctx) is False
 
     def test_no_cross_stays_above(self):
         c = CrossedAbove("UP", 0.5)
-        c(FakeCtx(up=0.9))
-        assert c(FakeCtx(up=0.8)) is False
+        ctx = FakeCtx(up=0.9)
+        c(ctx)
+        ctx.price.up = 0.8
+        assert c(ctx) is False
 
     def test_crosses_above_exact_threshold(self):
         c = CrossedAbove("UP", 0.5)
-        c(FakeCtx(up=0.5))  # prev == threshold
-        assert c(FakeCtx(up=0.6)) is True
+        ctx = FakeCtx(up=0.5)
+        c(ctx)  # prev == threshold
+        ctx.price.up = 0.6
+        assert c(ctx) is True
 
     def test_multi_cross_detects_each_cross(self):
         c = CrossedAbove("UP", 0.5)
-        c(FakeCtx(up=0.3))
-        assert c(FakeCtx(up=0.9)) is True
-        c(FakeCtx(up=0.4))
-        assert c(FakeCtx(up=0.6)) is True
+        ctx = FakeCtx(up=0.3)
+        c(ctx)
+        ctx.price.up = 0.9
+        assert c(ctx) is True
+        ctx.price.up = 0.4
+        c(ctx)
+        ctx.price.up = 0.6
+        assert c(ctx) is True
 
     def test_down_side(self):
         c = CrossedAbove("DOWN", 0.5)
-        c(FakeCtx(down=0.3))
-        assert c(FakeCtx(down=0.9)) is True
+        ctx = FakeCtx(down=0.3)
+        c(ctx)
+        ctx.price.down = 0.9
+        assert c(ctx) is True
 
     def test_invalid_side_raises(self):
         with pytest.raises(ValueError, match="side must be 'UP' or 'DOWN'"):
             CrossedAbove("LEFT", 0.5)
+
+    def test_shared_instance_independent_contexts(self):
+        """Same condition used by two bots — each has its own _cross_state."""
+        c = CrossedAbove("UP", 0.5)
+        ctx_a = FakeCtx(up=0.3)
+        ctx_b = FakeCtx(up=0.9)
+        assert c(ctx_a) is False  # ctx_a records 0.3
+        assert c(ctx_b) is False  # ctx_b records 0.9 (independent!)
+        assert c(ctx_a) is False  # ctx_a: 0.3 -> 0.3 no cross
+        assert c(ctx_b) is False  # ctx_b: 0.9 -> 0.9 no cross
 
 
 @pytest.mark.unit
 class TestCrossedBelow:
     def test_first_tick_returns_false(self):
         c = CrossedBelow("UP", 0.5)
-        assert c(FakeCtx(up=0.3)) is False
+        ctx = FakeCtx(up=0.3)
+        assert c(ctx) is False
 
     def test_crosses_below_on_second_tick(self):
         c = CrossedBelow("UP", 0.5)
-        c(FakeCtx(up=0.9))
-        assert c(FakeCtx(up=0.3)) is True
+        ctx = FakeCtx(up=0.9)
+        c(ctx)
+        ctx.price.up = 0.3
+        assert c(ctx) is True
 
     def test_no_cross_stays_above(self):
         c = CrossedBelow("UP", 0.5)
-        c(FakeCtx(up=0.9))
-        assert c(FakeCtx(up=0.7)) is False
+        ctx = FakeCtx(up=0.9)
+        c(ctx)
+        ctx.price.up = 0.7
+        assert c(ctx) is False
 
     def test_no_cross_stays_below(self):
         c = CrossedBelow("UP", 0.5)
-        c(FakeCtx(up=0.3))
-        assert c(FakeCtx(up=0.4)) is False
+        ctx = FakeCtx(up=0.3)
+        c(ctx)
+        ctx.price.up = 0.4
+        assert c(ctx) is False
 
     def test_crosses_below_exact_threshold(self):
         c = CrossedBelow("UP", 0.5)
-        c(FakeCtx(up=0.5))
-        assert c(FakeCtx(up=0.4)) is True
+        ctx = FakeCtx(up=0.5)
+        c(ctx)
+        ctx.price.up = 0.4
+        assert c(ctx) is True
 
     def test_multi_cross_detects_each_cross(self):
         c = CrossedBelow("UP", 0.5)
-        c(FakeCtx(up=0.9))
-        assert c(FakeCtx(up=0.3)) is True
-        c(FakeCtx(up=0.7))
-        assert c(FakeCtx(up=0.4)) is True
+        ctx = FakeCtx(up=0.9)
+        c(ctx)
+        ctx.price.up = 0.3
+        assert c(ctx) is True
+        ctx.price.up = 0.7
+        c(ctx)
+        ctx.price.up = 0.4
+        assert c(ctx) is True
 
     def test_down_side(self):
         c = CrossedBelow("DOWN", 0.5)
-        c(FakeCtx(down=0.9))
-        assert c(FakeCtx(down=0.3)) is True
+        ctx = FakeCtx(down=0.9)
+        c(ctx)
+        ctx.price.down = 0.3
+        assert c(ctx) is True
 
     def test_invalid_side_raises(self):
         with pytest.raises(ValueError, match="side must be 'UP' or 'DOWN'"):
             CrossedBelow("LEFT", 0.5)
+
+    def test_shared_instance_independent_contexts(self):
+        """Same condition used by two bots — each has its own _cross_state."""
+        c = CrossedBelow("UP", 0.5)
+        ctx_a = FakeCtx(up=0.9)
+        ctx_b = FakeCtx(up=0.3)
+        assert c(ctx_a) is False  # ctx_a records 0.9
+        assert c(ctx_b) is False  # ctx_b records 0.3 (independent!)
+        assert c(ctx_a) is False  # ctx_a: 0.9 -> 0.9 no cross
+        assert c(ctx_b) is False  # ctx_b: 0.3 -> 0.3 no cross
 
 
 # ── Constant conditions ─────────────────────────────────────────────────────────
