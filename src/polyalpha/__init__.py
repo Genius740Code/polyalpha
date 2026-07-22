@@ -26,14 +26,12 @@ Quick start
 """
 
 import logging
+import logging.config
 import os
-import sys
 
 from .utils.logging_utils import (
     DEFAULT_LOG_FORMAT,
     DEFAULT_DATE_FORMAT,
-    JSONFormatter,
-    SensitiveDataFormatter,
 )
 
 _log = logging.getLogger("polyalpha")
@@ -51,44 +49,78 @@ class _LevelFilter(logging.Filter):
 
 
 def _setup_logging() -> None:
-    """Configure polyalpha logging: stdout for INFO, stderr for WARNING+, file optional."""
+    """Configure polyalpha logging via dictConfig."""
     if _log.handlers:
         return
     fmt = os.environ.get("POLYALPHA_LOG_FORMAT", "text")
     log_file = os.environ.get("POLYALPHA_LOG_FILE")
 
     if fmt == "json":
-        formatter = JSONFormatter(redact_file_paths=False)
+        formatter_cls = "polyalpha.utils.logging_utils.JSONFormatter"
+        formatter_kwargs = {"redact_file_paths": False}
     else:
-        formatter = SensitiveDataFormatter(
-            fmt=DEFAULT_LOG_FORMAT,
-            datefmt=DEFAULT_DATE_FORMAT,
-            redact_file_paths=False,
-        )
+        formatter_cls = "polyalpha.utils.logging_utils.SensitiveDataFormatter"
+        formatter_kwargs = {
+            "fmt": DEFAULT_LOG_FORMAT,
+            "datefmt": DEFAULT_DATE_FORMAT,
+            "redact_file_paths": False,
+        }
 
-    handler_stdout = logging.StreamHandler(sys.stdout)
-    handler_stdout.setLevel(logging.INFO)
-    handler_stdout.addFilter(_LevelFilter(logging.WARNING))
-    handler_stdout.setFormatter(formatter)
-    _log.addHandler(handler_stdout)
-
-    handler_stderr = logging.StreamHandler(sys.stderr)
-    handler_stderr.setLevel(logging.WARNING)
-    handler_stderr.setFormatter(formatter)
-    _log.addHandler(handler_stderr)
+    config: dict = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {
+                "()": formatter_cls,
+                **formatter_kwargs,
+            },
+        },
+        "filters": {
+            "stdout_filter": {
+                "()": "polyalpha._LevelFilter",
+                "max_level": logging.WARNING,
+            },
+        },
+        "handlers": {
+            "stdout": {
+                "class": "logging.StreamHandler",
+                "level": logging.INFO,
+                "formatter": "default",
+                "filters": ["stdout_filter"],
+                "stream": "ext://sys.stdout",
+            },
+            "stderr": {
+                "class": "logging.StreamHandler",
+                "level": logging.WARNING,
+                "formatter": "default",
+                "stream": "ext://sys.stderr",
+            },
+        },
+        "loggers": {
+            "polyalpha": {
+                "level": logging.INFO,
+                "handlers": ["stdout", "stderr"],
+                "propagate": False,
+            },
+        },
+    }
 
     if log_file:
-        try:
-            from logging.handlers import RotatingFileHandler
+        config["handlers"]["file"] = {
+            "class": "logging.handlers.RotatingFileHandler",
+            "level": logging.DEBUG,
+            "formatter": "default",
+            "filename": log_file,
+            "maxBytes": 10 * 1024 * 1024,
+            "backupCount": 3,
+            "encoding": "utf-8",
+        }
+        config["loggers"]["polyalpha"]["handlers"].append("file")
 
-            handler_file = RotatingFileHandler(
-                log_file, maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8"
-            )
-            handler_file.setLevel(logging.DEBUG)
-            handler_file.setFormatter(formatter)
-            _log.addHandler(handler_file)
-        except Exception as exc:
-            _log.warning("Failed to set up log file %s: %s", log_file, exc)
+    try:
+        logging.config.dictConfig(config)
+    except Exception as exc:
+        _log.warning("Failed to configure logging: %s", exc)
 
 
 _setup_logging()

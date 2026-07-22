@@ -281,6 +281,32 @@ except polyalpha.MarketNotFound as exc:
 
 ---
 
+## Logging
+
+Logging is configured via environment variables, set either in `.env` or exported in the shell.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POLYALPHA_LOG_LEVEL` | `WARNING` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `POLYALPHA_LOG_FILE` | *(none)* | File path for persistent logs (rotated at 10 MB, 3 backups) |
+| `POLYALPHA_LOG_FORMAT` | `text` | Output format: `text` (human-readable) or `json` (machine-parseable JSON lines) |
+
+By default `INFO`-level and above messages go to stdout, while `WARNING`+ go to stderr. Set `POLYALPHA_LOG_LEVEL=DEBUG` to see detailed per-operation logs.
+
+### Privacy
+
+Log messages are automatically scrubbed for sensitive data before being written. The following are redacted:
+
+- **Wallet addresses** — any `0x`-prefixed 40-hex string → shown as `0x1234...5678`
+- **Private keys** — any bare 64+ hex character string → shown as `0xdeadbe...REDACTED`
+- **Transaction hashes** — any `0x`-prefixed 64-hex string → shown as `0x12345678...abcd`
+- **API keys, tokens, passwords, secrets** — in `key=value` or `KEY: value` syntax
+- **Bearer tokens and JWTs** — the token portion is replaced with `***REDACTED***`
+
+This applies to all output formats (`text` and `json`). Redaction happens at the message level before the record is formatted, so raw sensitive data is never persisted to log files or streams.
+
+---
+
 ## Examples
 
 ```bash
