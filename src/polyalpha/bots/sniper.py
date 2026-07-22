@@ -308,7 +308,7 @@ class Sniper:
     STATE_ROLLOVER = "ROLLOVER"
     STATE_STOP = "STOP"
 
-    def __init__(self, client, config: Optional[SniperConfig] = None):
+    def __init__(self, client, config: Optional[SniperConfig] = None, **kwargs):
         """
         Initialize the Sniper bot.
 
@@ -318,9 +318,13 @@ class Sniper:
             The polyalpha client instance.
         config : SniperConfig, optional
             Bot configuration. If not provided, uses defaults.
+        **kwargs
+            Additional keyword arguments passed to SniperConfig when config is not provided.
         """
         self.client = client
-        self.config = config or SniperConfig()
+        if config is None:
+            config = SniperConfig(**kwargs)
+        self.config = config
 
         # Set up logging
         self._log = logging.getLogger(f"{__name__}.Sniper")
