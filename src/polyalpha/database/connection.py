@@ -172,8 +172,11 @@ class DatabaseConnection:
                 return
             log.info("Applying migration %d", version)
             try:
-                cursor.executescript(migration_sql)
-                cursor.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+                for statement in migration_sql.split(";"):
+                    stripped = statement.strip()
+                    if stripped:
+                        cursor.execute(stripped)
+                cursor.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (version,))
                 conn.commit()
                 log.info("Migration %d applied successfully", version)
             except Exception as e:

@@ -360,7 +360,8 @@ class RealWallet:
     def refresh_balance(self) -> None:
         """Refresh balance and allowance from blockchain."""
         self.balance = self.wallet_manager.get_balance()
-        self.allowance = self.wallet_manager.get_allowance()
+        from .alchemy_client import AlchemyClient
+        self.allowance = self.wallet_manager.get_allowance(AlchemyClient.CTF_ADDRESS)
         if self.config and self.config.log_balance_updates:
             log.debug("RealWallet %s: balance=%.2f, allowance=%.2f",
                       self.wallet_id, self.balance, self.allowance)

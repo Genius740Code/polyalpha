@@ -22,20 +22,18 @@ log = logging.getLogger(__name__)
 
 class PreparedStatementManager:
     def __init__(self):
-        self._prepared_statements: Dict[str, Any] = {}
+        self._prepared_statements: Dict[str, str] = {}
         self._statement_cache_max_size = 50
         self._statement_lock = Lock()
 
     def get_prepared_statement(self, query: str, get_conn_fn) -> Any:
         with self._statement_lock:
-            if query in self._prepared_statements:
-                return self._prepared_statements[query]
+            if query not in self._prepared_statements:
+                if len(self._prepared_statements) >= self._statement_cache_max_size:
+                    self._prepared_statements.pop(next(iter(self._prepared_statements)))
+                self._prepared_statements[query] = query
             conn = get_conn_fn()
-            stmt = conn.execute(query)
-            if len(self._prepared_statements) >= self._statement_cache_max_size:
-                self._prepared_statements.pop(next(iter(self._prepared_statements)))
-            self._prepared_statements[query] = stmt
-            return stmt
+            return conn.execute(self._prepared_statements[query])
 
     def clear(self) -> None:
         with self._statement_lock:
@@ -201,10 +199,11 @@ class SecurityManager:
         return self._auth_manager.get_method().value
 
     def add_user(self, user_id: str, username: str, roles: List[str],
-                 api_key=None, jwt_secret=None) -> None:
+                 api_key=None, jwt_secret=None) -> Optional[str]:
         if api_key is None and self._auth_manager.get_method() == AuthMethod.API_KEY:
             api_key = self._auth_manager.generate_api_key()
         self._auth_manager.add_user(user_id, username, roles, api_key, jwt_secret)
+        return api_key if self._auth_manager.get_method() == AuthMethod.API_KEY else None
 
     def remove_user(self, user_id: str) -> None:
         self._auth_manager.remove_user(user_id)

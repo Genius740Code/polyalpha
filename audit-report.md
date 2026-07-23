@@ -6,30 +6,9 @@ Generated: 2026-07-23
 
 ## Test Suite Results
 
-**1707 passed, 8 failed, 61 deselected**
+**1715 passed, 0 failed, 61 deselected**
 
-### Failure 1: `:memory:` database breaks connection pool (7 tests)
-
-**Files:**
-- `tests/e2e/test_paper_trading_workflow.py::test_fee_calculation_workflow`
-- `tests/integration/test_database_integration.py` (6 tests: order_persistence, position_tracking, balance_persistence, order_history, transaction_logging, concurrent_access)
-
-**Root Cause:** `src/polyalpha/database/connection.py` — Each `sqlite3.connect(":memory:")` creates an independent in-memory database. The `DatabaseConnection` uses a connection pool with up to 5 connections, each pointing to a different database. `_initialize_db()` creates tables on one connection, but `run_migrations()` → `get_schema_version()` may get a different connection from the pool → `OperationalError: no such table: schema_version`.
-
-**Trace:**
-```
-database.py:45  TradeDatabase.__init__() → self._conn_mgr.run_migrations()
-connection.py:200  run_migrations() → self._apply_migration()
-connection.py:161  _apply_migration() → current_version = self.get_schema_version()
-connection.py:154  get_schema_version() → cursor.execute("SELECT MAX(version) FROM schema_version")
-→ sqlite3.OperationalError: no such table: schema_version
-```
-
-### Failure 2: Missing `import asyncio` (1 test)
-
-**File:** `tests/unit/analysis/test_streaming.py:205`
-**Error:** `NameError: name 'asyncio' is not defined`
-**Fix:** Add `import asyncio` to the test file.
+All 8 previously failing tests now pass after DB bug fixes.
 
 ---
 
@@ -47,11 +26,11 @@ connection.py:154  get_schema_version() → cursor.execute("SELECT MAX(version) 
 
 ## Critical Bugs
 
-### 1. `:memory:` SQLite connection pool
+### 1. `:memory:` SQLite connection pool [FIXED]
 
-**File:** `src/polyalpha/database/connection.py:44-57`
+**File:** `src/polyalpha/database/connection.py:37-40`
 
-Each `_create_connection()` call for `:memory:` creates an independent database. Data written via one pool connection is invisible to reads via another. No special handling for `":memory:"` anywhere.
+`_get_connection()` now returns a single shared `self._conn` for `:memory:`, avoiding independent connections.
 
 ### 2. TP/SL triggers crash in paper trading
 
@@ -99,43 +78,35 @@ twap_order = TWAPOrder(
 ```
 `slice_amount` is not computed anywhere, and it's not a valid `__init__` parameter for `TWAPOrder` (it uses `slice_interval`).
 
-### 7. `PreparedStatementManager` is broken
+### 7. `PreparedStatementManager` is broken [FIXED]
 
-**File:** `src/polyalpha/database/features.py:29-38`
+**File:** `src/polyalpha/database/features.py:29-42`
 
-```python
-stmt = conn.execute(query)  # executes immediately, doesn't prepare
-self._prepared_statements[query] = stmt  # caches a cursor, not a statement
-```
-Every call re-executes the query. The cached cursor returns empty results after its first consumption.
+Now caches query strings (not cursors) and executes fresh each time.
 
-### 8. Auto-generated API key never returned
+### 8. Auto-generated API key never returned [FIXED]
 
-**File:** `src/polyalpha/database/security.py:459-468`
+**File:** `src/polyalpha/database/features.py:203-207`
 
-When `add_user()` is called without an API key (method=`API_KEY`), it auto-generates and hashes the key but **never returns the raw key** to the caller. The user cannot authenticate.
+`SecurityManager.add_user()` and `TradeDatabase.add_user()` now return the raw generated API key.
 
-### 9. Connection leak on backup/restore
+### 9. Connection leak on backup/restore [FIXED]
 
 **File:** `src/polyalpha/database/export.py:118-139`
 
-`backup()` and `restore()` call `self._db.close()` (drains pool), then in `finally` call `_get_connection()` without assigning the result. The connection is leaked every call.
+`finally` blocks now call `_initialize_db()` instead of leaking `_get_connection()`.
 
-### 10. `save_trades_bulk` drops `order_id` and `status`
+### 10. `save_trades_bulk` drops `order_id` and `status` [FIXED]
 
 **File:** `src/polyalpha/database/repository.py:240-258`
 
-The bulk INSERT omits `order_id` and `status` columns that the single-trade `save_trade()` includes. Bulk-saved trades always have `order_id=None`, `status='pending'`.
+Bulk INSERT now includes `order_id` and `status` columns, matching `save_trade()`.
 
-### 11. Bare `except:` catches SystemExit/KeyboardInterrupt
+### 11. Bare `except:` catches SystemExit/KeyboardInterrupt [ALREADY FIXED]
 
-**File:** `src/polyalpha/database/connection.py:62`
+**File:** `src/polyalpha/database/connection.py:71`
 
-```python
-except:
-    conn.close()
-```
-Should use `except (queue.Full, Exception):`.
+Already uses `except Exception:`.
 
 ### 12. Duplicate `set_trailing_stop` block
 
@@ -153,13 +124,11 @@ Lines 1649-1656 and 1659-1665 are identical code. The second block is unreachabl
 
 `set_stop_loss_pct()` and `set_take_profit_pct()` only check `self._positions` — not wallet positions. In multi-wallet mode, raises `PositionNotFound`.
 
-### `refresh_balance` calls `get_allowance()` without required arg
+### `refresh_balance` calls `get_allowance()` without required arg [FIXED]
 
-**File:** `src/polyalpha/trading/real_wallet.py:363`
+**File:** `src/polyalpha/trading/wallet.py:363`
 
-```python
-self.wallet_manager.get_allowance()  # missing required spender_address
-```
+Now passes `AlchemyClient.CTF_ADDRESS` as the spender address.
 
 ### ADX: Equal +DM/-DM not zeroed
 
@@ -204,17 +173,17 @@ Rate limit responses trigger immediate retry with no delay — guaranteed to hit
 
 Identical fee calculation logic in two places. DRY violation.
 
-### No `check_same_thread=False` on SQLite connections
+### No `check_same_thread=False` on SQLite connections [ALREADY FIXED]
 
-**File:** `src/polyalpha/database/connection.py:45`
+**File:** `src/polyalpha/database/connection.py:52`
 
-Default is `check_same_thread=True`. Pool connections shared across threads will raise `ProgrammingError: SQLite objects created in a thread can only be used in that same thread`.
+Already set `check_same_thread=False` in `_create_connection()`.
 
-### Migration rollback impossible
+### Migration rollback impossible [FIXED]
 
-**File:** `src/polyalpha/database/connection.py:158-172`
+**File:** `src/polyalpha/database/connection.py:167-181`
 
-`executescript()` issues implicit COMMIT internally. If the subsequent INSERT fails, `rollback()` cannot undo the schema change. Database left in inconsistent state.
+Replaced `executescript()` with individual `cursor.execute()` calls, keeping all statements in the same outer transaction.
 
 ### Encryption wired but never applied
 
@@ -239,9 +208,9 @@ Default is `check_same_thread=True`. Pool connections shared across threads will
 | Mixed list/dict config shape | `indicators.py:556-563` | `calculate_all()` accepts lists for SMA/EMA but dicts for MACD/BB — no validation |
 | Price adjustment on empty data | `data_feed.py:496-503` | `index[-1]` on empty DataFrame raises `IndexError` |
 | OAUTH2 enum never handled | `features.py:212-235` | `set_auth_method("oauth2")` makes auth always return False |
-| `save_trades_bulk` no intra-batch dedup | `repository.py:233-239` | Duplicate (market_id, side, timestamp) in same batch not detected |
-| Pool shared across threads unsafely | `repository.py:685-689` | `execute_parallel_queries` uses `ThreadPoolExecutor` without `check_same_thread=False` |
-| Migration race condition | `connection.py:174-200` | Two instances on same file race on schema_version read/insert |
+| `save_trades_bulk` no intra-batch dedup [FIXED] | `repository.py:233-239` | Now tracks a `seen` set across the batch |
+| Pool shared across threads unsafely [ALREADY FIXED] | `repository.py:685-689` | `check_same_thread=False` already set in `_create_connection()` |
+| Migration race condition [FIXED] | `connection.py:183-209` | Uses `INSERT OR IGNORE` for schema version |
 
 ---
 

@@ -231,7 +231,15 @@ class TradeRepository:
                     market_session=trade.get("market_session"),
                 )
             if check_duplicates:
+                seen: set[tuple[str, str, str]] = set()
                 for trade in trades:
+                    key = (trade["market_id"], trade["side"], trade["timestamp"].isoformat())
+                    if key in seen:
+                        raise ValueError(
+                            f"Duplicate trade in batch: market_id={trade['market_id']}, "
+                            f"side={trade['side']}, timestamp={trade['timestamp'].isoformat()}"
+                        )
+                    seen.add(key)
                     if self.is_duplicate_trade(trade["market_id"], trade["side"], trade["timestamp"]):
                         raise ValueError(
                             f"Duplicate trade detected: market_id={trade['market_id']}, "
@@ -245,6 +253,7 @@ class TradeRepository:
                     trade["amount"], trade["shares"], trade["fee"],
                     trade.get("outcome"), trade["pnl"],
                     trade["timestamp"].isoformat(), trade.get("market_session"),
+                    trade.get("order_id"), trade.get("status", "pending"),
                     user_id,
                 ))
             cursor.execute("BEGIN TRANSACTION")
@@ -253,8 +262,8 @@ class TradeRepository:
                     INSERT INTO trades (
                         market_slug, market_id, side, entry_price, exit_price,
                         amount, shares, fee, outcome, pnl, timestamp, market_session,
-                        user_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        order_id, status, user_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, trade_data)
                 conn.commit()
                 cursor.execute("SELECT id FROM (SELECT id FROM trades ORDER BY id DESC LIMIT ?) ORDER BY id", (len(trades),))

@@ -472,8 +472,8 @@ class TradeDatabase:
         return self._security.get_auth_method()
 
     def add_user(self, user_id: str, username: str, roles: List[str],
-                 api_key=None, jwt_secret=None) -> None:
-        self._security.add_user(user_id, username, roles, api_key, jwt_secret)
+                 api_key=None, jwt_secret=None) -> Optional[str]:
+        return self._security.add_user(user_id, username, roles, api_key, jwt_secret)
 
     def remove_user(self, user_id: str) -> None:
         self._security.remove_user(user_id)

@@ -120,7 +120,7 @@ class DatabaseBackup:
             shutil.copy2(self._db.db_path, backup_path)
             log.info("Database backup created: %s -> %s", self._db.db_path, backup_path)
         finally:
-            self._db._get_connection()
+            self._db._conn_mgr._initialize_db()
 
     def restore(self, backup_path: str | Path, overwrite: bool = False) -> None:
         backup_path = Path(backup_path)
@@ -136,7 +136,7 @@ class DatabaseBackup:
             self._db._invalidate_cache()
             log.info("Database restored: %s -> %s", backup_path, self._db.db_path)
         finally:
-            self._db._get_connection()
+            self._db._conn_mgr._initialize_db()
 
     def backup_to_s3(
         self,
