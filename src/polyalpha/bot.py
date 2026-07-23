@@ -312,6 +312,7 @@ class Bot:
         self._market: Optional[Market] = None
         self._stream = None
         self._strategy: Optional[Callable] = None
+        self._on_resolve: Optional[Callable] = None
         self._condition: Optional["Condition"] = None
         self._buy_side: Optional[str] = None
         self._buy_amount: Optional[float] = None
@@ -331,6 +332,21 @@ class Bot:
         The function receives a TickContext on every price update.
         """
         self._strategy = fn
+        return fn
+
+    def onresolve(self, fn: Callable) -> Callable:
+        """
+        Decorator — register a resolve callback.
+
+        The function receives a PaperPosition for each resolved position.
+
+        Usage
+        -----
+            @bot.onresolve
+            def on_resolve(pos):
+                print(f"{pos.side} {pos.outcome} pnl=${pos.pnl:.2f}")
+        """
+        self._on_resolve = fn
         return fn
 
     def when(self, condition: "Condition") -> "Bot":
@@ -592,6 +608,11 @@ class Bot:
                     "Trade resolved: %s %s | pnl=$%.2f",
                     pos.side, pos.outcome, pos.pnl,
                 )
+                if self._on_resolve:
+                    try:
+                        self._on_resolve(pos)
+                    except Exception as exc:
+                        self._log.exception("onresolve handler error: %s", exc)
 
     def _rollover(self) -> None:
         """Clean up and prepare for next cycle."""
