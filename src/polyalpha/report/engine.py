@@ -55,7 +55,7 @@ from .terminal import render_terminal
 
 if TYPE_CHECKING:
     from ..trading.paper_engine import PaperEngine
-    from ..trading.real import RealTradingEngine
+    from ..trading.real_engine import RealTradingEngine
 
 log = logging.getLogger(__name__)
 

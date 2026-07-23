@@ -6,7 +6,7 @@ import pytest
 import time
 from unittest.mock import Mock, patch, MagicMock, PropertyMock, call as mock_call
 
-from polyalpha.trading.real import WalletManager
+from polyalpha.trading.real_wallet import WalletManager
 from polyalpha.core import NetworkError
 
 

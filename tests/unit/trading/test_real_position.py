@@ -3,7 +3,7 @@ Real trading position tests — run with: pytest tests/unit/trading/test_real_po
 """
 
 import pytest
-from polyalpha.trading.real import RealPosition
+from polyalpha.trading.real_orders import RealPosition
 
 
 @pytest.mark.unit

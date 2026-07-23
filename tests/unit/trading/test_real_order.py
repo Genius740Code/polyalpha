@@ -4,7 +4,7 @@ Real trading order tests — run with: pytest tests/unit/trading/test_real_order
 
 import pytest
 from datetime import datetime, timezone
-from polyalpha.trading.real import RealOrder
+from polyalpha.trading.real_orders import RealOrder
 
 
 @pytest.mark.unit

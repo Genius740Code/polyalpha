@@ -1,12 +1,9 @@
 from .paper_engine import PaperEngine
 from .paper_types import PaperOrder, PaperPosition
-from .real import (
-    RealTradingEngine,
-    RealTradingConfig,
-    RealOrder,
-    RealPosition,
-    WalletManager,
-)
+from .real_config import RealTradingConfig
+from .real_orders import RealOrder, RealPosition
+from .real_engine import RealTradingEngine
+from .real_wallet import WalletManager
 from .wallet import PaperWallet, RealWallet, RealTradingWalletManager, WalletSelectionStrategy
 from .auto_redeem import (
     AutoRedeemEngine,

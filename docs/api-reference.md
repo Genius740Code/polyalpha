@@ -63,10 +63,10 @@ Concise reference of every symbol exported from `polyalpha.__init__`, grouped by
 
 | Symbol | Source | Description |
 |--------|--------|-------------|
-| `RealTradingEngine` | `trading/real.py` | On-chain Polymarket trading engine |
+| `RealTradingEngine` | `trading/real_engine.py` | On-chain Polymarket trading engine |
 | `RealTradingConfig` | `trading/real_config.py` | Configuration for real trading: private_key, rpc_url, polymarket_api_key, gas settings |
-| `RealOrder` | `trading/real.py` | Real order dataclass |
-| `RealPosition` | `trading/real.py` | Real position dataclass |
+| `RealOrder` | `trading/real_orders.py` | Real order dataclass |
+| `RealPosition` | `trading/real_orders.py` | Real position dataclass |
 
 ---
 
@@ -74,7 +74,7 @@ Concise reference of every symbol exported from `polyalpha.__init__`, grouped by
 
 | Symbol | Source | Description |
 |--------|--------|-------------|
-| `WalletManager` | `trading/real.py` | Real trading wallet management (`polyalpha.trading.WalletManager`, not `polyalpha.wallet.WalletManager`) |
+| `WalletManager` | `trading/real_wallet.py` | Real trading wallet management (`polyalpha.trading.WalletManager`, not `polyalpha.wallet.WalletManager`) |
 | `PaperWallet` | `trading/wallet.py` | Paper trading wallet with balance tracking |
 | `RealWallet` | `trading/wallet.py` | Real on-chain wallet |
 | `RealTradingWalletManager` | `trading/wallet.py` | Multi-wallet manager for real trading |

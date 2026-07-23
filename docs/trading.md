@@ -253,7 +253,7 @@ client.real.set_auto_redeem_config(config)
 ### Position Sizing
 
 ```python
-from polyalpha.trading.real import FixedPositionSizer, PercentagePositionSizer, KellyPositionSizer
+from polyalpha.trading.real_position_sizing import FixedPositionSizer, PercentagePositionSizer, KellyPositionSizer
 client.real.set_position_sizer(KellyPositionSizer(kelly_fraction=0.25))
 ```
 

@@ -3,7 +3,8 @@ Real trading engine tests — run with: pytest tests/unit/trading/test_real_engi
 """
 
 import pytest
-from polyalpha.trading.real import RealTradingEngine, RealTradingConfig
+from polyalpha.trading.real_engine import RealTradingEngine
+from polyalpha.trading.real_config import RealTradingConfig
 from polyalpha.core.market import Market
 from polyalpha.core.errors import (
     InsufficientAllowance,

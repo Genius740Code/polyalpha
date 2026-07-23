@@ -146,7 +146,9 @@ from .stream import Stream
 from .bot import Bot
 from .trading import PaperEngine, RealTradingEngine
 from .trading.paper_config import PaperConfig
-from .trading.real import RealTradingConfig, RealOrder, RealPosition, WalletManager
+from .trading.real_config import RealTradingConfig
+from .trading.real_orders import RealOrder, RealPosition
+from .trading.real_wallet import WalletManager
 from .trading.auto_redeem import AutoRedeemConfig
 from .report import ReportPreset
 from .bots import Sniper, Tracker

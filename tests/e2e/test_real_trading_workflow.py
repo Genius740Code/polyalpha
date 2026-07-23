@@ -18,7 +18,7 @@ if str(src_path) not in sys.path:
 
 from polyalpha import Client
 from polyalpha.core import Market
-from polyalpha.trading.real import RealTradingConfig
+from polyalpha.trading.real_config import RealTradingConfig
 
 
 @pytest.mark.e2e

@@ -31,8 +31,12 @@ src/polyalpha/
 │   ├── paper_fees.py     #   Fee calculations
 │   ├── paper_risk.py     #   Risk management limits
 │   ├── paper_reporting.py#   Terminal position rendering
-│   ├── real.py           #   RealTradingEngine — on-chain trading
+│   ├── real_engine.py    #   RealTradingEngine — on-chain trading
 │   ├── real_config.py    #   RealTradingConfig + presets
+│   ├── real_orders.py    #   RealOrder, RealPosition, advanced order dataclasses
+│   ├── real_risk.py      #   RiskManager
+│   ├── real_wallet.py    #   WalletManager
+│   ├── real_position_sizing.py  #   PositionSizer strategies
 │   ├── wallet.py         #   PaperWallet, RealWallet, WalletSelectionStrategy
 │   ├── clob_client.py    #   Polymarket CLOB API client
 │   ├── alchemy_client.py #   Alchemy RPC client

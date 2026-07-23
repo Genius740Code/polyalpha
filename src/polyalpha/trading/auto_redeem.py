@@ -18,7 +18,7 @@ from ..utils.logging_utils import mask_address
 
 if TYPE_CHECKING:
     from .paper_engine import PaperEngine
-    from .real import RealTradingEngine
+    from .real_engine import RealTradingEngine
 
 log = logging.getLogger("polyalpha.auto_redeem")
 

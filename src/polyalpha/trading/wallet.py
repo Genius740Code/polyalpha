@@ -28,7 +28,7 @@ from ..core import (
 )
 
 if TYPE_CHECKING:
-    from .real import RealTradingConfig
+    from .real_config import RealTradingConfig
 
 from .paper_config import PaperConfig
 from .paper_types import PaperOrder, PaperPosition
@@ -309,7 +309,8 @@ class RealWallet:
         clob_retry_delay: float = 1.0,
         simulate: bool = False,
     ):
-        from .real import WalletManager, RiskManager
+        from .real_wallet import WalletManager
+        from .real_risk import RiskManager
 
         self.wallet_id = wallet_id
         self.wallet_manager = WalletManager(

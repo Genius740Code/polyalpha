@@ -3,7 +3,7 @@ Unit tests for position sizing strategies.
 """
 
 import pytest
-from polyalpha.trading.real import (
+from polyalpha.trading.real_position_sizing import (
     FixedPositionSizer,
     PercentagePositionSizer,
     KellyPositionSizer,

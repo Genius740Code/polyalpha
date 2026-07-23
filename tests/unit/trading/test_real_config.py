@@ -3,7 +3,7 @@ Real trading configuration tests — run with: pytest tests/unit/trading/test_re
 """
 
 import pytest
-from polyalpha.trading.real import RealTradingConfig
+from polyalpha.trading.real_config import RealTradingConfig
 from polyalpha.trading.real_config import (
     PRESETS,
     list_presets,
