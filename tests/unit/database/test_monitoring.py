@@ -181,7 +181,7 @@ class TestStructuredLogging:
         
         temp_db._add_log_entry("INFO", "Old message")
         # Manually set timestamp for testing
-        temp_db._log_entries[-1].timestamp = old_time
+        temp_db._monitor._log_entries[-1].timestamp = old_time
         
         temp_db._add_log_entry("INFO", "New message")
         
@@ -262,7 +262,7 @@ class TestAlerting:
         temp_db.set_alert("test_alert", "slow_query_count", 1.0, callback=callback)
         
         # Manually trigger the alert by setting metric value
-        temp_db._slow_query_count = 2
+        temp_db._monitor._slow_query_count = 2
         temp_db.check_alerts()
         
         assert len(callback_triggered) == 1
@@ -289,7 +289,7 @@ class TestAlerting:
             triggered.append(True)
         
         temp_db.set_alert("test", "slow_query_count", 0.0, "gt", callback)
-        temp_db._slow_query_count = 1
+        temp_db._monitor._slow_query_count = 1
         temp_db.check_alerts()
         
         assert len(triggered) == 1
@@ -315,7 +315,7 @@ class TestAlerting:
             triggered.append(True)
         
         temp_db.set_alert("test", "slow_query_count", 100.0, "gt", callback)
-        temp_db._slow_query_count = 1
+        temp_db._monitor._slow_query_count = 1
         temp_db.check_alerts()
         
         assert len(triggered) == 0
@@ -324,7 +324,7 @@ class TestAlerting:
         """Test alert trigger count tracking."""
         temp_db.set_alert("test", "slow_query_count", 0.0, "gt")
         
-        temp_db._slow_query_count = 1
+        temp_db._monitor._slow_query_count = 1
         temp_db.check_alerts()
         
         alerts = temp_db.get_alerts()
@@ -385,7 +385,7 @@ class TestIntegration:
     
     def test_log_rotation(self, temp_db):
         """Test log entry rotation when max entries exceeded."""
-        temp_db._max_log_entries = 5
+        temp_db._monitor._max_log_entries = 5
         
         # Add more logs than max
         for i in range(10):

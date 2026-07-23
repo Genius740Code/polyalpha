@@ -43,6 +43,7 @@ from .database import (
     DatabaseMetrics,
     LogEntry,
     AlertRule,
+    DBUser,
 )
 from .security import (
     DatabaseEncryption,
@@ -62,6 +63,7 @@ __all__ = [
     "DatabaseMetrics",
     "LogEntry",
     "AlertRule",
+    "DBUser",
     "DatabaseEncryption",
     "AuthenticationManager",
     "AuthorizationManager",

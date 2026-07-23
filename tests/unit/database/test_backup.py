@@ -96,11 +96,10 @@ def test_backup_nonexistent_database():
         db_path = Path(tmpdir) / "nonexistent.db"
         backup_path = Path(tmpdir) / "backup.db"
         
-        # Don't create the database file
-        # Just initialize the TradeDatabase object without creating the file
-        db = TradeDatabase.__new__(TradeDatabase)
-        db.db_path = db_path
-        db._conn = None
+        # Create a database and then delete the file to test nonexistent scenario
+        db = TradeDatabase(db_path)
+        db.close()
+        db_path.unlink()  # Remove the database file
         
         with pytest.raises(FileNotFoundError, match="Source database not found"):
             db.backup(backup_path)
