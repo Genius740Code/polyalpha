@@ -30,7 +30,14 @@ class DatabaseConnection:
         self._optimization_stop_event = Event()
         self._optimization_interval = 3600
 
+    def _is_memory_db(self) -> bool:
+        return str(self.db_path) == ":memory:"
+
     def _get_connection(self) -> sqlite3.Connection:
+        if self._is_memory_db():
+            if self._conn is None:
+                self._conn = self._create_connection()
+            return self._conn
         try:
             return self._connection_pool.get_nowait()
         except Empty:
@@ -42,9 +49,9 @@ class DatabaseConnection:
             return self._create_connection()
 
     def _create_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        if self._enable_wal:
+        if self._enable_wal and not self._is_memory_db():
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA busy_timeout=5000")
@@ -57,9 +64,11 @@ class DatabaseConnection:
         return conn
 
     def _return_connection(self, conn: sqlite3.Connection) -> None:
+        if self._is_memory_db():
+            return
         try:
             self._connection_pool.put_nowait(conn)
-        except:
+        except Exception:
             conn.close()
 
     @contextmanager
@@ -204,6 +213,11 @@ class DatabaseConnection:
             self._optimization_stop_event.set()
             self._optimization_thread.join(timeout=5)
             self._optimization_thread = None
+        if self._is_memory_db():
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+            return
         while not self._connection_pool.empty():
             try:
                 conn = self._connection_pool.get_nowait()

@@ -1,0 +1,343 @@
+# PolyAlpha Audit Report
+
+Generated: 2026-07-23
+
+---
+
+## Test Suite Results
+
+**1707 passed, 8 failed, 61 deselected**
+
+### Failure 1: `:memory:` database breaks connection pool (7 tests)
+
+**Files:**
+- `tests/e2e/test_paper_trading_workflow.py::test_fee_calculation_workflow`
+- `tests/integration/test_database_integration.py` (6 tests: order_persistence, position_tracking, balance_persistence, order_history, transaction_logging, concurrent_access)
+
+**Root Cause:** `src/polyalpha/database/connection.py` — Each `sqlite3.connect(":memory:")` creates an independent in-memory database. The `DatabaseConnection` uses a connection pool with up to 5 connections, each pointing to a different database. `_initialize_db()` creates tables on one connection, but `run_migrations()` → `get_schema_version()` may get a different connection from the pool → `OperationalError: no such table: schema_version`.
+
+**Trace:**
+```
+database.py:45  TradeDatabase.__init__() → self._conn_mgr.run_migrations()
+connection.py:200  run_migrations() → self._apply_migration()
+connection.py:161  _apply_migration() → current_version = self.get_schema_version()
+connection.py:154  get_schema_version() → cursor.execute("SELECT MAX(version) FROM schema_version")
+→ sqlite3.OperationalError: no such table: schema_version
+```
+
+### Failure 2: Missing `import asyncio` (1 test)
+
+**File:** `tests/unit/analysis/test_streaming.py:205`
+**Error:** `NameError: name 'asyncio' is not defined`
+**Fix:** Add `import asyncio` to the test file.
+
+---
+
+## Example Runtime Errors
+
+| Example | Error | Root Cause |
+|---------|-------|------------|
+| `examples/risk_management.py` | `"Market object missing required attribute: question"` | `MockMarket` (line 52-57) lacks `question`, `up_price`, `down_price` |
+| `examples/advanced_orders.py` | `"Order amount $250.00 exceeds max position size $200.00"` | Example tries `buy_with_tp_sl` $250 with default `max_position_size=$200` |
+| `examples/fee_rebates.py` | Crash on `limit()` | Risk validation prevents order; `MockMarket` in loop uses `i` from outer scope (works but fragile) |
+| `examples/analysis.py` | No visible output | Data feed runs but requires Binance/Chainlink — silent if unavailable |
+| `examples/bot_simple.py` | Hangs | Waits for stream to attach — no timeout, no network |
+
+---
+
+## Critical Bugs
+
+### 1. `:memory:` SQLite connection pool
+
+**File:** `src/polyalpha/database/connection.py:44-57`
+
+Each `_create_connection()` call for `:memory:` creates an independent database. Data written via one pool connection is invisible to reads via another. No special handling for `":memory:"` anywhere.
+
+### 2. TP/SL triggers crash in paper trading
+
+**File:** `src/polyalpha/trading/paper_engine.py:1114-1122`
+
+When a stop-loss or take-profit triggers, `_check_tp_sl_for_wallet` calls `sell_position()` with a mock market object:
+```python
+type('obj', (object,), {'id': order.market_id, 'slug': order.slug})()
+```
+Missing `question`, `up_price`, `down_price`. `validate_market()` in `paper_types.py:188` requires all three → `ValueError`. The exception is caught and silently logged — the TP/SL trigger is swallowed, position never closes.
+
+### 3. `_save_exit_to_db` accesses missing RealPosition attributes
+
+**File:** `src/polyalpha/trading/real_engine.py:2583-2620`
+
+Accesses `position.entry_price`, `position.amount`, `position.fee`, `position.sizing_strategy`, `position.confidence`, `position.kelly_fraction` — none of these exist on `RealPosition` (they're on `RealOrder`). Every call raises `AttributeError`.
+
+### 4. `_execute_exit_order` assigns to read-only property
+
+**File:** `src/polyalpha/trading/real_engine.py:2565-2570`
+
+```python
+position.pnl = exit_value - position.amount
+```
+`position.pnl` is a `@property` with no setter (`real_orders.py:131`). Assignment raises `AttributeError: can't set attribute`. Also `position.amount` doesn't exist on `RealPosition`.
+
+### 5. `scale_position` passes argument to parameter-less method
+
+**File:** `src/polyalpha/trading/real_engine.py:1847`
+
+```python
+config = self._resolve_config_and_risk(wallet)
+```
+`_resolve_config_and_risk()` has signature `def _resolve_config_and_risk(self)` — takes no args. Raises `TypeError`.
+
+### 6. `place_twap_order` references undefined variable
+
+**File:** `src/polyalpha/trading/real_engine.py:3664`
+
+```python
+twap_order = TWAPOrder(
+    ...
+    slice_amount=slice_amount,  # NameError: never defined
+)
+```
+`slice_amount` is not computed anywhere, and it's not a valid `__init__` parameter for `TWAPOrder` (it uses `slice_interval`).
+
+### 7. `PreparedStatementManager` is broken
+
+**File:** `src/polyalpha/database/features.py:29-38`
+
+```python
+stmt = conn.execute(query)  # executes immediately, doesn't prepare
+self._prepared_statements[query] = stmt  # caches a cursor, not a statement
+```
+Every call re-executes the query. The cached cursor returns empty results after its first consumption.
+
+### 8. Auto-generated API key never returned
+
+**File:** `src/polyalpha/database/security.py:459-468`
+
+When `add_user()` is called without an API key (method=`API_KEY`), it auto-generates and hashes the key but **never returns the raw key** to the caller. The user cannot authenticate.
+
+### 9. Connection leak on backup/restore
+
+**File:** `src/polyalpha/database/export.py:118-139`
+
+`backup()` and `restore()` call `self._db.close()` (drains pool), then in `finally` call `_get_connection()` without assigning the result. The connection is leaked every call.
+
+### 10. `save_trades_bulk` drops `order_id` and `status`
+
+**File:** `src/polyalpha/database/repository.py:240-258`
+
+The bulk INSERT omits `order_id` and `status` columns that the single-trade `save_trade()` includes. Bulk-saved trades always have `order_id=None`, `status='pending'`.
+
+### 11. Bare `except:` catches SystemExit/KeyboardInterrupt
+
+**File:** `src/polyalpha/database/connection.py:62`
+
+```python
+except:
+    conn.close()
+```
+Should use `except (queue.Full, Exception):`.
+
+### 12. Duplicate `set_trailing_stop` block
+
+**File:** `src/polyalpha/trading/real_engine.py:1649-1665`
+
+Lines 1649-1656 and 1659-1665 are identical code. The second block is unreachable — first block already set the attributes.
+
+---
+
+## High-Severity Issues
+
+### TP/SL ignores multi-wallet mode
+
+**File:** `src/polyalpha/trading/paper_engine.py:798-848`
+
+`set_stop_loss_pct()` and `set_take_profit_pct()` only check `self._positions` — not wallet positions. In multi-wallet mode, raises `PositionNotFound`.
+
+### `refresh_balance` calls `get_allowance()` without required arg
+
+**File:** `src/polyalpha/trading/real_wallet.py:363`
+
+```python
+self.wallet_manager.get_allowance()  # missing required spender_address
+```
+
+### ADX: Equal +DM/-DM not zeroed
+
+**File:** `src/polyalpha/analysis/_native_ta.py:47-48`
+
+```python
+plus_dm[plus_dm < minus_dm] = 0
+minus_dm[minus_dm < plus_dm] = 0
+```
+When `+DM == -DM`, neither condition is true, so both remain non-zero. Wilder's DMI specifies both should be zero.
+
+### Bollinger Bands column naming mismatch with pandas-ta
+
+**Files:** `src/polyalpha/analysis/_native_ta.py:97-99`, `src/polyalpha/analysis/indicators.py:396-398`
+
+Native code produces `BBL_20_2.0_2.0` but pandas-ta produces `BBL_20_2.0_0` (third param is `ddof`, not `std`). When pandas-ta IS installed, the wrapper crashes with `KeyError`.
+
+### Chainlink data: volume set to zero
+
+**File:** `src/polyalpha/analysis/data_feed.py:605`
+
+```python
+df["volume"] = 0
+```
+All volume-based indicators (`obv`, `volume_sma`, `volume_roc`) produce garbage when source is Chainlink.
+
+### WebSocket scraping: target_duration calculation is wrong
+
+**File:** `src/polyalpha/analysis/data_feed.py:739`
+
+For 500 candles at 5m: 500 × 300 = 150,000s ≈ 41.7h. With 2s interval between fetches, `future.result(timeout=30)` on line 701 times out immediately.
+
+### HTTP 429 retried without backoff
+
+**File:** `src/polyalpha/ai/client.py:326-328`
+
+Rate limit responses trigger immediate retry with no delay — guaranteed to hit another 429.
+
+### Polymarket fee formula duplicated
+
+**Files:** `src/polyalpha/trading/paper_fees.py:61-85`, `src/polyalpha/trading/real_engine.py:2776-2820`
+
+Identical fee calculation logic in two places. DRY violation.
+
+### No `check_same_thread=False` on SQLite connections
+
+**File:** `src/polyalpha/database/connection.py:45`
+
+Default is `check_same_thread=True`. Pool connections shared across threads will raise `ProgrammingError: SQLite objects created in a thread can only be used in that same thread`.
+
+### Migration rollback impossible
+
+**File:** `src/polyalpha/database/connection.py:158-172`
+
+`executescript()` issues implicit COMMIT internally. If the subsequent INSERT fails, `rollback()` cannot undo the schema change. Database left in inconsistent state.
+
+### Encryption wired but never applied
+
+**File:** `src/polyalpha/database/features.py:182-193`, `repository.py`
+
+`enable_encryption()` sets up the infrastructure, but `encrypt_dict()`/`decrypt_dict()` are never called in any `save_*` or `load_*` method.
+
+---
+
+## Medium-Severity Issues
+
+| Issue | File | Description |
+|-------|------|-------------|
+| Dead code: `real.py` | `trading/real.py` | Zero imports reference this file (only commented-out line in `real_config.py:524`) |
+| Dead code: `_check_tp_sl()` | `paper_engine.py:1026-1032` | Zero callers |
+| Dead code: `RiskManager` methods | `paper_risk.py:121-135` | `check_stop_loss()`/`check_take_profit()` never called from paper engine |
+| Correlation ID lock bypass | `monitoring.py:182,199` | `operation_context()` reads/writes `_current_correlation_id` directly, ignoring `_correlation_lock` |
+| Missing validation (4 signals) | `signals.py:722,753,858,916` | `price_above_by`, `price_below_by`, `price_up`, `price_up_by_percent` don't validate non-negative params |
+| `stop()` doesn't join thread | `streaming.py:159-163` | Background thread not joined — can outlive the Streamer object |
+| Dead `except` handler | `ai/client.py:335-337` | Sibling `except` can't catch exceptions from sibling's `except` handler |
+| Autoredeem lies | `auto_redeem.py:414-419` | Fallback path increments `redeemed_count` without actually redeeming |
+| Mixed list/dict config shape | `indicators.py:556-563` | `calculate_all()` accepts lists for SMA/EMA but dicts for MACD/BB — no validation |
+| Price adjustment on empty data | `data_feed.py:496-503` | `index[-1]` on empty DataFrame raises `IndexError` |
+| OAUTH2 enum never handled | `features.py:212-235` | `set_auth_method("oauth2")` makes auth always return False |
+| `save_trades_bulk` no intra-batch dedup | `repository.py:233-239` | Duplicate (market_id, side, timestamp) in same batch not detected |
+| Pool shared across threads unsafely | `repository.py:685-689` | `execute_parallel_queries` uses `ThreadPoolExecutor` without `check_same_thread=False` |
+| Migration race condition | `connection.py:174-200` | Two instances on same file race on schema_version read/insert |
+
+---
+
+## Design Issues
+
+### Dual single/multi-wallet state machine
+
+**File:** `src/polyalpha/trading/paper_engine.py`
+
+Every method checks `if self._use_multi_wallet and self._wallet_manager:` before operating. Two parallel state tracks (`self._balance/_orders/_positions` vs `wallet._balance/_orders/_positions`) make every method fragile. Should always use a WalletManager with a single default wallet.
+
+### `_get_active_wallet()` creates throwaway PaperWallet on every call
+
+**File:** `src/polyalpha/trading/paper_engine.py:213-223`
+
+Each call constructs a new `PaperWallet` (logs, creates RiskManager, etc.) then immediately replaces the RiskManager. Generates log spam and wasted allocations.
+
+### `PaperEngine` too large (1312 lines)
+
+**File:** `src/polyalpha/trading/paper_engine.py`
+
+Compare to `real_engine.py` which is split into `real_engine.py` + `real_orders.py` + `real_config.py` + `real_risk.py` + `real_wallet.py`. Paper engine has `paper_fees.py`, `paper_config.py`, `paper_risk.py`, `paper_types.py` but the main engine file is still enormous.
+
+### Three retry frameworks
+
+**Files:** `retry.py`, `error_handling.py`, `clob_client.py:388-456`
+
+`retry_on_error`/`retry_with_jitter`, `ErrorRecoveryManager.execute_with_recovery`, and inline retry loops in CLOB client — three separate implementations.
+
+### Migration runs on every `TradeDatabase.__init__`
+
+**File:** `src/polyalpha/database/database.py:44-45`
+
+Wastes I/O re-checking tables and re-querying schema_version on every construction.
+
+### `PaperPosition` vs `RealPosition` have diverging attributes
+
+**Files:** `paper_types.py:90-157`, `real_orders.py:104-190`
+
+Different attribute sets prevent writing generic position-handling code without type-checking.
+
+### `validate_market` too strict for sell operations
+
+**File:** `src/polyalpha/trading/paper_types.py:183-196`
+
+Requires `question`, `up_price`, `down_price` even when only `id` and `slug` are needed (e.g., TP/SL exits). Should be split into granular validators.
+
+---
+
+## Dead Code
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `trading/real.py` | Entire file | Legacy re-export shim — zero imports reference it |
+| `paper_engine.py` | 1026-1032 | `_check_tp_sl()` — no callers |
+| `paper_risk.py` | 121-135 | `check_stop_loss()`, `check_take_profit()` — never called from paper engine |
+| `connection.py` | 20, 213-215 | `DatabaseConnection._conn` — always `None`, never assigned |
+| `ai/client.py` | 335-337 | `except (AIAuthenticationError, AIModelNotFoundError)` — unreachable |
+| `features.py` | 182-193 | Encryption infrastructure — fully wired but never called in data layer |
+
+---
+
+## Improvement Opportunities
+
+### High Priority
+1. Fix `:memory:` database handling — use `file::memory:?cache=shared` URI or single-connection mode
+2. Fix TP/SL mock market object — add `question`, `up_price`, `down_price`
+3. Fix `_save_exit_to_db` and `_execute_exit_order` in real_engine
+4. Fix `scale_position` parameter passing
+5. Fix `place_twap_order` undefined variable
+6. Fix PreparedStatementManager
+7. Return auto-generated API key to caller
+8. Fix connection leak on backup/restore
+9. Fix `save_trades_bulk` missing columns
+10. Replace bare `except:` in connection.py
+11. Add `import asyncio` to test_streaming.py
+12. Fix `refresh_balance` → `get_allowance` argument
+
+### Medium Priority
+1. Fix ADX equal +DM/-DM bug
+2. Fix Bollinger Bands column naming
+3. Add backoff for HTTP 429 in AI client
+4. Add `check_same_thread=False` to SQLite connections
+5. Fix migration rollback (executescript COMMIT issue)
+6. Wire encryption into data layer or remove dead code
+7. Remove duplicate `set_trailing_stop` block
+8. Fix OAUTH2 auth or remove enum value
+
+### Low Priority / Technical Debt
+1. Split `paper_engine.py` (1312 lines → smaller files)
+2. Eliminate dual single/multi-wallet state
+3. Deduplicate fee calculation (paper_fees.py / real_engine.py)
+4. Unify three retry frameworks into one
+5. Add cache to remaining indicators (macd, adx, bb, etc.)
+6. Remove dead code (`real.py`, `_check_tp_sl()`, etc.)
+7. Fix `stream_trades_by_asset` manual connection management
+8. Add `__del__` to `TradeDatabase`
+9. Fix `TIMEFRAME_MAP` deprecated `"1T"` → `"1min"`
+10. Replace `O(n)` `pop(0)` with `collections.deque`

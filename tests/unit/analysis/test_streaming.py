@@ -2,6 +2,7 @@
 ChainlinkStreamer and ChainlinkStreamerConfig tests — run with: pytest tests/unit/analysis/test_streaming.py
 """
 
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -208,7 +209,7 @@ class TestChainlinkStreamerIntegration:
         mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
         mock_ws.__aexit__ = AsyncMock()
 
-        with patch("polyalpha.analysis.streaming.websockets.connect", return_value=mock_ws):
+        with patch("websockets.connect", return_value=mock_ws):
             # Run for a short time
             task = asyncio.create_task(streamer._connect_and_stream("btc/usd", "BTC"))
             await asyncio.sleep(0.1)
