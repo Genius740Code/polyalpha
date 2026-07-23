@@ -9,3 +9,9 @@ rredo logging
 
 
 big giles into saml lfiles
+
+2026-07-22 16:55:47 - DeltaBot - ERROR - ✗ Trade execution failed: 'PaperEngine' object has no attribute 'buy_yes'
+
+Add onresolve method
+
+HIGHLIGHT ERRORS AND STUFF IN LOGGING
