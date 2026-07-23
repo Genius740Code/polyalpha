@@ -58,7 +58,7 @@ with TradeDatabase("trades.db") as db:
 | `load_trades_by_market(market_slug) -> list[TradeRecord]` | Filter by market slug |
 | `load_trades_by_asset(asset) -> list[TradeRecord]` | Case-insensitive pattern match on slug |
 | `load_trades_by_side(side) -> list[TradeRecord]` | Filter by UP/DOWN |
-| `load_trades_by_outcome(outcome) -> list[TradeRecord]` | Filter by WON/LOST/CLOSED |
+| `load_trades_by_outcome(outcome) -> list[TradeRecord]` | Filter by WON/LOST |
 | `load_trades_by_market_session(session) -> list[TradeRecord]` | Filter by trading session |
 | `load_trades_by_date_range(start, end) -> list[TradeRecord]` | Filter by datetime range |
 | `load_trades(filters=None, sort_by="timestamp", sort_order="desc", limit=None, offset=0) -> list[TradeRecord]` | Advanced querying |

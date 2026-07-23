@@ -32,6 +32,7 @@ import os
 from .utils.logging_utils import (
     DEFAULT_LOG_FORMAT,
     DEFAULT_DATE_FORMAT,
+    ColoredFormatter,
 )
 
 _log = logging.getLogger("polyalpha")
@@ -66,15 +67,25 @@ def _setup_logging() -> None:
             "redact_file_paths": False,
         }
 
+    formatters: dict = {
+        "default": {
+            "()": formatter_cls,
+            **formatter_kwargs,
+        },
+    }
+
+    if fmt == "text":
+        formatters["colored"] = {
+            "()": "polyalpha.utils.logging_utils.ColoredFormatter",
+            "fmt": DEFAULT_LOG_FORMAT,
+            "datefmt": DEFAULT_DATE_FORMAT,
+            "redact_file_paths": False,
+        }
+
     config: dict = {
         "version": 1,
         "disable_existing_loggers": False,
-        "formatters": {
-            "default": {
-                "()": formatter_cls,
-                **formatter_kwargs,
-            },
-        },
+        "formatters": formatters,
         "filters": {
             "stdout_filter": {
                 "()": "polyalpha._LevelFilter",
@@ -85,14 +96,14 @@ def _setup_logging() -> None:
             "stdout": {
                 "class": "logging.StreamHandler",
                 "level": logging.INFO,
-                "formatter": "default",
+                "formatter": "colored" if fmt == "text" else "default",
                 "filters": ["stdout_filter"],
                 "stream": "ext://sys.stdout",
             },
             "stderr": {
                 "class": "logging.StreamHandler",
                 "level": logging.WARNING,
-                "formatter": "default",
+                "formatter": "colored" if fmt == "text" else "default",
                 "stream": "ext://sys.stderr",
             },
         },

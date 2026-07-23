@@ -7,7 +7,9 @@ sensitive data from being exposed in log files.
 
 import json
 import logging
+import os
 import re
+import sys
 import time
 from contextvars import ContextVar
 from contextlib import contextmanager
@@ -18,6 +20,37 @@ import uuid
 
 DEFAULT_LOG_FORMAT = "[%(asctime)s] %(levelname)-8s %(name)s %(message)s"
 DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+# ── ANSI color constants for terminal log highlighting ──────────────────────────────
+
+_RESET  = "\033[0m"
+_BOLD   = "\033[1m"
+_DIM    = "\033[2m"
+
+_LEVEL_STYLES: dict[str, tuple[str, str]] = {
+    "CRITICAL": (_BOLD + "\033[38;5;15m\033[48;5;196m", _BOLD + "\033[38;5;204m"),  # white on red bg, bold red
+    "ERROR":    ("\033[38;5;204m", "\033[38;5;204m"),                                # red, red
+    "WARNING":  ("\033[38;5;221m", "\033[38;5;221m"),                                # yellow, yellow
+    "INFO":     ("\033[38;5;43m", ""),                                                # green, default
+    "DEBUG":    (_DIM + "\033[38;5;245m", _DIM + "\033[38;5;245m"),                  # dim grey, dim grey
+}
+
+
+def _auto_colorize() -> bool:
+    """Determine whether to enable colored log output.
+
+    Respects ``NO_COLOR`` (off), then ``POLYALPHA_LOG_COLORS`` (on/off/auto),
+    then falls back to TTY detection on stderr.
+    """
+    if os.environ.get("NO_COLOR"):
+        return False
+    env = os.environ.get("POLYALPHA_LOG_COLORS", "").lower()
+    if env in ("1", "true", "yes"):
+        return True
+    if env in ("0", "false", "no"):
+        return False
+    return sys.stderr.isatty()
 
 
 # ── Correlation ID (contextvars – flows through threads/async without explicit passing) ────
@@ -219,6 +252,67 @@ class SensitiveDataFormatter(logging.Formatter):
         
         # Finally redact the formatted message to catch any remaining sensitive data
         return self.filter.redact_string(formatted)
+
+
+class ColoredFormatter(SensitiveDataFormatter):
+    """Log formatter with ANSI color highlighting by severity.
+
+    Enabled automatically when writing to a TTY.  Controlled with:
+
+    * ``POLYALPHA_LOG_COLORS=1`` — force on
+    * ``POLYALPHA_LOG_COLORS=0`` — force off
+    * ``NO_COLOR`` — force off (widely-adopted convention)
+
+    Level colours
+    -------------
+    * **DEBUG**   — dim grey
+    * **INFO**    — green
+    * **WARNING** — yellow
+    * **ERROR**   — red
+    * **CRITICAL** — white on red background + bold
+
+    Parameters
+    ----------
+    colorize : bool, optional
+        Explicit override.  ``None`` (default) uses auto-detection.
+    All other parameters match :class:`SensitiveDataFormatter`.
+    """
+
+    def __init__(
+        self,
+        fmt: Optional[str] = None,
+        datefmt: Optional[str] = None,
+        style: str = "%",
+        redact_file_paths: bool = False,
+        include_correlation_id: bool = True,
+        colorize: Optional[bool] = None,
+    ):
+        super().__init__(fmt, datefmt, style, redact_file_paths, include_correlation_id)
+        self._colorize = _auto_colorize() if colorize is None else colorize
+
+    def format(self, record: logging.LogRecord) -> str:
+        if not self._colorize:
+            return super().format(record)
+
+        style = _LEVEL_STYLES.get(record.levelname)
+        if not style:
+            return super().format(record)
+
+        level_style, msg_style = style
+        orig_levelname = record.levelname
+        orig_msg = record.msg
+
+        try:
+            visible = orig_levelname.ljust(8)
+            record.levelname = f"{level_style}{visible}{_RESET}"
+
+            if msg_style:
+                record.msg = f"{msg_style}{record.msg}{_RESET}"
+
+            return super().format(record)
+        finally:
+            record.levelname = orig_levelname
+            record.msg = orig_msg
 
 
 class JSONFormatter(logging.Formatter):

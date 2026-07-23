@@ -4,7 +4,7 @@ Install PolyAlpha, set up your environment, and run your first script.
 
 ## Prerequisites
 
-- Python 3.10 or higher
+- Python 3.9 or higher
 - git
 
 ## Installation

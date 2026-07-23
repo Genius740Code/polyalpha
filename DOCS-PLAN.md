@@ -97,18 +97,33 @@ Phase 4 (Infra)        ─── orderbook, database, reporting, wallet, errors
 Phase 5 (Reference)    ─── architecture, api-reference, troubleshooting, testing, contributing, migration-guide, security
 ```
 
-### Existing docs to DELETE
-All 10 existing docs files will be replaced entirely — they describe a different API surface:
-- `docs/getting-started.md` → replaced by new Phase 1 docs
-- `docs/api-reference.md` → replaced by Phase 5 api-reference
-- `docs/markets.md` → replaced by Phase 1 markets.md
-- `docs/streaming.md` → replaced by Phase 1 streaming.md
-- `docs/paper-trading.md` → replaced by Phase 1 trading.md
-- `docs/orderbook.md` → replaced by Phase 4 orderbook.md
-- `docs/sniper.md` → replaced by Phase 2 bots.md
-- `docs/market-analysis.md` → replaced by Phase 3 analysis.md + ai.md
-- `docs/database-implementation.md` → replaced by Phase 4 database.md
-- `docs/testing-guidelines.md` → replaced by Phase 5 testing.md
+### Existing docs to REVIEW (some may need updates)
+Existing 24 docs files in `docs/`:
+- `docs/getting-started.md` → verify install/setup text
+- `docs/client.md` → verify Client constructor params
+- `docs/markets.md` → verify MarketClient API
+- `docs/streaming.md` → verify Stream API
+- `docs/trading.md` → verify PaperEngine/RealTradingEngine API
+- `docs/configuration.md` → verify env vars and config classes
+- `docs/ai.md` → verify OpenRouterClient API
+- `docs/analysis.md` → verify data feed, indicators, signals
+- `docs/orderbook.md` → verify order book, strategies, backtesting
+- `docs/database.md` → verify TradeDatabase API
+- `docs/database-security.md` → verify security module
+- `docs/reporting.md` → verify ReportEngine, metrics, charts
+- `docs/wallet.md` → verify wallet security functions
+- `docs/errors.md` → verify exception hierarchy
+- `docs/bot.md` → verify Bot API
+- `docs/bots.md` → verify Sniper, Tracker, WeatherConfig
+- `docs/conditions.md` → verify condition protocol
+- `docs/examples-guide.md` → verify all 32 example scripts
+- `docs/architecture.md` → review package structure diagram
+- `docs/api-reference.md` → review exported symbol list
+- `docs/troubleshooting.md` → review common issues
+- `docs/testing.md` → review test patterns
+- `docs/contributing.md` → review dev setup guide
+- `docs/migration-guide.md` → review upgrade path
+- `docs/security.md` → review security best practices
 
 ---
 

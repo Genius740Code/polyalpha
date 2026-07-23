@@ -309,6 +309,20 @@ Available on both `client.paper.auto_redeem` and `client.real.auto_redeem`.
 | `filled_at` | `datetime` | Fill timestamp |
 | `stop_loss` | `float \| None` | Stop-loss price |
 | `take_profit` | `float \| None` | Take-profit price |
+| `stop_loss_pct` | `float \| None` | Stop-loss as % of entry |
+| `take_profit_pct` | `float \| None` | Take-profit as % of entry |
+| `trail_sl` | `float \| None` | Trailing stop-loss distance |
+| `trail_tp` | `float \| None` | Trailing take-profit distance |
+| `trail_sl_price` | `float \| None` | Trail stop-loss trigger price |
+| `trail_tp_price` | `float \| None` | Trail take-profit trigger price |
+| `oco_order_id` | `str \| None` | Linked OCO order ID |
+| `tp_sl_triggered_by` | `str \| None` | Which trigger fired (`"sl"` / `"tp"`) |
+| `time_window_start` | `datetime \| None` | Order window start |
+| `time_window_end` | `datetime \| None` | Order window end |
+| `check_count` | `int` | Limit-check iteration count |
+| `fee_type` | `str` | `"taker"` or `"maker"` |
+| `rebate_amount` | `float` | Fee rebate in USDC |
+| `rebate_rate` | `float` | Rebate rate |
 
 ## PaperPosition Fields
 
@@ -316,10 +330,19 @@ Available on both `client.paper.auto_redeem` and `client.real.auto_redeem`.
 |-------|------|-------------|
 | `market_id` | `str` | Market condition ID |
 | `slug` | `str` | Market slug |
+| `question` | `str` | Market question text |
 | `side` | `str` | `"UP"` or `"DOWN"` |
 | `shares` | `float` | Shares held |
 | `avg_price` | `float` | Average entry price |
 | `current_price` | `float` | Current price |
+| `cost_basis` | `float` | Total cost (shares × avg_price) |
+| `current_value` | `float` | Current market value |
 | `pnl` | `float` | Unrealized P&L |
+| `pnl_pct` | `float` | P&L as % of cost basis |
 | `resolved` | `bool` | True if resolved |
-| `outcome` | `str \| None` | `"WON"`, `"LOST"`, `"CLOSED"` |
+| `outcome` | `str \| None` | `"WON"` or `"LOST"` |
+| `order_ids` | `list[str]` | Order IDs comprising this position |
+| `stop_loss` | `float \| None` | Stop-loss price |
+| `take_profit` | `float \| None` | Take-profit price |
+| `stop_loss_pct` | `float \| None` | Stop-loss as % of entry |
+| `take_profit_pct` | `float \| None` | Take-profit as % of entry |

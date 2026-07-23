@@ -3,7 +3,9 @@
 Python SDK for [Polymarket](https://polymarket.com) — discover prediction markets, stream live prices, trade paper or real, run bots with composable strategy conditions, analyse with 20+ TA indicators and AI signals, track P&L with full reporting, and manage wallets.
 
 ```bash
-pip install polyalpha
+git clone https://github.com/your-org/polyalpha.git
+cd polyalpha
+pip install -e .
 ```
 
 ---
@@ -80,7 +82,7 @@ Simulate orders with configurable fees, slippage, execution delay, and risk limi
 client = polyalpha.Client(balance=500.0)
 
 client.paper.buy(market, side="UP", amount=10.0)
-client.paper.sell(market, side="UP", amount=5.0)
+client.paper.sell_position(market, side="UP", amount=5.0)
 client.paper.limit(market, side="UP", price=0.92, amount=25.0)
 client.paper.cancel(order.id)
 client.paper.cancel_all()
@@ -90,12 +92,15 @@ client.paper.all_positions()   # all, incl. resolved
 client.paper.balance
 client.paper.summary()         # P&L table
 
-# Advanced order types
+# Advanced order types (stop_loss_pct / take_profit_pct as decimals)
 client.paper.buy(market, side="UP", amount=10.0,
-    trailing_stop=0.05,         # 5% trailing stop
-    stop_loss=0.10,             # 10% stop-loss
-    take_profit=0.50,           # 50% take-profit
-    oco_group="group1")         # one-cancels-other
+    stop_loss_pct=0.05,         # 5% stop-loss
+    take_profit_pct=0.50)       # 50% take-profit
+client.paper.buy_with_tp_sl(market, side="UP", amount=10.0,
+    stop_loss=0.45,             # absolute stop-loss price
+    take_profit=0.65)           # absolute take-profit price
+client.paper.oco_order(market, side="UP", amount=10.0,
+    stop_loss=0.40, take_profit=0.70)  # one-cancels-other
 
 # Attach a stream for auto-fill + live P&L
 client.paper.attach_stream(stream, market)
@@ -111,12 +116,13 @@ See [`examples/paper.py`](./examples/paper.py) and [`examples/advanced_orders.py
 Tune realism: fee model, slippage, fill probability, execution delay, risk limits.
 
 ```python
-from polyalpha import PaperConfig
+from polyalpha.trading.paper_config import get_paper_config_from_preset, list_presets
 
-config = PaperConfig.REALISTIC    # 2s delay, polymarket fees, 85% fill prob
-config = PaperConfig.AGGRESSIVE   # no delay, high fill prob
-config = PaperConfig.CONSERVATIVE # slippage, low fill prob
-config = PaperConfig.TEST         # zero fees, instant, 100% fill
+print(list_presets())
+config = get_paper_config_from_preset("REALISTIC")    # 2s delay, polymarket fees, 85% fill prob
+config = get_paper_config_from_preset("AGGRESSIVE")   # no delay, high fill prob
+config = get_paper_config_from_preset("CONSERVATIVE") # polymarket fees, 1% slippage, 95% fill prob
+config = get_paper_config_from_preset("TEST")         # zero fees, instant, 100% fill
 
 client = polyalpha.Client(balance=500.0, paper_config=config)
 # or load from .env:
@@ -125,14 +131,16 @@ client = polyalpha.Client(paper_config_from_env=True)
 
 ### Built-in presets
 
-| Preset | Slippage | Delay | Fee | Fill prob |
+| Preset | Slippage | Delay | Fill prob | Risk |
 |---|---|---|---|---|
-| `CONSERVATIVE` | 0.1% | 1s | 2% | 85% |
-| `BALANCED` | 0.02% | ~1s | 2% | 92% |
-| `AGGRESSIVE` | 0% | 0 | 2% | 100% |
-| `REALISTIC` | 0.03% | 2s | polymarket | 85% |
-| `STRESS` | 0.1% | 5s | polymarket | 70% |
-| `TEST` | 0% | 0 | 0% | 100% |
+| `CONSERVATIVE` | 1% | 500ms | 95% | Low |
+| `REALISTIC` | 3% | 2000ms | 85% | Medium |
+| `AGGRESSIVE` | 5% | 100ms | 70% | High |
+| `ZERO_FEE` | 0% | 0ms | 100% | Medium |
+| `HIGH_LATENCY` | 8% | 5000ms | 60% | Medium |
+| `LIQUIDITY_PROVIDER` | 2% | 1000ms | 90% | Low |
+| `SCALPER` | 2% | 50ms | 98% | Low |
+| `TEST` | 0% | 0ms | 100% | None |
 
 ---
 
@@ -200,7 +208,7 @@ client.real.positions()
 client.real.order_history()
 ```
 
-**Real trading presets:** `conservative`, `balanced`, `aggressive`, `scalp`, `dca`, `test`.
+**Real trading presets:** `CONSERVATIVE`, `REALISTIC`, `AGGRESSIVE`, `MINIMAL`, `HIGH_FREQUENCY`, `POSITION_TRADER`, `HEDGING_ENABLED`, `TEST`.
 
 See [`examples/real_trading.py`](./examples/real_trading.py) and [`examples/clob_client_example.py`](./examples/clob_client_example.py).
 
@@ -250,7 +258,7 @@ estimate_fill(snapshot, side="UP", amount=100.0)
 from polyalpha.orderbook import MomentumStrategy, SpreadStrategy, BacktestEngine
 ```
 
-**Strategies:** `MomentumStrategy`, `MeanReversionStrategy`, `SpreadStrategy` (market making), `ImbalanceStrategy`.
+**Strategies:** `MomentumStrategy`, `SpreadStrategy` (market making), `ImbalanceStrategy`.
 
 See [`examples/orderbook_example.py`](./examples/orderbook_example.py).
 
@@ -278,8 +286,8 @@ ind.obv()
 sig = SignalGenerator(ind)
 sig.rsi_above(50)
 sig.price_above_sma(20)
-sig.bollinger_breakout("upper")
-sig.macd_crossover()
+sig.price_above_bb_upper()
+sig.macd_bullish_crossover()
 sig.summary()  # all signals at once
 ```
 
@@ -296,15 +304,15 @@ Analyse markets and generate trading signals via OpenRouter.
 ```python
 client = polyalpha.Client(openrouter_api_key="sk-or-...")
 
-analysis = client.ai.analyse(market)
+analysis = client.ai.analyze_market(market_data)
 analysis.sentiment    # "bullish" | "bearish" | "neutral"
 analysis.confidence   # 0.0 – 1.0
 analysis.reasoning    # markdown explanation
 
-signal = client.ai.signal(market)
+signal = client.ai.generate_trading_signal(market_data)
 signal.action         # "BUY" | "SELL" | "HOLD"
 signal.side           # "UP" | "DOWN" | None
-signal.strength       # 0.0 – 1.0
+signal.confidence     # 0.0 – 1.0
 ```
 
 See [`examples/ai_trading.py`](./examples/ai_trading.py).
@@ -336,7 +344,7 @@ SQLite-backed trade persistence with optional encryption.
 ```python
 client = polyalpha.Client(db_path="./trades.db")
 
-db = client.paper.db
+db = client.paper.database
 db.get_statistics(start_date="2026-01-01", end_date="2026-07-22")
 db.get_trades(market_slug="btc-updown-*")
 db.export_json("trades.json")
@@ -389,10 +397,11 @@ See [`examples/tracker.py`](./examples/tracker.py).
 Multi-wallet paper trading and secure wallet storage (AES-256, multi-sig, audit logging).
 
 ```python
-from polyalpha.trading import PaperWallet
+from polyalpha.trading.wallet import WalletManager, PaperWallet
 
-client.paper.add_wallet(PaperWallet(balance=1000.0, name="trader-1"))
-client.paper.switch_wallet("trader-1")
+manager = WalletManager()
+manager.add_wallet(PaperWallet("trader-1", balance=1000.0))
+client.paper.enable_multi_wallet(manager)
 ```
 
 See [`examples/multi_wallet_paper.py`](./examples/multi_wallet_paper.py).
