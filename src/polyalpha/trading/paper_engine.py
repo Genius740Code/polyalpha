@@ -800,12 +800,8 @@ class PaperEngine:
         validate_market(market)
         side = validate_side(side)
         sl_pct = validate_positive(float(sl_pct), "sl_pct")
-        position_key = f"{market.id}:{side}"
 
-        if position_key not in self._positions:
-            raise PositionNotFound(f"No position found for {market.slug} {side}")
-
-        position = self._positions[position_key]
+        position, wallet = self._find_position_across_wallets(market.id, side)
         position.stop_loss_pct = sl_pct
         if side == "UP":
             position.stop_loss = round(position.avg_price * (1 - sl_pct), PRICE_ROUNDING)
@@ -813,7 +809,7 @@ class PaperEngine:
             position.stop_loss = round(position.avg_price * (1 + sl_pct), PRICE_ROUNDING)
 
         for oid in position.order_ids:
-            order = self._orders.get(oid)
+            order = wallet._orders.get(oid)
             if order:
                 order.stop_loss_pct = sl_pct
                 order.stop_loss = position.stop_loss
@@ -826,12 +822,8 @@ class PaperEngine:
         validate_market(market)
         side = validate_side(side)
         tp_pct = validate_positive(float(tp_pct), "tp_pct")
-        position_key = f"{market.id}:{side}"
 
-        if position_key not in self._positions:
-            raise PositionNotFound(f"No position found for {market.slug} {side}")
-
-        position = self._positions[position_key]
+        position, wallet = self._find_position_across_wallets(market.id, side)
         position.take_profit_pct = tp_pct
         if side == "UP":
             position.take_profit = round(position.avg_price * (1 + tp_pct), PRICE_ROUNDING)
@@ -839,7 +831,7 @@ class PaperEngine:
             position.take_profit = round(position.avg_price * (1 - tp_pct), PRICE_ROUNDING)
 
         for oid in position.order_ids:
-            order = self._orders.get(oid)
+            order = wallet._orders.get(oid)
             if order:
                 order.take_profit_pct = tp_pct
                 order.take_profit = position.take_profit
@@ -1023,14 +1015,6 @@ class PaperEngine:
             return order.check_count <= check_mode
         return True
 
-    def _check_tp_sl(self, market_id: str, up_price: float, down_price: float) -> None:
-        """Check and trigger TP/SL orders across all wallets."""
-        if self._use_multi_wallet and self._wallet_manager:
-            for wallet in self._wallet_manager.get_all_wallets():
-                self._check_tp_sl_for_wallet(wallet, market_id, up_price, down_price)
-        else:
-            self._check_tp_sl_for_wallet(self._get_active_wallet(), market_id, up_price, down_price)
-
     def _check_tp_sl_for_wallet(self, wallet, market_id: str, up_price: float, down_price: float) -> None:
         """Check and trigger TP/SL orders for a single wallet."""
         for order in list(wallet._orders.values()):
@@ -1116,6 +1100,9 @@ class PaperEngine:
                         type('obj', (object,), {
                             'id': order.market_id,
                             'slug': order.slug,
+                            'question': order.slug,
+                            'up_price': up_price,
+                            'down_price': down_price,
                         })(),
                         side=order.side,
                         wallet=wallet,

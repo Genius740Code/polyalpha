@@ -53,6 +53,7 @@ class MockMarket:
     def __init__(self):
         self.id = "test-market"
         self.slug = "test-market"
+        self.question = "Test question"
         self.up_price = 0.55
         self.down_price = 0.45
 

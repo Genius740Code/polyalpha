@@ -16,7 +16,7 @@ All 8 previously failing tests now pass after DB bug fixes.
 
 | Example | Error | Root Cause |
 |---------|-------|------------|
-| `examples/risk_management.py` | `"Market object missing required attribute: question"` | `MockMarket` (line 52-57) lacks `question`, `up_price`, `down_price` |
+| `examples/risk_management.py` | `"Market object missing required attribute: question"` | `MockMarket` (line 52-57) lacks `question`, `up_price`, `down_price` [FIXED] |
 | `examples/advanced_orders.py` | `"Order amount $250.00 exceeds max position size $200.00"` | Example tries `buy_with_tp_sl` $250 with default `max_position_size=$200` |
 | `examples/fee_rebates.py` | Crash on `limit()` | Risk validation prevents order; `MockMarket` in loop uses `i` from outer scope (works but fragile) |
 | `examples/analysis.py` | No visible output | Data feed runs but requires Binance/Chainlink — silent if unavailable |
@@ -32,15 +32,11 @@ All 8 previously failing tests now pass after DB bug fixes.
 
 `_get_connection()` now returns a single shared `self._conn` for `:memory:`, avoiding independent connections.
 
-### 2. TP/SL triggers crash in paper trading
+### 2. TP/SL triggers crash in paper trading [FIXED]
 
-**File:** `src/polyalpha/trading/paper_engine.py:1114-1122`
+**File:** `src/polyalpha/trading/paper_engine.py:1114-1124`
 
-When a stop-loss or take-profit triggers, `_check_tp_sl_for_wallet` calls `sell_position()` with a mock market object:
-```python
-type('obj', (object,), {'id': order.market_id, 'slug': order.slug})()
-```
-Missing `question`, `up_price`, `down_price`. `validate_market()` in `paper_types.py:188` requires all three → `ValueError`. The exception is caught and silently logged — the TP/SL trigger is swallowed, position never closes.
+Mock market object now includes `question`, `up_price`, `down_price` so `validate_market()` passes and TP/SL triggers correctly close positions.
 
 ### 3. `_save_exit_to_db` accesses missing RealPosition attributes
 
@@ -118,11 +114,11 @@ Lines 1649-1656 and 1659-1665 are identical code. The second block is unreachabl
 
 ## High-Severity Issues
 
-### TP/SL ignores multi-wallet mode
+### TP/SL ignores multi-wallet mode [FIXED]
 
-**File:** `src/polyalpha/trading/paper_engine.py:798-848`
+**File:** `src/polyalpha/trading/paper_engine.py:798-844`
 
-`set_stop_loss_pct()` and `set_take_profit_pct()` only check `self._positions` — not wallet positions. In multi-wallet mode, raises `PositionNotFound`.
+`set_stop_loss_pct()` and `set_take_profit_pct()` now use `_find_position_across_wallets()` which searches all wallet positions. Also use `wallet._orders` instead of `self._orders` for consistency.
 
 ### `refresh_balance` calls `get_allowance()` without required arg [FIXED]
 
@@ -198,7 +194,7 @@ Replaced `executescript()` with individual `cursor.execute()` calls, keeping all
 | Issue | File | Description |
 |-------|------|-------------|
 | Dead code: `real.py` | `trading/real.py` | Zero imports reference this file (only commented-out line in `real_config.py:524`) |
-| Dead code: `_check_tp_sl()` | `paper_engine.py:1026-1032` | Zero callers |
+| Dead code: `_check_tp_sl()` | `paper_engine.py:1026-1032` | [FIXED] — removed, logic lives in `_check_limits_for_wallet` → `_check_tp_sl_for_wallet` |
 | Dead code: `RiskManager` methods | `paper_risk.py:121-135` | `check_stop_loss()`/`check_take_profit()` never called from paper engine |
 | Correlation ID lock bypass | `monitoring.py:182,199` | `operation_context()` reads/writes `_current_correlation_id` directly, ignoring `_correlation_lock` |
 | Missing validation (4 signals) | `signals.py:722,753,858,916` | `price_above_by`, `price_below_by`, `price_up`, `price_up_by_percent` don't validate non-negative params |
@@ -277,7 +273,7 @@ Requires `question`, `up_price`, `down_price` even when only `id` and `slug` are
 
 ### High Priority
 1. Fix `:memory:` database handling — use `file::memory:?cache=shared` URI or single-connection mode
-2. Fix TP/SL mock market object — add `question`, `up_price`, `down_price`
+2. Fix TP/SL mock market object — add `question`, `up_price`, `down_price` [FIXED]
 3. Fix `_save_exit_to_db` and `_execute_exit_order` in real_engine
 4. Fix `scale_position` parameter passing
 5. Fix `place_twap_order` undefined variable
