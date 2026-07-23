@@ -1655,15 +1655,6 @@ class RealTradingEngine:
         position.trail_sl = trail_distance
         position.trail_sl_price = position.current_price - trail_distance if side == "UP" else position.current_price + trail_distance
         
-        # Add trailing stop fields to position if not already present
-        if not hasattr(position, 'trail_sl'):
-            position.trail_sl = None
-        if not hasattr(position, 'trail_sl_price'):
-            position.trail_sl_price = None
-        
-        position.trail_sl = trail_distance
-        position.trail_sl_price = position.current_price - trail_distance if side == "UP" else position.current_price + trail_distance
-        
         log.info("Trailing stop set at %.4f distance for %s %s", trail_distance, market.slug, side)
 
     def check_and_execute_trailing_stops(self, market_updates: dict[str, float]) -> list[str]:
@@ -1840,11 +1831,11 @@ class RealTradingEngine:
         >>> order = client.real.scale_position(market, side="UP", add_amount=50.0, confidence=0.7)
         """
         side = _validate_side(side)
-        position, wallet = self._find_position_across_wallets(market.id, side)
+        position, _ = self._find_position_across_wallets(market.id, side)
         if position is None:
             raise PositionNotFound(f"No position found for {market.slug} {side}")
 
-        config = self._resolve_config_and_risk(wallet)
+        config, _ = self._resolve_config_and_risk()
 
         if not config.enable_position_scaling:
             raise RiskLimitExceeded("Position scaling is disabled in configuration")
@@ -2567,11 +2558,12 @@ class RealTradingEngine:
             else:
                 exit_value = position.shares * (1 - current_price)
 
-            position.pnl = exit_value - position.amount
+            pnl = exit_value - position.cost_basis
+            position.current_value = exit_value
 
             log.info(
                 "Exit order executed for %s %s: reason=%s, pnl=$%.2f",
-                position.slug, position.side, reason, position.pnl
+                position.slug, position.side, reason, pnl
             )
 
             if self._db_enabled:
@@ -2594,21 +2586,34 @@ class RealTradingEngine:
             Exit price
         """
         try:
+            # Look up order-level metadata from the position's first order
+            sizing_strategy = "unknown"
+            confidence = 0.5
+            kelly_fraction = 0.0
+            fee = 0.0
+            if position.order_ids:
+                first_order = self._orders.get(position.order_ids[0])
+                if first_order:
+                    sizing_strategy = first_order.sizing_strategy
+                    confidence = first_order.confidence
+                    kelly_fraction = first_order.kelly_fraction
+                    fee = first_order.fee
+
             self._db.save_trade(
                 market_slug=position.slug,
                 market_id=position.market_id,
                 side=position.side,
-                entry_price=position.entry_price,
+                entry_price=position.avg_price,
                 exit_price=exit_price,
-                amount=position.amount,
+                amount=position.cost_basis,
                 shares=position.shares,
-                fee=position.fee,
+                fee=fee,
                 outcome=reason,
                 pnl=position.pnl,
                 timestamp=datetime.now(timezone.utc),
-                sizing_strategy=position.sizing_strategy,
-                confidence=position.confidence,
-                kelly_fraction=position.kelly_fraction,
+                sizing_strategy=sizing_strategy,
+                confidence=confidence,
+                kelly_fraction=kelly_fraction,
                 stop_loss=position.stop_loss,
                 take_profit=position.take_profit,
                 tx_hash=None,
@@ -3667,10 +3672,12 @@ class RealTradingEngine:
             slug=market.slug,
             side=side,
             total_amount=total_amount,
-            slice_amount=slice_amount,
+            duration_seconds=duration_seconds,
+            num_slices=num_slices,
             price=price,
             status="active",
             created_at=datetime.now(timezone.utc),
+            ends_at=ends_at,
             slice_interval=slice_interval,
             token_id=token_id,
         )
