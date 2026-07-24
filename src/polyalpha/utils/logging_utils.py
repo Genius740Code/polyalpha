@@ -5,6 +5,8 @@ This module provides custom logging filters and utilities to prevent
 sensitive data from being exposed in log files.
 """
 
+import functools
+import inspect
 import json
 import logging
 import os
@@ -478,3 +480,183 @@ def mask_private_key(private_key: str, visible_chars: int = 8) -> str:
     if not private_key or len(private_key) < visible_chars:
         return "***REDACTED***"
     return f"{private_key[:visible_chars]}...REDACTED"
+
+
+# ── One-liner logger shortcut ────────────────────────────────────────────────
+
+def get_logger(name: Optional[str] = None) -> logging.Logger:
+    """Get a polyalpha logger — one line instead of two.
+
+    Usage
+    -----
+        from polyalpha.utils.logging_utils import get_logger
+        log = get_logger()               # auto-detects caller's module
+        log = get_logger("polyalpha.Bot") # explicit name
+    """
+    if name is None:
+        caller = sys._getframe(1)
+        name = caller.f_globals.get("__name__", "__main__")
+    return logging.getLogger(name)
+
+
+# ── @log_call decorator ──────────────────────────────────────────────────────
+
+def _truncate_repr(value: Any, max_len: int = 100, max_items: int = 5) -> str:
+    """Shorten repr of *value* so log lines stay readable."""
+    if isinstance(value, (int, float, bool)) or value is None:
+        return repr(value)
+    if isinstance(value, str):
+        if len(value) > max_len:
+            return repr(value[: max_len - 3] + "...")
+        return repr(value)
+    if isinstance(value, (list, tuple)):
+        items = [repr(x) for x in list(value)[:max_items]]
+        if len(value) > max_items:
+            items.append("...")
+        return f"[{', '.join(items)}]" if isinstance(value, list) else f"({', '.join(items)})"
+    if isinstance(value, dict):
+        keys = list(value.keys())[:max_items]
+        items = [f"{k!r}: {_truncate_repr(value[k], max_len, max_items)}" for k in keys]
+        if len(value) > max_items:
+            items.append("...")
+        return "{" + ", ".join(items) + "}"
+    rep = repr(value)
+    if len(rep) > max_len:
+        return f"<{type(value).__name__}>"
+    return rep
+
+
+_SKIP_CLASS_NAMES = frozenset({"Market"})
+
+
+def _format_call_args(
+    func, args: tuple, kwargs: dict,
+    skip_args: tuple[str, ...],
+) -> str:
+    """Format function arguments for logging, skipping verbose parameters."""
+    try:
+        sig = inspect.signature(func)
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+    except (ValueError, TypeError):
+        return ", ".join(_truncate_repr(a) for a in args) + (
+            ", " + ", ".join(f"{k}={_truncate_repr(v)}" for k, v in kwargs.items()) if kwargs else ""
+        )
+
+    parts = []
+    for name, value in bound.arguments.items():
+        if name in skip_args:
+            continue
+        if isinstance(value, (int, float, str, bool)) or value is None:
+            parts.append(f"{name}={_truncate_repr(value)}")
+        elif value.__class__.__name__ in _SKIP_CLASS_NAMES:
+            continue
+        else:
+            parts.append(f"{name}={_truncate_repr(value)}")
+    return ", ".join(parts)
+
+
+def log_call(
+    _func=None,
+    *,
+    level: int = logging.DEBUG,
+    log_args: bool = True,
+    log_result: bool = False,
+    log_error: bool = True,
+    skip_args: tuple[str, ...] = ("self", "cls", "market", "wallet"),
+    max_arg_len: int = 100,
+    max_items: int = 5,
+):
+    """Decorator that logs function entry, exit, and exceptions.
+
+    The existing ``ColoredFormatter`` automatically colors output by level,
+    so trades logged at **INFO** appear green and errors at **ERROR** red.
+
+    Usage
+    -----
+        @log_call
+        def buy(self, market, side, amount): ...
+
+        @log_call(level=logging.INFO, log_result=True)
+        def sell(self, market, side, amount): ...
+
+        @log_call(log_result=True)
+        def get_latest_market(asset): ...
+
+    Parameters
+    ----------
+    level : int
+        Log level for entry/exit messages (default ``DEBUG``).
+    log_args : bool
+        Log function arguments on entry (default ``True``).
+    log_result : bool
+        Log return value on exit (default ``False``).
+    log_error : bool
+        Log exceptions raised by the function (default ``True``).
+    skip_args : tuple of str
+        Parameter names to skip when logging args.
+        Defaults to ``("self", "cls", "market", "wallet")``.
+    max_arg_len : int
+        Truncate arg reprs longer than this (default 100).
+    max_items : int
+        Max list/dict items to show in arg repr (default 5).
+    """
+    if _func is not None:
+        return _make_logged(_func, level, log_args, log_result, log_error, skip_args, max_arg_len, max_items)
+    return lambda f: _make_logged(f, level, log_args, log_result, log_error, skip_args, max_arg_len, max_items)
+
+
+def _make_logged(func, level, log_args, log_result, log_error, skip_args, max_arg_len, max_items):
+    """Inner factory — returns the sync or async wrapper."""
+    logger = logging.getLogger(func.__module__)
+    func_name = func.__qualname__
+    can_log = logger.isEnabledFor(level)
+    can_log_err = logger.isEnabledFor(logging.ERROR)
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        if log_args and can_log:
+            arg_str = _format_call_args(func, args, kwargs, skip_args)
+            logger.log(level, "-> %s(%s)", func_name, arg_str)
+        elif can_log:
+            logger.log(level, "-> %s(...)", func_name)
+
+        try:
+            result = func(*args, **kwargs)
+            if log_result and can_log:
+                result_str = _truncate_repr(result, max_arg_len, max_items)
+                logger.log(level, "<- %s -> %s", func_name, result_str)
+            return result
+        except BaseException as exc:
+            if log_error and can_log_err:
+                logger.log(
+                    logging.ERROR if isinstance(exc, Exception) else logging.CRITICAL,
+                    "<- %s -> %s: %s", func_name, type(exc).__name__, exc,
+                )
+            raise
+
+    @functools.wraps(func)
+    async def async_wrapper(*args, **kwargs):
+        if log_args and can_log:
+            arg_str = _format_call_args(func, args, kwargs, skip_args)
+            logger.log(level, "-> %s(%s)", func_name, arg_str)
+        elif can_log:
+            logger.log(level, "-> %s(...)", func_name)
+
+        try:
+            result = await func(*args, **kwargs)
+            if log_result and can_log:
+                result_str = _truncate_repr(result, max_arg_len, max_items)
+                logger.log(level, "<- %s -> %s", func_name, result_str)
+            return result
+        except BaseException as exc:
+            if log_error and can_log_err:
+                logger.log(
+                    logging.ERROR if isinstance(exc, Exception) else logging.CRITICAL,
+                    "<- %s -> %s: %s", func_name, type(exc).__name__, exc,
+                )
+            raise
+
+    if inspect.iscoroutinefunction(func):
+        return async_wrapper
+    return wrapper

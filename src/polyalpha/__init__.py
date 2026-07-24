@@ -33,6 +33,7 @@ from .utils.logging_utils import (
     DEFAULT_LOG_FORMAT,
     DEFAULT_DATE_FORMAT,
     ColoredFormatter,
+    log_call,
 )
 
 _log = logging.getLogger("polyalpha")
@@ -290,4 +291,6 @@ __all__ = [
     "AIResponseError",
     "AITimeoutError",
     "AIConnectionError",
+    # Utilities
+    "log_call",
 ]
