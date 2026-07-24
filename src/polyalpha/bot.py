@@ -39,6 +39,7 @@ from .core.errors import MarketNotFound
 
 if TYPE_CHECKING:
     from .conditions import Condition
+    from .trading.paper_config import PaperConfig
 
 log = logging.getLogger(__name__)
 
@@ -273,6 +274,12 @@ class Bot:
         Starting paper-trading balance (default 100.0).
     paper : bool
         Paper-trade if True (default), real-trade if False.
+    mode : str
+        Fee/execution template: ``"simple"`` (zero fees, instant, 100% fill),
+        ``"realistic"`` (polymarket fees, slippage, delay),
+        or ``"custom"`` (use ``paper_config``) (default ``"simple"``).
+    paper_config : PaperConfig, optional
+        PaperConfig instance for ``mode="custom"``. Ignored otherwise.
     kwargs
         Extra keyword arguments forwarded to polyalpha.Client.
 
@@ -294,6 +301,8 @@ class Bot:
         timeframe: str = "5m",
         balance: float = 100.0,
         paper: bool = True,
+        mode: str = "simple",
+        paper_config: Optional["PaperConfig"] = None,
         **kwargs,
     ):
         asset = asset.upper()
@@ -308,7 +317,17 @@ class Bot:
         self.timeframe = timeframe
         self.paper_mode = paper
 
-        self._client = Client(balance=balance, **kwargs)
+        from .trading.paper_config import get_paper_config_from_preset
+
+        if mode == "realistic":
+            resolved = get_paper_config_from_preset("REALISTIC")
+        elif mode == "custom":
+            resolved = paper_config or PaperConfig()
+        else:  # "simple"
+            resolved = get_paper_config_from_preset("TEST")
+
+        kwargs.pop("paper_config", None)
+        self._client = Client(balance=balance, paper_config=resolved, **kwargs)
         self._market: Optional[Market] = None
         self._stream = None
         self._strategy: Optional[Callable] = None

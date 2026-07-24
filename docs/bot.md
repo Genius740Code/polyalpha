@@ -22,11 +22,13 @@ bot.run()
 
 ```python
 bot = polyalpha.Bot(
-    asset="BTC",      # BTC, ETH, SOL, XRP, DOGE
-    timeframe="5m",   # 5m, 15m, 1h, 4h, 24h
-    balance=100.0,    # starting paper balance
-    paper=True,       # True → paper trade, False → real trade
-    **kwargs,         # forwarded to polyalpha.Client
+    asset="BTC",           # BTC, ETH, SOL, XRP, DOGE
+    timeframe="5m",        # 5m, 15m, 1h, 4h, 24h
+    balance=100.0,         # starting paper balance
+    paper=True,            # True → paper trade, False → real trade
+    mode="simple",         # "simple", "realistic", or "custom"
+    paper_config=None,     # PaperConfig for mode="custom"
+    **kwargs,              # forwarded to polyalpha.Client
 )
 ```
 
@@ -38,9 +40,34 @@ bot = polyalpha.Bot(
 | `timeframe` | `"5m"` | Market timeframe. One of: 5m, 15m, 1h, 4h, 24h |
 | `balance` | `100.0` | Starting paper-trading balance in USDC |
 | `paper` | `True` | `True` for paper trading, `False` for real trading |
+| `mode` | `"simple"` | Execution template: `"simple"`, `"realistic"`, or `"custom"` |
+| `paper_config` | `None` | `PaperConfig` instance (only used when `mode="custom"`) |
 | `**kwargs` | — | Extra keyword arguments forwarded to `polyalpha.Client` |
 
 Raises `ValueError` if the asset or timeframe is unsupported.
+
+### Modes
+
+The `mode` parameter controls fees, execution delay, slippage, and fill probability:
+
+| Mode | Fees | Delay | Slippage | Fill prob | Use case |
+|------|------|-------|----------|-----------|----------|
+| `"simple"` (default) | Zero | Instant | 0% | 100% | Quick testing, strategy dev |
+| `"realistic"` | Polymarket fees | 2000ms | 3% | 85% | Realistic simulation |
+| `"custom"` | Your config | Your config | Your config | Your config | Full control |
+
+```python
+# Simple — zero fees, instant, 100% fill (default)
+bot = polyalpha.Bot("BTC", "5m", balance=500)
+
+# Realistic — polymarket fees, slippage, delay
+bot = polyalpha.Bot("BTC", "5m", balance=500, mode="realistic")
+
+# Custom — your own PaperConfig
+from polyalpha.trading.paper_config import PaperConfig
+bot = polyalpha.Bot("BTC", "5m", balance=500, mode="custom",
+    paper_config=PaperConfig(fee_mode="custom", custom_fee_rate=0.015))
+```
 
 ### Methods
 

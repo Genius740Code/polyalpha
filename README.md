@@ -149,7 +149,7 @@ client = polyalpha.Client(paper_config_from_env=True)
 Bot handles the full lifecycle: discover → stream → tick → resolve → rollover → repeat.
 
 ```python
-bot = polyalpha.Bot("BTC", "5m", balance=500)
+bot = polyalpha.Bot("BTC", "5m", balance=500, mode="simple")
 
 @bot.on_tick
 def strategy(ctx):
@@ -157,6 +157,30 @@ def strategy(ctx):
         ctx.buy("UP", 20)
 
 bot.run()  # blocking, auto-rollover
+```
+
+### Modes
+
+Three execution templates via the `mode` parameter:
+
+| Mode | Fees | Delay | Slippage | Fill prob |
+|---|---|---|---|---|
+| `"simple"` (default) | Zero | Instant | 0% | 100% |
+| `"realistic"` | Polymarket fees | 2000ms | 3% | 85% |
+| `"custom"` | Your `PaperConfig` | Your config | Your config | Your config |
+
+```python
+# Simple — zero fees, instant, 100% fill (default)
+bot = polyalpha.Bot("BTC", "5m", balance=500)
+
+# Realistic — polymarket fees, slippage, delay
+bot = polyalpha.Bot("BTC", "5m", balance=500, mode="realistic")
+
+# Custom — your own PaperConfig
+from polyalpha.trading.paper_config import PaperConfig, get_paper_config_from_preset
+
+bot = polyalpha.Bot("BTC", "5m", balance=500, mode="custom",
+    paper_config=PaperConfig(fee_mode="custom", custom_fee_rate=0.015))
 ```
 
 ### TickContext
