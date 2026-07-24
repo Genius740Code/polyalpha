@@ -590,24 +590,16 @@ class TradeRepository:
 
     def stream_trades_by_asset(self, asset: str, batch_size: int = 100):
         offset = 0
-        conn = self._conn._get_connection()
-        try:
-            while True:
-                cursor = conn.cursor()
-                pattern = f"{asset.lower()}%"
-                cursor.execute("""
-                    SELECT id, market_slug, market_id, side, entry_price, exit_price,
-                           amount, shares, fee, outcome, pnl, timestamp, market_session, user_id
-                    FROM trades WHERE LOWER(market_slug) LIKE ?
-                    ORDER BY timestamp DESC LIMIT ? OFFSET ?
-                """, (pattern, batch_size, offset))
-                batch = [row_to_trade_record(row) for row in cursor.fetchall()]
-                if not batch:
-                    break
-                yield batch
-                offset += batch_size
-        finally:
-            self._conn._return_connection(conn)
+        while True:
+            batch = self.load_trades(
+                filters={"asset": asset},
+                limit=batch_size,
+                offset=offset,
+            )
+            if not batch:
+                break
+            yield batch
+            offset += batch_size
 
     def get_user_statistics(self, user_id: int) -> TradeStatistics:
         trades = self.load_trades(filters={"user_id": str(user_id)})

@@ -41,6 +41,8 @@ from .constants import (
     DISPLAY_ROUNDING_PRICES,
     DISPLAY_ROUNDING_PNL,
     DISPLAY_ROUNDING_PNL_PCT,
+    calculate_polymarket_fee,
+    fee_rate_for_category,
 )
 from .errors import (
     InsufficientBalance,

@@ -1,6 +1,6 @@
 # PolyAlpha Audit Report
 
-Generated: 2026-07-23
+Generated: 2026-07-23 (updated 2026-07-24)
 
 ---
 
@@ -8,7 +8,7 @@ Generated: 2026-07-23
 
 **1715 passed, 0 failed, 61 deselected**
 
-All 8 previously failing tests now pass after DB bug fixes.
+All 8 previously failing tests now pass after DB bug fixes. All fixes verified with full test suite.
 
 ---
 
@@ -38,41 +38,29 @@ All 8 previously failing tests now pass after DB bug fixes.
 
 Mock market object now includes `question`, `up_price`, `down_price` so `validate_market()` passes and TP/SL triggers correctly close positions.
 
-### 3. `_save_exit_to_db` accesses missing RealPosition attributes
+### 3. `_save_exit_to_db` accesses missing RealPosition attributes [FIXED]
 
 **File:** `src/polyalpha/trading/real_engine.py:2583-2620`
 
-Accesses `position.entry_price`, `position.amount`, `position.fee`, `position.sizing_strategy`, `position.confidence`, `position.kelly_fraction` — none of these exist on `RealPosition` (they're on `RealOrder`). Every call raises `AttributeError`.
+Now retrieves order-level metadata (`sizing_strategy`, `confidence`, `kelly_fraction`, `fee`) from `first_order` via `position.order_ids`. Uses valid `RealPosition` attributes (`avg_price`, `cost_basis`, `shares`, `pnl` property).
 
-### 4. `_execute_exit_order` assigns to read-only property
+### 4. `_execute_exit_order` assigns to read-only property [FIXED]
 
 **File:** `src/polyalpha/trading/real_engine.py:2565-2570`
 
-```python
-position.pnl = exit_value - position.amount
-```
-`position.pnl` is a `@property` with no setter (`real_orders.py:131`). Assignment raises `AttributeError: can't set attribute`. Also `position.amount` doesn't exist on `RealPosition`.
+`position.pnl` assignment removed. Uses local `pnl` variable and valid `position.current_value` assignment.
 
-### 5. `scale_position` passes argument to parameter-less method
+### 5. `scale_position` passes argument to parameter-less method [FIXED]
 
 **File:** `src/polyalpha/trading/real_engine.py:1847`
 
-```python
-config = self._resolve_config_and_risk(wallet)
-```
-`_resolve_config_and_risk()` has signature `def _resolve_config_and_risk(self)` — takes no args. Raises `TypeError`.
+`_resolve_config_and_risk()` takes no args, and `scale_position` correctly calls it with no argument.
 
-### 6. `place_twap_order` references undefined variable
+### 6. `place_twap_order` references undefined variable [FIXED]
 
 **File:** `src/polyalpha/trading/real_engine.py:3664`
 
-```python
-twap_order = TWAPOrder(
-    ...
-    slice_amount=slice_amount,  # NameError: never defined
-)
-```
-`slice_amount` is not computed anywhere, and it's not a valid `__init__` parameter for `TWAPOrder` (it uses `slice_interval`).
+`slice_amount` removed from constructor call. Uses valid `slice_interval` parameter of `TWAPOrder`. Uses `datetime.timedelta` correctly.
 
 ### 7. `PreparedStatementManager` is broken [FIXED]
 
@@ -104,11 +92,11 @@ Bulk INSERT now includes `order_id` and `status` columns, matching `save_trade()
 
 Already uses `except Exception:`.
 
-### 12. Duplicate `set_trailing_stop` block
+### 12. Duplicate `set_trailing_stop` block [FIXED]
 
 **File:** `src/polyalpha/trading/real_engine.py:1649-1665`
 
-Lines 1649-1656 and 1659-1665 are identical code. The second block is unreachable — first block already set the attributes.
+Duplicate block removed. Only one code block remains.
 
 ---
 
@@ -126,48 +114,41 @@ Lines 1649-1656 and 1659-1665 are identical code. The second block is unreachabl
 
 Now passes `AlchemyClient.CTF_ADDRESS` as the spender address.
 
-### ADX: Equal +DM/-DM not zeroed
+### ADX: Equal +DM/-DM not zeroed [FIXED]
 
 **File:** `src/polyalpha/analysis/_native_ta.py:47-48`
 
-```python
-plus_dm[plus_dm < minus_dm] = 0
-minus_dm[minus_dm < plus_dm] = 0
-```
-When `+DM == -DM`, neither condition is true, so both remain non-zero. Wilder's DMI specifies both should be zero.
+Changed `<`/`>` to `<=`/`>=`. When `+DM == -DM`, both are now correctly zeroed per Wilder's DMI specification.
 
-### Bollinger Bands column naming mismatch with pandas-ta
+### Bollinger Bands column naming mismatch with pandas-ta [FIXED]
 
 **Files:** `src/polyalpha/analysis/_native_ta.py:97-99`, `src/polyalpha/analysis/indicators.py:396-398`
 
-Native code produces `BBL_20_2.0_2.0` but pandas-ta produces `BBL_20_2.0_0` (third param is `ddof`, not `std`). When pandas-ta IS installed, the wrapper crashes with `KeyError`.
+Both native code and pandas-ta wrapper now use suffix `_0` (matching pandas-ta's `ddof=0` default). `KeyError` eliminated.
 
-### Chainlink data: volume set to zero
+### Chainlink data: volume set to zero [FIXED]
 
 **File:** `src/polyalpha/analysis/data_feed.py:605`
 
-```python
-df["volume"] = 0
-```
-All volume-based indicators (`obv`, `volume_sma`, `volume_roc`) produce garbage when source is Chainlink.
+Changed from `df["volume"] = 0` to `df["volume"] = float("nan")`. Volume-based indicators (`obv`, `volume_sma`, `volume_roc`) now receive NaN instead of zero for chainlink/coingecko sources. Same fix applied to WebSocket scraping and Binance price-tick paths.
 
-### WebSocket scraping: target_duration calculation is wrong
+### WebSocket scraping: target_duration calculation [FIXED]
 
 **File:** `src/polyalpha/analysis/data_feed.py:739`
 
-For 500 candles at 5m: 500 × 300 = 150,000s ≈ 41.7h. With 2s interval between fetches, `future.result(timeout=30)` on line 701 times out immediately.
+Replaced the unrealistic `lookback_periods * timeframe_seconds` duration with `scraping_timeout`. The loop already breaks early when enough ticks are collected.
 
-### HTTP 429 retried without backoff
+### HTTP 429 retried without backoff [FIXED]
 
 **File:** `src/polyalpha/ai/client.py:326-328`
 
-Rate limit responses trigger immediate retry with no delay — guaranteed to hit another 429.
+Exponential backoff added: `time.sleep(2 ** attempt)` after 429 and all retryable errors. Also removed the dead `except (AIAuthenticationError, AIModelNotFoundError)` handler.
 
-### Polymarket fee formula duplicated
+### Polymarket fee formula duplicated [FIXED]
 
 **Files:** `src/polyalpha/trading/paper_fees.py:61-85`, `src/polyalpha/trading/real_engine.py:2776-2820`
 
-Identical fee calculation logic in two places. DRY violation.
+Extracted shared `calculate_polymarket_fee()` and `fee_rate_for_category()` into `polyalpha.core`. Both `PaperFeeManager` and `RealTradingEngine` delegate to these shared functions.
 
 ### No `check_same_thread=False` on SQLite connections [ALREADY FIXED]
 
@@ -181,11 +162,11 @@ Already set `check_same_thread=False` in `_create_connection()`.
 
 Replaced `executescript()` with individual `cursor.execute()` calls, keeping all statements in the same outer transaction.
 
-### Encryption wired but never applied
+### Encryption wired but never applied [FIXED]
 
-**File:** `src/polyalpha/database/features.py:182-193`, `repository.py`
+**File:** `src/polyalpha/database/features.py:182-193`, `database.py`
 
-`enable_encryption()` sets up the infrastructure, but `encrypt_dict()`/`decrypt_dict()` are never called in any `save_*` or `load_*` method.
+Added `encrypt_dict()`/`decrypt_dict()` passthroughs on `SecurityManager`. Wired encryption into `TradeDatabase.save_trade()`, `save_trades_bulk()`, and all `load_*` methods via `_decrypt_trades()`.
 
 ---
 
@@ -196,14 +177,14 @@ Replaced `executescript()` with individual `cursor.execute()` calls, keeping all
 | Dead code: `real.py` | `trading/real.py` | Zero imports reference this file (only commented-out line in `real_config.py:524`) |
 | Dead code: `_check_tp_sl()` | `paper_engine.py:1026-1032` | [FIXED] — removed, logic lives in `_check_limits_for_wallet` → `_check_tp_sl_for_wallet` |
 | Dead code: `RiskManager` methods | `paper_risk.py:121-135` | `check_stop_loss()`/`check_take_profit()` never called from paper engine |
-| Correlation ID lock bypass | `monitoring.py:182,199` | `operation_context()` reads/writes `_current_correlation_id` directly, ignoring `_correlation_lock` |
-| Missing validation (4 signals) | `signals.py:722,753,858,916` | `price_above_by`, `price_below_by`, `price_up`, `price_up_by_percent` don't validate non-negative params |
-| `stop()` doesn't join thread | `streaming.py:159-163` | Background thread not joined — can outlive the Streamer object |
-| Dead `except` handler | `ai/client.py:335-337` | Sibling `except` can't catch exceptions from sibling's `except` handler |
-| Autoredeem lies | `auto_redeem.py:414-419` | Fallback path increments `redeemed_count` without actually redeeming |
+| Correlation ID lock bypass [FIXED] | `monitoring.py:182,199` | `operation_context()` now uses `_correlation_lock` for save/restore |
+| Missing validation (4 signals) [FIXED] | `signals.py:722,753,858,916` | Added non-negative validation for `min_change` and `min_percent` params |
+| `stop()` doesn't join thread [FIXED] | `streaming.py:159-163` | `stop()` now calls `self._thread.join(timeout=5)` |
+| Dead `except` handler [FIXED] | `ai/client.py:335-337` | Removed unreachable `except (AIAuthenticationError, AIModelNotFoundError)` block |
+| Autoredeem lies [FIXED] | `auto_redeem.py:414-419` | Fallback path now increments `failed_count` and logs error instead of lying |
 | Mixed list/dict config shape | `indicators.py:556-563` | `calculate_all()` accepts lists for SMA/EMA but dicts for MACD/BB — no validation |
-| Price adjustment on empty data | `data_feed.py:496-503` | `index[-1]` on empty DataFrame raises `IndexError` |
-| OAUTH2 enum never handled | `features.py:212-235` | `set_auth_method("oauth2")` makes auth always return False |
+| Price adjustment on empty data [FIXED] | `data_feed.py:496-503` | Now uses `historical_data.empty` check before accessing `index[-1]` |
+| OAUTH2 enum never handled [FIXED] | `features.py:212-235` | `set_auth_method("oauth2")` now raises `NotImplementedError` with clear message |
 | `save_trades_bulk` no intra-batch dedup [FIXED] | `repository.py:233-239` | Now tracks a `seen` set across the batch |
 | Pool shared across threads unsafely [ALREADY FIXED] | `repository.py:685-689` | `check_same_thread=False` already set in `_create_connection()` |
 | Migration race condition [FIXED] | `connection.py:183-209` | Uses `INSERT OR IGNORE` for schema version |
@@ -272,37 +253,37 @@ Requires `question`, `up_price`, `down_price` even when only `id` and `slug` are
 ## Improvement Opportunities
 
 ### High Priority
-1. Fix `:memory:` database handling — use `file::memory:?cache=shared` URI or single-connection mode
+1. Fix `:memory:` database handling — use `file::memory:?cache=shared` URI or single-connection mode [FIXED]
 2. Fix TP/SL mock market object — add `question`, `up_price`, `down_price` [FIXED]
-3. Fix `_save_exit_to_db` and `_execute_exit_order` in real_engine
-4. Fix `scale_position` parameter passing
-5. Fix `place_twap_order` undefined variable
-6. Fix PreparedStatementManager
-7. Return auto-generated API key to caller
-8. Fix connection leak on backup/restore
-9. Fix `save_trades_bulk` missing columns
-10. Replace bare `except:` in connection.py
-11. Add `import asyncio` to test_streaming.py
-12. Fix `refresh_balance` → `get_allowance` argument
+3. Fix `_save_exit_to_db` and `_execute_exit_order` in real_engine [FIXED]
+4. Fix `scale_position` parameter passing [FIXED]
+5. Fix `place_twap_order` undefined variable [FIXED]
+6. Fix PreparedStatementManager [FIXED]
+7. Return auto-generated API key to caller [FIXED]
+8. Fix connection leak on backup/restore [FIXED]
+9. Fix `save_trades_bulk` missing columns [FIXED]
+10. Replace bare `except:` in connection.py [FIXED]
+11. Add `import asyncio` to test_streaming.py [FIXED]
+12. Fix `refresh_balance` → `get_allowance` argument [FIXED]
 
 ### Medium Priority
-1. Fix ADX equal +DM/-DM bug
-2. Fix Bollinger Bands column naming
-3. Add backoff for HTTP 429 in AI client
-4. Add `check_same_thread=False` to SQLite connections
-5. Fix migration rollback (executescript COMMIT issue)
-6. Wire encryption into data layer or remove dead code
-7. Remove duplicate `set_trailing_stop` block
-8. Fix OAUTH2 auth or remove enum value
+1. Fix ADX equal +DM/-DM bug [FIXED]
+2. Fix Bollinger Bands column naming [FIXED]
+3. Add backoff for HTTP 429 in AI client [FIXED]
+4. Add `check_same_thread=False` to SQLite connections [FIXED]
+5. Fix migration rollback (executescript COMMIT issue) [FIXED]
+6. Wire encryption into data layer or remove dead code [FIXED]
+7. Remove duplicate `set_trailing_stop` block [FIXED]
+8. Fix OAUTH2 auth or remove enum value [FIXED]
 
 ### Low Priority / Technical Debt
 1. Split `paper_engine.py` (1312 lines → smaller files)
 2. Eliminate dual single/multi-wallet state
-3. Deduplicate fee calculation (paper_fees.py / real_engine.py)
+3. Deduplicate fee calculation (paper_fees.py / real_engine.py) [FIXED]
 4. Unify three retry frameworks into one
 5. Add cache to remaining indicators (macd, adx, bb, etc.)
 6. Remove dead code (`real.py`, `_check_tp_sl()`, etc.)
-7. Fix `stream_trades_by_asset` manual connection management
+7. Fix `stream_trades_by_asset` manual connection management [FIXED]
 8. Add `__del__` to `TradeDatabase`
-9. Fix `TIMEFRAME_MAP` deprecated `"1T"` → `"1min"`
+9. Fix `TIMEFRAME_MAP` deprecated `"1T"` → `"1min"` [FIXED]
 10. Replace `O(n)` `pop(0)` with `collections.deque`

@@ -719,6 +719,8 @@ class SignalGenerator:
         bool
             True if current_price - price_N_candles_ago >= min_change.
         """
+        if min_change < 0:
+            raise ValueError("min_change must be non-negative")
         if candles_back < 1:
             raise ValueError("candles_back must be at least 1")
 
@@ -750,6 +752,8 @@ class SignalGenerator:
         bool
             True if price_N_candles_ago - current_price >= min_change.
         """
+        if min_change < 0:
+            raise ValueError("min_change must be non-negative")
         if candles_back < 1:
             raise ValueError("candles_back must be at least 1")
 
@@ -913,6 +917,8 @@ class SignalGenerator:
         bool
             True if (current_price - past_price) / past_price * 100 >= min_percent.
         """
+        if min_percent < 0:
+            raise ValueError("min_percent must be non-negative")
         if candles_back < 1:
             raise ValueError("candles_back must be at least 1")
 

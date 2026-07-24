@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -89,6 +90,7 @@ class ChainlinkStreamer:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._thread: Optional[threading.Thread] = None
 
     def on(self, event: str) -> Callable:
         """
@@ -145,13 +147,12 @@ class ChainlinkStreamer:
         self._running = True
 
         if background:
-            import threading
-            thread = threading.Thread(
+            self._thread = threading.Thread(
                 target=self._run_in_thread,
                 args=(symbol,),
                 daemon=True
             )
-            thread.start()
+            self._thread.start()
             log.info(f"Started background stream for {symbol}")
         else:
             self._run_sync(symbol)
@@ -161,6 +162,8 @@ class ChainlinkStreamer:
         self._running = False
         if self._task and not self._task.done():
             self._task.cancel()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
         log.info("Streamer stopped")
 
     def _run_in_thread(self, symbol: str) -> None:

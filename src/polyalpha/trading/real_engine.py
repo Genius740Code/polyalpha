@@ -30,12 +30,9 @@ from ..core import (
     TransactionRebroadcastError,
     PRICE_STALENESS_THRESHOLD,
     FALLBACK_PRICE,
-    FEE_RATE_SPORTS,
-    FEE_RATE_CRYPTO,
-    FEE_RATE_ECONOMICS,
-    MINIMUM_FEE,
     FEE_ROUNDING,
-    POLYMARKET_FEE_ROUNDING,
+    calculate_polymarket_fee,
+    fee_rate_for_category,
 )
 from .clob_client import ClobClient
 from .alchemy_client import AlchemyClient
@@ -2779,61 +2776,10 @@ class RealTradingEngine:
         return 0.0
 
     def _polymarket_fee(self, amount: float, price: float, shares: float, is_maker: bool = False) -> float:
-        """
-        Calculate Polymarket-style fee using their actual formula.
-
-        Formula: fee = C × p × feeRate × (p × (1 - p))^exponent
-
-        Where:
-        - C: Number of shares traded
-        - p: Price of the trade
-        - feeRate: Category-specific (e.g., sports=0.03, crypto=0.02)
-        - exponent: 1
-
-        Geopolitical markets have 0% fee.
-        The price-dependent term p*(1-p) means fees are highest at p=0.5
-        and approach zero near p=0 or p=1.
-
-        Parameters
-        ----------
-        amount : float
-            Total USDC being spent (unused in formula but kept for interface consistency)
-        price : float
-            Price per share
-        shares : float
-            Number of shares
-        is_maker : bool
-            Whether this is a maker order (currently unused — same formula for both)
-
-        Returns
-        -------
-        float
-            The fee amount in USDC
-        """
         if self._config.market_category.lower() == "geopolitical":
             return 0.0
-
-        fee_rate = self._fee_rate_for_category(self._config.market_category)
-
-        exponent = 1
-        fee = shares * price * fee_rate * (price * (1 - price)) ** exponent
-        fee = round(fee, POLYMARKET_FEE_ROUNDING)
-
-        if fee < MINIMUM_FEE:
-            fee = 0.0
-
-        return fee
-
-    def _fee_rate_for_category(self, category: str) -> float:
-        """Get the Polymarket fee rate for a given market category."""
-        c = category.lower()
-        if c == "sports":
-            return FEE_RATE_SPORTS
-        elif c in ("crypto", "finance", "politics", "tech"):
-            return FEE_RATE_CRYPTO
-        elif c in ("economics", "culture", "weather", "other"):
-            return FEE_RATE_ECONOMICS
-        return FEE_RATE_CRYPTO  # Default
+        fee_rate = fee_rate_for_category(self._config.market_category)
+        return calculate_polymarket_fee(shares, price, fee_rate)
 
     def _require_confirmation(
         self,

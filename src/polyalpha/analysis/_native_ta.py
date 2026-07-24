@@ -44,8 +44,8 @@ def macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> 
 def adx(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> pd.DataFrame:
     plus_dm = high.diff().clip(lower=0)
     minus_dm = -low.diff().clip(upper=0)
-    plus_dm[plus_dm < minus_dm] = 0
-    minus_dm[minus_dm < plus_dm] = 0
+    plus_dm[plus_dm <= minus_dm] = 0
+    minus_dm[minus_dm <= plus_dm] = 0
     tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
     atr_series = tr.rolling(window=length).mean()
     plus_di = 100 * plus_dm.rolling(window=length).mean() / atr_series.replace(0, np.nan)
@@ -94,9 +94,9 @@ def bbands(series: pd.Series, length: int = 20, std: float = 2.0) -> pd.DataFram
     upper = middle + std * std_dev
     lower = middle - std * std_dev
     result = pd.DataFrame({
-        f"BBL_{length}_{std}_{std}": lower,
-        f"BBM_{length}_{std}_{std}": middle,
-        f"BBU_{length}_{std}_{std}": upper,
+        f"BBL_{length}_{std}_0": lower,
+        f"BBM_{length}_{std}_0": middle,
+        f"BBU_{length}_{std}_0": upper,
     })
     return result
 

@@ -12,12 +12,9 @@ if TYPE_CHECKING:
 
 from ..core import (
     TAKER_FEE_RATE,
-    FEE_RATE_SPORTS,
-    FEE_RATE_CRYPTO,
-    FEE_RATE_ECONOMICS,
-    MINIMUM_FEE,
-    POLYMARKET_FEE_ROUNDING,
     FEE_ROUNDING,
+    calculate_polymarket_fee,
+    fee_rate_for_category,
 )
 
 log = logging.getLogger(__name__)
@@ -64,21 +61,8 @@ class PaperFeeManager:
         if self.config.market_category.lower() == "geopolitical":
             return 0.0, 0.0, 0.0, "taker"
 
-        category = self.config.market_category.lower()
-        if category == "sports":
-            fee_rate = FEE_RATE_SPORTS
-        elif category in ("crypto", "finance", "politics", "tech"):
-            fee_rate = FEE_RATE_CRYPTO
-        elif category in ("economics", "culture", "weather", "other"):
-            fee_rate = FEE_RATE_ECONOMICS
-        else:
-            fee_rate = FEE_RATE_CRYPTO
-
-        exponent = 1
-        fee = shares * price * fee_rate * (price * (1 - price)) ** exponent
-        fee = round(fee, POLYMARKET_FEE_ROUNDING)
-        if fee < MINIMUM_FEE:
-            fee = 0.0
+        fee_rate = fee_rate_for_category(self.config.market_category)
+        fee = calculate_polymarket_fee(shares, price, fee_rate)
 
         fee_type = "maker" if is_maker else "taker"
         rebate_amount, rebate_rate = self._calculate_rebate(fee, fee_type)

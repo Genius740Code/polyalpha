@@ -190,6 +190,16 @@ class SecurityManager:
     def is_encryption_enabled(self) -> bool:
         return self._encryption is not None and self._encryption.is_enabled()
 
+    def encrypt_dict(self, data: dict, fields: Optional[List[str]] = None) -> dict:
+        if not self.is_encryption_enabled():
+            return data
+        return self._encryption.encrypt_dict(data, fields or self._encryption_fields)
+
+    def decrypt_dict(self, data: dict, fields: Optional[List[str]] = None) -> dict:
+        if not self.is_encryption_enabled():
+            return data
+        return self._encryption.decrypt_dict(data, fields or self._encryption_fields)
+
     def set_auth_method(self, method: str) -> None:
         auth_method = AuthMethod(method.lower())
         self._auth_manager.set_method(auth_method)
@@ -229,6 +239,8 @@ class SecurityManager:
                     self._current_roles = user.roles
                 return True
             return False
+        elif method == AuthMethod.OAUTH2:
+            raise NotImplementedError("OAUTH2 authentication is not yet implemented")
         elif method == AuthMethod.NONE:
             return True
         return False

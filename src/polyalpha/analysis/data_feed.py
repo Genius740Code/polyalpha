@@ -43,11 +43,11 @@ log = logging.getLogger(__name__)
 # ── Constants ───────────────────────────────────────────────────────────────────
 
 TIMEFRAME_MAP = {
-    "1m": "1T",
-    "5m": "5T",
-    "15m": "15T",
-    "1h": "1H",
-    "4h": "4H",
+    "1m": "1min",
+    "5m": "5min",
+    "15m": "15min",
+    "1h": "1h",
+    "4h": "4h",
     "1d": "1D",
 }
 
@@ -488,7 +488,7 @@ class DataFeed:
             # Fetch historical OHLCV data from CoinGecko
             historical_data = self._fetch_coingecko_historical(asset)
 
-            if historical_data is None or len(historical_data) == 0:
+            if historical_data is None or historical_data.empty:
                 self._log.warning("Failed to fetch historical data from CoinGecko. Falling back to Binance.")
                 return self._fetch_binance(asset)
 
@@ -602,7 +602,7 @@ class DataFeed:
         # CoinGecko returns [timestamp, open, high, low, close]
         df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df["volume"] = 0  # CoinGecko OHLC doesn't include volume
+        df["volume"] = float("nan")  # CoinGecko OHLC doesn't include volume
 
         # Resample to target timeframe if needed
         if self.config.timeframe in ["1m", "5m", "15m", "1h", "4h"]:
@@ -734,9 +734,8 @@ class DataFeed:
                 }]
             }))
 
-            # Collect price ticks
             start_time = time.time()
-            target_duration = self.config.lookback_periods * self._get_timeframe_seconds()
+            target_duration = self.config.scraping_timeout
 
             while time.time() - start_time < target_duration:
                 try:
@@ -783,7 +782,7 @@ class DataFeed:
         }).dropna()
 
         resampled.columns = ["open", "high", "low", "close"]
-        resampled["volume"] = 0  # No volume data from WebSocket
+        resampled["volume"] = float("nan")  # No volume data from WebSocket
         resampled.reset_index(inplace=True)
 
         return self._normalize_ohlcv(resampled)
@@ -829,7 +828,7 @@ class DataFeed:
         }).dropna()
 
         resampled.columns = ["open", "high", "low", "close"]
-        resampled["volume"] = 0  # No volume data from price ticks
+        resampled["volume"] = float("nan")  # No volume data from price ticks
         resampled.reset_index(inplace=True)
 
         return resampled

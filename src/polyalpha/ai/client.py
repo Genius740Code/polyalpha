@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any, Literal
 
 import httpx
@@ -324,8 +325,11 @@ class OpenRouterClient:
                 if e.response.status_code == 401:
                     raise AIAuthenticationError("Invalid API key")
                 elif e.response.status_code == 429:
+                    backoff = 2 ** attempt
+                    self._log.warning(f"Rate limit on attempt {attempt + 1}/{self.max_retries}, backing off {backoff}s")
+                    time.sleep(backoff)
                     last_error = AIQuotaExceededError("Rate limit exceeded")
-                    self._log.warning(f"Rate limit on attempt {attempt + 1}/{self.max_retries}")
+                    continue
                 elif e.response.status_code == 404:
                     raise AIModelNotFoundError("Model not found")
                 else:
@@ -333,12 +337,13 @@ class OpenRouterClient:
                     self._log.warning(f"HTTP error on attempt {attempt + 1}/{self.max_retries}")
                 
             except (AIAuthenticationError, AIModelNotFoundError):
-                # Don't retry auth or model errors
                 raise
-                
             except Exception as e:
                 last_error = AIResponseError(f"Unexpected error: {e}")
                 self._log.warning(f"Unexpected error on attempt {attempt + 1}/{self.max_retries}")
+            
+            if attempt < self.max_retries - 1:
+                time.sleep(2 ** attempt)
         
         # All retries exhausted
         raise last_error or AIResponseError("Max retries exceeded")

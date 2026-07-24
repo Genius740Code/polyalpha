@@ -179,7 +179,8 @@ class DatabaseMonitor:
 
     @contextmanager
     def operation_context(self, operation_name: str):
-        old_correlation_id = self._current_correlation_id
+        with self._correlation_lock:
+            old_correlation_id = self._current_correlation_id
         self.set_correlation_id(str(uuid.uuid4()))
         self._add_log_entry(level="INFO", message=f"Operation started: {operation_name}",
                             operation=operation_name)
@@ -196,7 +197,8 @@ class DatabaseMonitor:
                                 metadata={"error": str(e), "error_type": type(e).__name__})
             raise
         finally:
-            self._current_correlation_id = old_correlation_id
+            with self._correlation_lock:
+                self._current_correlation_id = old_correlation_id
 
 
 class EventSystem:

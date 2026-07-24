@@ -393,9 +393,9 @@ class IndicatorCalculator:
             raise RuntimeError(f"Bollinger Bands calculation failed: {exc}") from exc
 
         return {
-            "lower": bb_result[f"BBL_{period}_{std_dev}_{std_dev}"].rename("BB_Lower"),
-            "middle": bb_result[f"BBM_{period}_{std_dev}_{std_dev}"].rename("BB_Middle"),
-            "upper": bb_result[f"BBU_{period}_{std_dev}_{std_dev}"].rename("BB_Upper"),
+            "lower": bb_result[f"BBL_{period}_{std_dev}_0"].rename("BB_Lower"),
+            "middle": bb_result[f"BBM_{period}_{std_dev}_0"].rename("BB_Middle"),
+            "upper": bb_result[f"BBU_{period}_{std_dev}_0"].rename("BB_Upper"),
         }
 
     def atr(self, period: int = 14) -> pd.Series:

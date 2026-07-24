@@ -415,8 +415,8 @@ class AutoRedeemEngine:
                     else:
                         # Fallback: try to call resolve if redeem_position doesn't exist
                         log.warning("Trading engine has no redeem_position method, using resolve")
-                        # This is a placeholder - actual implementation depends on trading engine
-                        redeemed_count += 1
+                        errors.append(f"{pos.slug}: no redeem_position method on trading engine")
+                        failed_count += 1
                         
             except Exception as e:
                 failed_count += 1

@@ -154,6 +154,19 @@ class TradeDatabase:
 
     def save_trade(self, *args, **kwargs):
         kwargs.setdefault("user_id", self._security.current_user_id)
+        if self._security.is_encryption_enabled() and args:
+            args = list(args)
+            trade_dict = dict(zip([
+                "market_slug", "market_id", "side", "entry_price", "exit_price",
+                "amount", "shares", "fee", "outcome", "pnl", "timestamp"
+            ], args[:11]))
+            encrypted = self._security.encrypt_dict(trade_dict)
+            for i, k in enumerate(trade_dict):
+                if i < len(args):
+                    args[i] = encrypted.get(k, args[i])
+            args = tuple(args)
+        elif self._security.is_encryption_enabled() and kwargs:
+            kwargs = self._security.encrypt_dict(kwargs)
         result = self._repo.save_trade(*args, **kwargs)
         if self._events.streaming_enabled:
             trades = self._repo.load_trades(filters={"id": str(result)})
@@ -162,6 +175,8 @@ class TradeDatabase:
         return result
 
     def save_trades_bulk(self, trades, **kwargs):
+        if self._security.is_encryption_enabled():
+            trades = [self._security.encrypt_dict(t) for t in trades]
         return self._repo.save_trades_bulk(trades, **kwargs)
 
     def update_trade_status(self, *args, **kwargs):
@@ -182,30 +197,40 @@ class TradeDatabase:
 
     # --- Public API: Trade Queries ---
 
+    def _decrypt_trades(self, trades: List[TradeRecord]) -> List[TradeRecord]:
+        if not self._security.is_encryption_enabled():
+            return trades
+        for t in trades:
+            d = self._security.decrypt_dict(t.to_dict())
+            for k, v in d.items():
+                if hasattr(t, k):
+                    setattr(t, k, v)
+        return trades
+
     def load_all_trades(self) -> List[TradeRecord]:
-        return self._repo.load_all_trades()
+        return self._decrypt_trades(self._repo.load_all_trades())
 
     def load_trades_by_market(self, market_slug: str) -> List[TradeRecord]:
-        return self._repo.load_trades_by_market(market_slug)
+        return self._decrypt_trades(self._repo.load_trades_by_market(market_slug))
 
     def load_trades_by_asset(self, asset: str) -> List[TradeRecord]:
-        return self._repo.load_trades_by_asset(asset)
+        return self._decrypt_trades(self._repo.load_trades_by_asset(asset))
 
     def load_trades_by_side(self, side: str) -> List[TradeRecord]:
-        return self._repo.load_trades_by_side(side)
+        return self._decrypt_trades(self._repo.load_trades_by_side(side))
 
     def load_trades_by_outcome(self, outcome: str) -> List[TradeRecord]:
-        return self._repo.load_trades_by_outcome(outcome)
+        return self._decrypt_trades(self._repo.load_trades_by_outcome(outcome))
 
     def load_trades_by_market_session(self, market_session: str) -> List[TradeRecord]:
-        return self._repo.load_trades_by_market_session(market_session)
+        return self._decrypt_trades(self._repo.load_trades_by_market_session(market_session))
 
     def load_trades_by_date_range(self, start_date: datetime, end_date: datetime) -> List[TradeRecord]:
-        return self._repo.load_trades_by_date_range(start_date, end_date)
+        return self._decrypt_trades(self._repo.load_trades_by_date_range(start_date, end_date))
 
     def load_trades(self, *args, **kwargs) -> List[TradeRecord]:
         self.require_permission("read")
-        return self._repo.load_trades(*args, **kwargs)
+        return self._decrypt_trades(self._repo.load_trades(*args, **kwargs))
 
     def aggregate_trades(self, *args, **kwargs) -> Dict[str, Dict[str, Any]]:
         return self._repo.aggregate_trades(*args, **kwargs)

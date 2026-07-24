@@ -168,6 +168,26 @@ DEFAULT_SEARCH_LIMIT = 10  # Default limit for search results
 PRICE_ROUNDING = 6  # Decimal places for price rounding
 FEE_ROUNDING = 6  # Decimal places for fee rounding
 POLYMARKET_FEE_ROUNDING = 4  # Decimal places for Polymarket fee rounding
+
+
+def calculate_polymarket_fee(shares: float, price: float, fee_rate: float) -> float:
+    """Shared Polymarket fee formula: fee = shares * price * fee_rate * (price * (1 - price))^1."""
+    exponent = 1
+    fee = shares * price * fee_rate * (price * (1 - price)) ** exponent
+    fee = round(fee, POLYMARKET_FEE_ROUNDING)
+    return 0.0 if fee < MINIMUM_FEE else fee
+
+
+def fee_rate_for_category(category: str) -> float:
+    """Get the Polymarket fee rate for a given market category."""
+    c = category.lower()
+    if c == "sports":
+        return FEE_RATE_SPORTS
+    elif c in ("crypto", "finance", "politics", "tech"):
+        return FEE_RATE_CRYPTO
+    elif c in ("economics", "culture", "weather", "other"):
+        return FEE_RATE_ECONOMICS
+    return FEE_RATE_CRYPTO
 SHARE_ROUNDING = 6  # Decimal places for share rounding
 DISPLAY_ROUNDING_SHARES = 4  # Decimal places for displaying shares
 DISPLAY_ROUNDING_PRICES = 4  # Decimal places for displaying prices
