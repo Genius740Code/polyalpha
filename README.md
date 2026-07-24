@@ -213,6 +213,36 @@ bot.run()
 
 See [`examples/bot_simple.py`](./examples/bot_simple.py).
 
+### BotHub — Multi-Strategy Hub
+
+Run **multiple strategies from a single data connection**. One market discovery, one WebSocket stream — N isolated paper engines. Eliminates redundant rate-limited connections.
+
+```python
+hub = polyalpha.BotHub("BTC", "5m", default_balance=500)
+
+@hub.strategy("momentum")
+def momentum(ctx):
+    if ctx.price.up > 0.9 and ctx.rsi > 50:
+        ctx.buy("UP", 20)
+
+@hub.strategy("value", balance=1000)
+def value(ctx):
+    if ctx.price.down < 0.10:
+        ctx.buy("DOWN", 10)
+
+hub.run()
+```
+
+Each strategy gets its own balance, positions, and P&L. Error isolation — one crash doesn't stop the others.
+
+| Scenario | Use |
+|----------|-----|
+| One strategy | `Bot` |
+| 20+ strategies, same asset/timeframe | `BotHub` |
+| Different assets per strategy | `Bot.run_async()` |
+
+See [`examples/bot_hub.py`](./examples/bot_hub.py) and [`docs/bot.md`](./docs/bot.md#bothub--multi-strategy-hub).
+
 ---
 
 ## Real trading
@@ -496,6 +526,7 @@ client = polyalpha.Client(
 | [`examples/paper.py`](./examples/paper.py) | Paper trading — buy, sell, limit, summary |
 | [`examples/advanced_orders.py`](./examples/advanced_orders.py) | Trailing stop, OCO, take-profit |
 | [`examples/bot_simple.py`](./examples/bot_simple.py) | Bot with on_tick strategy |
+| [`examples/bot_hub.py`](./examples/bot_hub.py) | BotHub — multi-strategy from one connection |
 | [`examples/sniper.py`](./examples/sniper.py) | Sniper time-window bot |
 | [`examples/sniper_ta.py`](./examples/sniper_ta.py) | Sniper + technical analysis |
 | [`examples/analysis.py`](./examples/analysis.py) | TA data feed, indicators, signals |
@@ -528,6 +559,7 @@ src/polyalpha/
 ├── markets.py           MarketClient — discovery
 ├── stream.py            Stream — WebSocket price feed
 ├── bot.py               Bot — lifecycle runner
+├── bot_hub.py           BotHub — multi-strategy hub
 ├── conditions.py        Composable strategy conditions
 │
 ├── core/                Constants, errors, market models, env

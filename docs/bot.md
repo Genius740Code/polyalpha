@@ -338,3 +338,143 @@ bot = polyalpha.Bot("SOL", "15m", balance=1000)
 # Via explicit kwargs
 bot = polyalpha.Bot("SOL", "15m", balance=1000, api_key="...")
 ```
+
+---
+
+## BotHub — Multi-Strategy Hub
+
+`BotHub` runs **multiple strategies from a single data connection**. One market discovery, one WebSocket stream — N isolated paper engines. Eliminates redundant rate-limited connections when running many strategies on the same asset/timeframe.
+
+```python
+import polyalpha
+
+hub = polyalpha.BotHub("BTC", "5m", default_balance=500)
+
+@hub.strategy("momentum")
+def momentum(ctx):
+    if ctx.price.up > 0.9 and ctx.rsi > 50:
+        ctx.buy("UP", 20)
+
+@hub.strategy("value", balance=1000)
+def value(ctx):
+    if ctx.price.down < 0.10:
+        ctx.buy("DOWN", 10)
+
+hub.run()
+```
+
+### When to use BotHub vs Bot
+
+| Scenario | Use |
+|----------|-----|
+| One strategy, one connection | `Bot` |
+| 20+ strategies on the same asset/timeframe | `BotHub` |
+| Different assets or timeframes per strategy | Multiple `Bot` instances with `run_async()` |
+
+With 20 separate `Bot` instances on the same asset/timeframe, each opens its own WebSocket — hitting rate limits 20x harder. `BotHub` fans one stream to all strategies, with error isolation (one crash doesn't stop the others).
+
+### Constructor
+
+```python
+hub = polyalpha.BotHub(
+    asset="BTC",              # BTC, ETH, SOL, XRP, DOGE, HYPE, BNB
+    timeframe="5m",           # 5m, 15m, 1h, 4h, 24h
+    default_balance=100.0,    # default starting balance per strategy
+    mode="simple",            # "simple", "realistic", or "custom"
+    paper_config=None,        # PaperConfig for mode="custom"
+    **kwargs,                 # forwarded to polyalpha.Client
+)
+```
+
+### Registration
+
+#### `@hub.strategy(name, balance=None)`
+
+Decorator that registers a strategy function. Each strategy gets its own `PaperEngine` (isolated balance, positions, P&L).
+
+```python
+@hub.strategy("momentum")           # uses default_balance
+def momentum(ctx):
+    ...
+
+@hub.strategy("value", balance=1000)  # overrides default_balance
+def value(ctx):
+    ...
+```
+
+Raises `ValueError` if a strategy with the same name is already registered.
+
+#### `hub.add_strategy(name, fn, balance=None)`
+
+Non-decorator equivalent:
+
+```python
+hub.add_strategy("momentum", momentum_fn, balance=500)
+```
+
+### StrategyContext
+
+Same public API as `TickContext` (`.price`, `.buy()`, `.limit()`, `.rsi`, `.sma_20`, etc.), plus a `.name` property identifying which strategy is running.
+
+| Property | Returns | Description |
+|----------|---------|-------------|
+| `price` | `PriceSnapshot` | Current UP/DOWN prices from the shared stream |
+| `balance` | `float` | This strategy's paper balance |
+| `positions` | `list` | This strategy's open positions |
+| `pnl` | `float` | This strategy's realised P&L |
+| `market` | `Market \| None` | The current shared market |
+| `name` | `str` | This strategy's registered name |
+| `rsi` | `float \| None` | RSI(14) — requires `pandas` |
+| `sma_20` | `float \| None` | SMA(20) — requires `pandas` |
+| `ema_12` | `float \| None` | EMA(12) — requires `pandas` |
+
+Methods: `buy(side, amount)`, `limit(side, price, amount)`, `close_position(side, amount=None)` — same signatures as `TickContext`.
+
+### Running
+
+```python
+# Blocking
+hub.run()
+
+# Async
+await hub.run_async()
+
+# Stop gracefully
+hub.stop()
+```
+
+### Properties
+
+| Property | Returns | Description |
+|----------|---------|-------------|
+| `stats` | `dict` | Per-strategy running stats |
+| `tick_count` | `int` | Total price ticks received |
+| `strategy_count` | `int` | Number of registered strategies |
+
+`stats` format:
+
+```python
+{
+    "ticks": 142,
+    "strategies": {
+        "momentum": {"balance": 480.0, "pnl": -20.0, "open_positions": 2},
+        "value":    {"balance": 520.0, "pnl": 20.0,  "open_positions": 0},
+    },
+}
+```
+
+### Lifecycle
+
+Same cycle as `Bot`, but runs once for all strategies:
+
+1. **Discover** — one `client.markets.latest()` call for the shared market
+2. **Stream** — one WebSocket stream; every strategy's `PaperEngine` attaches to it for limit-order fills
+3. **Tick** — on each price tick, calls every strategy's function with error isolation
+4. **Resolve** — checks resolved positions for all strategies
+5. **Rollover** — cleans up, waits 2 seconds, repeats
+
+If no market is found, retries every 30 seconds.
+
+### Example
+
+See [`examples/bot_hub.py`](../examples/bot_hub.py) for a complete runnable example with 4 strategies.
