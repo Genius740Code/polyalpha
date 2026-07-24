@@ -46,6 +46,14 @@ WS_MAX_RETRIES    = 10    # attempts before giving up entirely
 WS_BACKOFF_FACTOR = 2.0   # exponential backoff multiplier
 WS_JITTER         = 0.2   # jitter factor (±20% random variation) to prevent thundering herd
 
+# ── Chainlink Streamer ──────────────────────────────────────────────────────────
+
+CL_WS_RECV_TIMEOUT   = 10    # seconds — per-message recv timeout
+CL_WS_MAX_RETRIES    = 10    # max reconnection attempts before giving up
+CL_WS_BASE_DELAY     = 3.0   # base backoff delay in seconds
+CL_WS_BACKOFF_FACTOR = 2.0   # exponential backoff multiplier
+CL_WS_JITTER         = 0.2   # jitter factor (±20%) to prevent thundering herd
+
 # ── Data Feed ───────────────────────────────────────────────────────────────────
 
 DEFAULT_CACHE_MAX_TICKS = 1000    # Maximum ticks to keep in WebSocket cache

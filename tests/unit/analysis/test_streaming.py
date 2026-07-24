@@ -19,7 +19,12 @@ class TestChainlinkStreamerConfig:
         cfg = ChainlinkStreamerConfig()
         assert cfg.ws_url == "wss://ws-live-data.polymarket.com"
         assert cfg.timeout == 30
-        assert cfg.reconnect_delay == 5.0
+        assert cfg.recv_timeout == 10
+        assert cfg.max_retries == 10
+        assert cfg.base_delay == 3.0
+        assert cfg.backoff_factor == 2.0
+        assert cfg.jitter == 0.2
+        assert cfg.stale_threshold == 30.0
         assert "BTC" in cfg.symbol_map
         assert cfg.symbol_map["BTC"] == "btc/usd"
 
@@ -34,6 +39,22 @@ class TestChainlinkStreamerConfig:
     def test_custom_timeout(self):
         cfg = ChainlinkStreamerConfig(timeout=60)
         assert cfg.timeout == 60
+
+    def test_custom_recv_timeout(self):
+        cfg = ChainlinkStreamerConfig(recv_timeout=15)
+        assert cfg.recv_timeout == 15
+
+    def test_custom_max_retries(self):
+        cfg = ChainlinkStreamerConfig(max_retries=5)
+        assert cfg.max_retries == 5
+
+    def test_custom_base_delay(self):
+        cfg = ChainlinkStreamerConfig(base_delay=1.0)
+        assert cfg.base_delay == 1.0
+
+    def test_custom_stale_threshold(self):
+        cfg = ChainlinkStreamerConfig(stale_threshold=60.0)
+        assert cfg.stale_threshold == 60.0
 
     def test_custom_reconnect_delay(self):
         cfg = ChainlinkStreamerConfig(reconnect_delay=10.0)
@@ -63,7 +84,6 @@ class TestChainlinkStreamer:
         def handler(symbol, price, timestamp):
             called.append((symbol, price, timestamp))
 
-        # Emit price event
         timestamp = datetime.now(timezone.utc)
         streamer._emit("price", "BTC", 50000.0, timestamp)
 
@@ -145,10 +165,8 @@ class TestChainlinkStreamer:
         def handler2(symbol, price, timestamp):
             called.append(True)
 
-        # Should not raise, but log error
         streamer._emit("price", "BTC", 50000.0, datetime.now(timezone.utc))
 
-        # Second callback should still be called
         assert len(called) == 1
 
     def test_stop(self):
@@ -173,10 +191,37 @@ class TestChainlinkStreamer:
 
     def test_start_valid_symbol(self):
         streamer = ChainlinkStreamer()
-        # Just test that it doesn't raise for valid symbol
-        # Actual connection is mocked in integration tests
         with patch("polyalpha.analysis.streaming.asyncio.run"):
             streamer.start("BTC")
+
+    def test_stale_data_detection(self):
+        streamer = ChainlinkStreamer()
+        streamer._last_price_time = 0.0
+        streamer._stale_warned = False
+
+        streamer._check_stale_data()
+        assert streamer._stale_warned is False
+
+        streamer._last_price_time = 0.0
+        streamer._check_stale_data()
+        assert streamer._stale_warned is False
+
+    def test_check_stale_data_triggers_warning(self):
+        streamer = ChainlinkStreamer()
+        streamer._stale_warned = False
+
+        with patch("polyalpha.analysis.streaming.time.time", return_value=100.0):
+            streamer._last_price_time = 50.0
+            streamer._check_stale_data()
+            assert streamer._stale_warned is True
+
+    def test_check_stale_data_resets_after_fresh_data(self):
+        streamer = ChainlinkStreamer()
+        streamer._stale_warned = True
+        with patch("polyalpha.analysis.streaming.time.time", return_value=100.0):
+            streamer._last_price_time = 99.0
+            streamer._check_stale_data()
+            assert streamer._stale_warned is False
 
 
 @pytest.mark.unit
@@ -198,19 +243,16 @@ class TestChainlinkStreamerIntegration:
         def price_handler(symbol, price, timestamp):
             called.append(("price", symbol, price))
 
-        # Mock websockets
         mock_ws = AsyncMock()
         mock_ws.recv = AsyncMock(side_effect=[
-            # Subscription response
             '{"payload": {"symbol": "btc/usd", "timestamp": 1721640000000, "value": 66000.0}}',
-            asyncio.TimeoutError(),  # Trigger disconnect
+            asyncio.TimeoutError(),
         ])
         mock_ws.send = AsyncMock()
         mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
-        mock_ws.__aexit__ = AsyncMock()
+        mock_ws.__aexit__ = AsyncMock(return_value=None)
 
         with patch("websockets.connect", return_value=mock_ws):
-            # Run for a short time
             task = asyncio.create_task(streamer._connect_and_stream("btc/usd", "BTC"))
             await asyncio.sleep(0.1)
             streamer._running = False
@@ -221,6 +263,75 @@ class TestChainlinkStreamerIntegration:
 
         assert "connect" in called
         assert any(c == ("price", "BTC", 66000.0) for c in called)
+
+    @pytest.mark.asyncio
+    async def test_websocket_timeout_raises(self):
+        """Test that recv timeout propagates as exception (not silent break)."""
+        streamer = ChainlinkStreamer()
+        streamer._running = True
+
+        mock_ws = AsyncMock()
+        mock_ws.recv = AsyncMock(side_effect=asyncio.TimeoutError())
+        mock_ws.send = AsyncMock()
+        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_ws.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("websockets.connect", return_value=mock_ws):
+            with pytest.raises(asyncio.TimeoutError):
+                await streamer._connect_and_stream("btc/usd", "BTC")
+
+    @pytest.mark.asyncio
+    async def test_server_ping_responded_with_pong(self):
+        """Test that server PING is responded to with PONG."""
+        streamer = ChainlinkStreamer()
+        streamer._running = True
+
+        mock_ws = AsyncMock()
+        mock_ws.recv = AsyncMock(side_effect=[
+            "PING",
+            asyncio.TimeoutError(),
+        ])
+        mock_ws.send = AsyncMock()
+        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_ws.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("websockets.connect", return_value=mock_ws):
+            task = asyncio.create_task(streamer._connect_and_stream("btc/usd", "BTC"))
+            await asyncio.sleep(0.1)
+            streamer._running = False
+            try:
+                await task
+            except asyncio.TimeoutError:
+                pass
+
+        pong_calls = [c for c in mock_ws.send.call_args_list if c[0][0] == "PONG"]
+        assert len(pong_calls) >= 1
+
+    @pytest.mark.asyncio
+    async def test_server_pong_is_tracked(self):
+        """Test that received PONG updates _last_pong_time."""
+        streamer = ChainlinkStreamer()
+        streamer._running = True
+
+        mock_ws = AsyncMock()
+        mock_ws.recv = AsyncMock(side_effect=[
+            "PONG",
+            asyncio.TimeoutError(),
+        ])
+        mock_ws.send = AsyncMock()
+        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_ws.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("websockets.connect", return_value=mock_ws):
+            task = asyncio.create_task(streamer._connect_and_stream("btc/usd", "BTC"))
+            await asyncio.sleep(0.1)
+            streamer._running = False
+            try:
+                await task
+            except asyncio.TimeoutError:
+                pass
+
+        assert streamer._last_pong_time > 0
 
     def test_symbol_validation(self):
         """Test that symbols are properly validated."""
@@ -234,6 +345,5 @@ class TestChainlinkStreamerIntegration:
     def test_symbol_case_insensitive(self):
         """Test that symbol lookup is case-insensitive."""
         streamer = ChainlinkStreamer()
-        # Should work with lowercase
         with patch("polyalpha.analysis.streaming.asyncio.run"):
             streamer.start("btc")
