@@ -22,6 +22,9 @@ class TestDataFeedConfig:
         assert cfg.timeframe == "5m"
         assert cfg.lookback_periods == 500
         assert cfg.use_cache is True
+        assert cfg.scraping_recv_timeout == 10
+        assert cfg.scraping_retry_attempts == 3
+        assert cfg.scraping_timeout == 90
         assert "BTC" in cfg.asset_map
 
     def test_valid_source_binance(self):
@@ -73,6 +76,14 @@ class TestDataFeedConfig:
     def test_cache_disabled_no_dir_set(self):
         cfg = DataFeedConfig(use_cache=False, cache_dir=None)
         assert cfg.cache_dir is None
+
+    def test_custom_scraping_recv_timeout(self):
+        cfg = DataFeedConfig(scraping_recv_timeout=15)
+        assert cfg.scraping_recv_timeout == 15
+
+    def test_custom_scraping_retry_attempts(self):
+        cfg = DataFeedConfig(scraping_retry_attempts=5)
+        assert cfg.scraping_retry_attempts == 5
 
 
 @pytest.mark.unit
@@ -175,6 +186,28 @@ class TestDataFeedFetch:
         cfg = DataFeedConfig()
         feed = DataFeed(cfg)
         assert feed._get_timeframe_seconds() == 300
+
+    def test_get_scraping_delay_1m(self):
+        cfg = DataFeedConfig(timeframe="1m")
+        feed = DataFeed(cfg)
+        assert feed._get_scraping_delay() == 0.2
+
+    def test_get_scraping_delay_5m(self):
+        cfg = DataFeedConfig(timeframe="5m")
+        feed = DataFeed(cfg)
+        assert feed._get_scraping_delay() == 0.2
+
+    def test_get_scraping_delay_1h(self):
+        cfg = DataFeedConfig(timeframe="1h")
+        feed = DataFeed(cfg)
+        assert feed._get_scraping_delay() == 0.5
+
+    def test_get_scraping_delay_unknown_timeframe_fallback(self):
+        cfg = DataFeedConfig()
+        feed = DataFeed(cfg)
+        # Invalid timeframe falls back to delay 0.3 on _get_scraping_delay
+        # but config validation prevents invalid timeframes
+        assert feed._get_scraping_delay() == 0.2
 
 
 @pytest.mark.unit

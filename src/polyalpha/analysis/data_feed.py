@@ -35,6 +35,8 @@ from ..core.constants import (
     DEFAULT_CACHE_MAX_TICKS,
     API_REQUEST_TIMEOUT,
     CACHE_EXPIRY_SECONDS,
+    SCRAPE_RECV_TIMEOUT,
+    SCRAPE_RETRY_ATTEMPTS,
 )
 
 log = logging.getLogger(__name__)
@@ -130,7 +132,7 @@ class DataFeedConfig:
 
     # Scraping specific
     scraping_ws_url: str = "wss://ws-live-data.polymarket.com"
-    scraping_delay: float = 2.0  # Delay in seconds between price collections
+    scraping_delay: float = 2.0  # Deprecated, use adaptive per-timeframe delay instead
     scraping_symbol_map: dict = field(default_factory=lambda: {
         "BTC": "btc/usd",
         "ETH": "eth/usd",
@@ -138,7 +140,9 @@ class DataFeedConfig:
         "XRP": "xrp/usd",
         "DOGE": "doge/usd",
     })
-    scraping_timeout: int = 90  # WebSocket timeout in seconds
+    scraping_timeout: int = 90  # WebSocket session duration in seconds
+    scraping_recv_timeout: int = SCRAPE_RECV_TIMEOUT  # Per-message recv timeout
+    scraping_retry_attempts: int = SCRAPE_RETRY_ATTEMPTS  # Retries before Binance fallback
 
     def __post_init__(self):
         """Validate configuration."""
@@ -671,6 +675,7 @@ class DataFeed:
 
         Connects to Polymarket WebSocket, subscribes to crypto prices,
         and collects price ticks with configurable delay.
+        Retries on failure before falling back to Binance.
         """
         try:
             import websockets
@@ -695,17 +700,31 @@ class DataFeed:
         except RuntimeError:
             loop = None
 
-        try:
-            if loop and loop.is_running():
-                future = asyncio.run_coroutine_threadsafe(self._fetch_scraping_async(asset), loop)
-                data = future.result(timeout=30)
-            else:
-                data = asyncio.run(self._fetch_scraping_async(asset))
-            return data
-        except Exception as exc:
-            self._log.error(f"Scraping WebSocket error: {exc}")
-            self._log.warning("Falling back to Binance.")
-            return self._fetch_binance(asset)
+        # 2.1: retry before falling back to Binance
+        last_error = None
+        for attempt in range(1, self.config.scraping_retry_attempts + 1):
+            try:
+                if loop and loop.is_running():
+                    future = asyncio.run_coroutine_threadsafe(self._fetch_scraping_async(asset), loop)
+                    data = future.result(timeout=30)
+                else:
+                    data = asyncio.run(self._fetch_scraping_async(asset))
+                return data
+            except Exception as exc:
+                last_error = exc
+                self._log.warning(
+                    "Scraping attempt %d/%d failed: %s",
+                    attempt, self.config.scraping_retry_attempts, exc,
+                )
+                if attempt < self.config.scraping_retry_attempts:
+                    time.sleep(1.0)
+
+        self._log.error(
+            "All %d scraping attempts failed: %s",
+            self.config.scraping_retry_attempts, last_error,
+        )
+        self._log.warning("Falling back to Binance.")
+        return self._fetch_binance(asset)
 
     async def _fetch_scraping_async(self, asset: str) -> pd.DataFrame:
         """Async implementation of scraping WebSocket data fetch."""
@@ -716,60 +735,73 @@ class DataFeed:
 
         symbol = self.config.scraping_symbol_map[asset]
         ticks = []
+        start_time = time.time()
+        target_duration = self.config.scraping_timeout
 
-        async with websockets.connect(
-            self.config.scraping_ws_url,
-            additional_headers={
-                "User-Agent": "Mozilla/5.0",
-                "Origin": "https://polymarket.com"
-            },
-            open_timeout=10,
-        ) as ws:
-            # Subscribe to crypto prices
-            await ws.send(json.dumps({
-                "action": "subscribe",
-                "subscriptions": [{
-                    "topic": "crypto_prices_chainlink",
-                    "type": "update"
-                }]
-            }))
+        # 2.4: inner retry loop — reconnect on WS drop within session
+        while time.time() - start_time < target_duration and len(ticks) < self.config.lookback_periods:
+            try:
+                async with websockets.connect(
+                    self.config.scraping_ws_url,
+                    additional_headers={
+                        "User-Agent": "Mozilla/5.0",
+                        "Origin": "https://polymarket.com"
+                    },
+                    open_timeout=10,
+                ) as ws:
+                    # Subscribe to crypto prices
+                    await ws.send(json.dumps({
+                        "action": "subscribe",
+                        "subscriptions": [{
+                            "topic": "crypto_prices_chainlink",
+                            "type": "update"
+                        }]
+                    }))
 
-            start_time = time.time()
-            target_duration = self.config.scraping_timeout
+                    # 2.2: use recv_timeout for per-message, session_duration for overall
+                    while time.time() - start_time < target_duration and len(ticks) < self.config.lookback_periods:
+                        try:
+                            raw = await asyncio.wait_for(
+                                ws.recv(),
+                                timeout=self.config.scraping_recv_timeout,
+                            )
+                        except asyncio.TimeoutError:
+                            # 2.2: recv timed out — still within session, keep waiting
+                            continue
 
-            while time.time() - start_time < target_duration:
-                try:
-                    raw = await asyncio.wait_for(
-                        ws.recv(),
-                        timeout=self.config.scraping_timeout
-                    )
-                except asyncio.TimeoutError:
-                    self._log.warning("WebSocket timeout during scraping")
+                        try:
+                            msg = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+
+                        payload = msg.get("payload", {})
+                        if payload.get("symbol") == symbol:
+                            timestamp = datetime.fromtimestamp(
+                                payload["timestamp"] / 1000,
+                                tz=timezone.utc
+                            )
+                            price = float(payload["value"])
+                            ticks.append({"timestamp": timestamp, "price": price})
+
+                            # 2.3: adaptive delay per timeframe instead of fixed 2s
+                            await asyncio.sleep(self._get_scraping_delay())
+
+            except Exception as exc:
+                remaining = target_duration - (time.time() - start_time)
+                if remaining <= 0 or len(ticks) >= self.config.lookback_periods:
                     break
-
-                try:
-                    msg = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-
-                payload = msg.get("payload", {})
-                if payload.get("symbol") == symbol:
-                    timestamp = datetime.fromtimestamp(
-                        payload["timestamp"] / 1000,
-                        tz=timezone.utc
-                    )
-                    price = float(payload["value"])
-                    ticks.append({"timestamp": timestamp, "price": price})
-
-                    # Apply delay between collections
-                    await asyncio.sleep(self.config.scraping_delay)
-
-                # Stop if we have enough data
-                if len(ticks) >= self.config.lookback_periods:
-                    break
+                self._log.warning(
+                    "Scraping: WS disconnected — retrying (%.0fs remaining)", remaining,
+                )
+                await asyncio.sleep(1.0)
 
         if not ticks:
             raise ValueError(f"No price data collected for {asset}")
+
+        self._log.info(
+            "Scraping: collected %d ticks for %s in %.0fs",
+            len(ticks), asset, time.time() - start_time,
+        )
 
         # Convert to DataFrame and aggregate into OHLCV
         df = pd.DataFrame(ticks)
@@ -786,6 +818,18 @@ class DataFeed:
         resampled.reset_index(inplace=True)
 
         return self._normalize_ohlcv(resampled)
+
+    def _get_scraping_delay(self) -> float:
+        """Get adaptive per-tick delay based on timeframe."""
+        delays = {
+            "1m": 0.2,
+            "5m": 0.2,
+            "15m": 0.3,
+            "1h": 0.5,
+            "4h": 0.5,
+            "1d": 0.5,
+        }
+        return delays.get(self.config.timeframe, 0.3)
 
     def _get_timeframe_seconds(self) -> int:
         """Get timeframe duration in seconds."""

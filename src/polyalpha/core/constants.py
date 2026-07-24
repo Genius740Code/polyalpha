@@ -46,6 +46,11 @@ WS_MAX_RETRIES    = 10    # attempts before giving up entirely
 WS_BACKOFF_FACTOR = 2.0   # exponential backoff multiplier
 WS_JITTER         = 0.2   # jitter factor (±20% random variation) to prevent thundering herd
 
+# ── Scraping ─────────────────────────────────────────────────────────────────────
+
+SCRAPE_RECV_TIMEOUT   = 10   # seconds — per-message recv timeout for scraping
+SCRAPE_RETRY_ATTEMPTS = 3    # retry attempts before falling back to Binance
+
 # ── Chainlink Streamer ──────────────────────────────────────────────────────────
 
 CL_WS_RECV_TIMEOUT   = 10    # seconds — per-message recv timeout
