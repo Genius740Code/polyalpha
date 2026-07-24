@@ -159,9 +159,15 @@ class Stream:
         self._pong_count: int = 0
         self._connection_quality: float = 1.0  # 0.0 to 1.0
 
+        # Missing-pong tracking
+        self._pong_warned: bool = False
+
         # Stale data tracking
         self._last_price_time: float = time.time()
         self._stale_warned: bool = False
+
+        # Consecutive failure tracking for reconnection backoff
+        self._consecutive_failures: int = 0
 
         # Async stop signal
         self._async_stop: asyncio.Event | None = None
@@ -231,7 +237,7 @@ class Stream:
         self._stop.clear()
         self._async_stop = asyncio.Event()
 
-        consecutive_failures = 0
+        self._consecutive_failures = 0
         high_retry_warned = False
 
         while not self._is_stopped():
@@ -239,25 +245,25 @@ class Stream:
                 await self._connect_async()
                 return
             except StreamDisconnected as exc:
-                consecutive_failures += 1
-                if consecutive_failures > self.retries:
+                self._consecutive_failures += 1
+                if self._consecutive_failures > self.retries:
                     log.error("Stream: max retries (%d) exceeded — giving up", self.retries)
                     self._emit("error", exc)
                     return
 
-                if consecutive_failures > self.retries // 2 and not high_retry_warned:
+                if self._consecutive_failures > self.retries // 2 and not high_retry_warned:
                     log.warning(
                         "Stream: high retry rate (%d/%d) — network may be unreliable",
-                        consecutive_failures, self.retries,
+                        self._consecutive_failures, self.retries,
                     )
                     high_retry_warned = True
 
-                base_delay = self.retry_delay * (WS_BACKOFF_FACTOR ** (consecutive_failures - 1))
+                base_delay = self.retry_delay * (WS_BACKOFF_FACTOR ** (self._consecutive_failures - 1))
                 delay = base_delay + base_delay * WS_JITTER * random.random()
 
                 log.warning(
                     "Stream: disconnected (attempt %d/%d) — retrying in %.1fs",
-                    consecutive_failures, self.retries, delay,
+                    self._consecutive_failures, self.retries, delay,
                 )
                 await asyncio.sleep(delay)
 
@@ -300,14 +306,15 @@ class Stream:
 
     def _run_with_retry(self) -> None:
         """Connect, reconnect on drops, give up after ``self.retries`` failures."""
-        consecutive_failures = 0
+        self._consecutive_failures = 0
         high_retry_warned = False
 
         while not self._stop.is_set():
             # Check circuit breaker before attempting connection
             if self._circuit_breaker and self._circuit_breaker.is_open:
                 log.warning("Stream: circuit breaker is open, blocking connection attempt")
-                time.sleep(5)  # Wait before checking again
+                recovery = getattr(self._circuit_breaker, 'recovery_timeout', 60)
+                time.sleep(recovery)
                 continue
 
             try:
@@ -319,27 +326,27 @@ class Stream:
                 return
 
             except StreamDisconnected as exc:
-                consecutive_failures += 1
-                if consecutive_failures > self.retries:
+                self._consecutive_failures += 1
+                if self._consecutive_failures > self.retries:
                     log.error("Stream: max retries (%d) exceeded — giving up", self.retries)
                     self._emit("error", exc)
                     return
 
                 # Warn if retries are getting high (>50% of budget used)
-                if consecutive_failures > self.retries // 2 and not high_retry_warned:
+                if self._consecutive_failures > self.retries // 2 and not high_retry_warned:
                     log.warning(
                         "Stream: high retry rate (%d/%d) — network may be unreliable",
-                        consecutive_failures, self.retries,
+                        self._consecutive_failures, self.retries,
                     )
                     high_retry_warned = True
 
                 # Calculate exponential backoff with positive-only jitter
-                base_delay = self.retry_delay * (WS_BACKOFF_FACTOR ** (consecutive_failures - 1))
+                base_delay = self.retry_delay * (WS_BACKOFF_FACTOR ** (self._consecutive_failures - 1))
                 delay = base_delay + base_delay * WS_JITTER * random.random()
                 
                 log.warning(
                     "Stream: disconnected (attempt %d/%d) — retrying in %.1fs (with jitter)",
-                    consecutive_failures, self.retries, delay,
+                    self._consecutive_failures, self.retries, delay,
                 )
                 time.sleep(delay)
 
@@ -388,6 +395,7 @@ class Stream:
             raise StreamDisconnected("Market has no token IDs to subscribe to")
 
         async with websockets.connect(CLOB_WS) as ws:
+            self._consecutive_failures = 0
             self._emit("connect")
 
             await ws.send(json.dumps({
@@ -431,6 +439,7 @@ class Stream:
                 await ws.send("PING")
                 log.debug("Stream: → PING")
                 self._check_stale_data()
+                self._check_missing_pong()
             except Exception:
                 break
 
@@ -447,6 +456,7 @@ class Stream:
         if raw == "PONG":
             self._last_pong_time = time.time()
             self._pong_count += 1
+            self._pong_warned = False
             if self._last_ping_time > 0:
                 rtt = self._last_pong_time - self._last_ping_time
                 if rtt < 1.0:
@@ -474,6 +484,7 @@ class Stream:
             self._dispatch(msg)
 
     def _on_open(self, ws, token_ids: list[str]) -> None:
+        self._consecutive_failures = 0
         log.info("Stream: connected — subscribing to %d token(s)", len([mask_transaction_hash(t) for t in token_ids]))
 
         ws.send(json.dumps({
@@ -505,6 +516,7 @@ class Stream:
                 ws.send("PING")
                 log.debug("Stream: → PING")
                 self._check_stale_data()
+                self._check_missing_pong()
             except Exception:
                 break   # socket gone; _on_ws_close will trigger reconnect
 
@@ -522,6 +534,7 @@ class Stream:
         if raw == "PONG":
             self._last_pong_time = time.time()
             self._pong_count += 1
+            self._pong_warned = False
             # Calculate round-trip time
             if self._last_ping_time > 0:
                 rtt = self._last_pong_time - self._last_ping_time
@@ -645,6 +658,20 @@ class Stream:
         except (TypeError, ValueError):
             pass
         self._publish_prices()
+
+    def _check_missing_pong(self) -> None:
+        """Log a warning if no PONG received within WS_PING_TIMEOUT of last PING."""
+        if self._last_ping_time <= 0:
+            return
+        elapsed = time.time() - self._last_ping_time
+        if elapsed > WS_PING_TIMEOUT and not self._pong_warned:
+            log.warning(
+                "Stream: no PONG for %.1fs (market %s) — server may be unresponsive",
+                elapsed, self.market.slug,
+            )
+            self._pong_warned = True
+        elif elapsed <= WS_PING_TIMEOUT:
+            self._pong_warned = False
 
     def _check_stale_data(self) -> None:
         """Log a warning if no price update has been received for STALE_DATA_SECONDS."""
