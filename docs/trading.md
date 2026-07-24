@@ -127,6 +127,22 @@ client.paper.position_history() -> dict
 client.paper.pre_trade_checks(market, side, amount) -> dict
 ```
 
+Returns a dict with validation results:
+- `balance_ok` — True if balance covers the order amount
+- `market_open` — True if the market's window is active (between `start_time` and `end_time`)
+- `price_reasonable` — True if the price is between 0.01 and 0.99
+- `can_proceed` — True if all blocking checks pass
+- `warnings` — list of human-readable warning messages
+
+Trading is blocked if the market **has not yet opened** (`start_time > now`) or **has already closed** (`end_time < now`).
+
+```python
+checks = client.paper.pre_trade_checks(market, "UP", 10.0)
+if not checks["can_proceed"]:
+    for w in checks["warnings"]:
+        print(w)
+```
+
 ### Risk Management
 
 Available via `PaperConfig` (see **configuration.md**):

@@ -303,6 +303,16 @@ class PaperEngine:
                 f"Insufficient balance: need ${amount:.2f}, have ${available_balance:.2f}"
             )
 
+        if hasattr(market, 'start_time') and market.start_time:
+            try:
+                start_time = datetime.fromisoformat(market.start_time.replace('Z', '+00:00'))
+                if start_time > datetime.now(timezone.utc):
+                    checks["market_open"] = False
+                    checks["can_proceed"] = False
+                    checks["warnings"].append("Market has not yet opened")
+            except (ValueError, AttributeError) as e:
+                log.debug("Paper: could not parse market start_time: %s", e)
+
         if hasattr(market, 'end_time') and market.end_time:
             try:
                 end_time = datetime.fromisoformat(market.end_time.replace('Z', '+00:00'))

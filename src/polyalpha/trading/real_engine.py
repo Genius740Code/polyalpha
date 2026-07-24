@@ -763,6 +763,17 @@ class RealTradingEngine:
             )
             # Allowance warning doesn't block trade (can be auto-approved), but warn user
 
+        # Check if market is open for trading
+        if hasattr(market, 'start_time') and market.start_time:
+            try:
+                start_time = datetime.fromisoformat(market.start_time.replace('Z', '+00:00'))
+                if start_time > datetime.now(timezone.utc):
+                    checks["market_open"] = False
+                    checks["can_proceed"] = False
+                    checks["warnings"].append("Market has not yet opened")
+            except (ValueError, AttributeError) as e:
+                log.debug("Real: could not parse market start_time: %s", e)
+
         # Check if market is still open
         if hasattr(market, 'end_time') and market.end_time:
             try:

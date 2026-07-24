@@ -58,7 +58,7 @@ Volume-based fee rebates with configurable tiers (bronze/silver/gold/platinum). 
 Multi-wallet paper trading with different wallet selection strategies: round-robin, balance-based (prefer highest balance), and random. Shows per-wallet and aggregated summaries.
 
 ### `pre_trade_checks.py`
-Pre-trade validation: balance sufficiency, market open status, price reasonableness checks before order placement.
+Pre-trade validation: balance sufficiency, market not-yet-open detection, market closed detection, price reasonableness checks before order placement.
 
 ### `risk_management.py`
 Risk management features: daily loss limits, trade count limits, position size limits, stop-loss / take-profit threshold checks, risk-based position sizing.
