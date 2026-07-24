@@ -134,6 +134,16 @@ Concise reference of every symbol exported from `polyalpha.__init__`, grouped by
 
 ---
 
+## Logging
+
+| Symbol | Source | Description |
+|--------|--------|-------------|
+| `log_call` | `utils/logging_utils.py` | Decorator: auto-logs function entry/exit/errors. One-liner for adding logging to any buy/sell/market function. |
+
+See [Logging](./logging.md) for full usage.
+
+---
+
 ## Bots
 
 | Symbol | Source | Description |
@@ -208,7 +218,7 @@ Concise reference of every symbol exported from `polyalpha.__init__`, grouped by
 ```
 Client, Market, Stream,
 load_env_file, get_env_config,
-Bot,
+Bot, log_call,
 PaperEngine, PaperConfig, AutoRedeemConfig,
 RealTradingEngine, RealTradingConfig, RealOrder, RealPosition, WalletManager,
 ReportPreset, TradeDatabase,
@@ -228,4 +238,4 @@ AIError, AIAuthenticationError, AIModelNotFoundError, AIQuotaExceededError,
   AIResponseError, AITimeoutError, AIConnectionError
 ```
 
-**Total: 56 exported symbols** (including the `conditions` module).
+**Total: 57 exported symbols** (including the `conditions` module).

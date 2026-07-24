@@ -257,6 +257,8 @@ set_correlation_id("my-session-1")
 # All subsequent logs from this thread/async context will include [cid=...]
 ```
 
+See [Logging](./logging.md#correlation-ids) for more details.
+
 ---
 
 ## Common Error Codes

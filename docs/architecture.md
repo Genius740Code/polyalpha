@@ -102,7 +102,7 @@ src/polyalpha/
 │   └── weather_config.py #   Weather station city presets
 │
 └── utils/
-    └── logging_utils.py  #   SensitiveDataFilter, correlation IDs, masking helpers
+    └── logging_utils.py  #   @log_call decorator, get_logger(), SensitiveDataFilter, correlation IDs, masking
 ```
 
 **Total: 12 directories, 63 `.py` files.**
