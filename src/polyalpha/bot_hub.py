@@ -29,6 +29,27 @@ out to all registered strategies:
 
 Each strategy error is isolated — a crash in one strategy is logged and
 does not stop the others or the hub.
+
+Variant framework
+-----------------
+Variants are strategy-like entries that additionally carry free-form
+parameter metadata and can be compared side-by-side::
+
+    hub = polyalpha.BotHub("BTC", "5m")
+
+    @hub.variant("rsi_70", params={"rsi_threshold": 70})
+    def rsi_70(ctx):
+        if ctx.rsi and ctx.rsi > 70:
+            ctx.buy("DOWN", 10)
+
+    @hub.variant("rsi_30", params={"rsi_threshold": 30})
+    def rsi_30(ctx):
+        if ctx.rsi and ctx.rsi < 30:
+            ctx.buy("UP", 10)
+
+    hub.run()
+    report = hub.compare_variants()   # ComparisonReport sorted by P&L
+    report.print()
 """
 
 from __future__ import annotations
@@ -38,8 +59,12 @@ import logging
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
-from typing import Callable, Optional
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Callable, Optional
+
+if TYPE_CHECKING:
+    from .report.comparison import ComparisonReport
 
 try:
     import pandas as pd
@@ -232,6 +257,51 @@ class _RegisteredStrategy:
     ctx: Optional[StrategyContext] = None
 
 
+@dataclass
+class Variant:
+    """
+    A registered strategy variant — same shape as ``_RegisteredStrategy``
+    but carries extra metadata for cross-variant comparison.
+
+    Fields
+    ------
+    name : str
+        Unique variant name (decorator argument).
+    fn : Callable[[StrategyContext], None]
+        The strategy function to invoke on each tick.
+    balance : float
+        Starting paper balance for this variant.
+    params : dict
+        Free-form parameter metadata (e.g. rsi_threshold, window size).
+        Stored verbatim and surfaced in comparison reports.
+    id : str
+        Stable identifier used in persistence and comparison snapshots.
+        Defaults to ``name``-slugified but can be overridden.
+    created_at : datetime
+        UTC timestamp the variant was registered.
+    run_count : int
+        Number of comparison snapshots this variant has appeared in.
+    paper : Optional[PaperEngine]
+        Lazily built on first cycle.
+    ctx : Optional[StrategyContext]
+        Built when the market is discovered.
+    """
+
+    name: str
+    fn: Callable[[StrategyContext], None]
+    balance: float
+    params: dict = field(default_factory=dict)
+    id: str = ""
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    run_count: int = 0
+    paper: Optional[PaperEngine] = None
+    ctx: Optional[StrategyContext] = None
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            self.id = self.name
+
+
 # ── BotHub ────────────────────────────────────────────────────────────────────
 
 class BotHub:
@@ -315,12 +385,24 @@ class BotHub:
         )
 
         self._strategies: list[_RegisteredStrategy] = []
+        self._variants: list[Variant] = []
         self._market: Optional[Market] = None
         self._stream = None
         self._price_history: deque[float] = deque(maxlen=200)
         self._stop_event = threading.Event()
         self._tick_count = 0
         self._log = logging.getLogger("polyalpha.BotHub")
+
+    # ── Helpers ─────────────────────────────────────────────────────────────
+
+    def _active_tickers(self) -> list[_RegisteredStrategy]:
+        """Combined list of strategies and variants that receive each tick.
+
+        Both shapes (``_RegisteredStrategy`` and ``Variant``) expose the
+        same runtime protocol — ``name``, ``fn``, ``balance``, ``paper``,
+        ``ctx`` — so the fan-out loop treats them uniformly.
+        """
+        return [*self._strategies, *self._variants]  # type: ignore[list-item]
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -377,6 +459,81 @@ class BotHub:
         """Register a strategy without decorator syntax."""
         self.strategy(name, balance=balance)(fn)
 
+    def variant(
+        self,
+        name: str,
+        balance: Optional[float] = None,
+        params: Optional[dict] = None,
+        id: str = "",
+    ) -> Callable:
+        """
+        Decorator — register a **variant** strategy with metadata for
+        cross-variant comparison.
+
+        Variants behave exactly like strategies at run time (one isolated
+        ``PaperEngine`` each, shared stream fan-out) but additionally:
+
+        * Carry a free-form ``params`` dict surfaced in comparison reports.
+        * Persist snapshots via ``hub.compare_variants()`` and
+          ``hub.list_runs()`` / ``hub.load_run()``.
+        * Are returned by ``hub.compare_variants()`` sorted by P&L.
+
+        Parameters
+        ----------
+        name : str
+            Unique variant name (must not collide with another variant
+            or strategy name).
+        balance : float, optional
+            Per-variant starting balance. Defaults to ``default_balance``.
+        params : dict, optional
+            Free-form parameter metadata, e.g. ``{"rsi_threshold": 70}``.
+        id : str, optional
+            Stable identifier for persistence snapshots. Defaults to the
+            slugified variant ``name``.
+
+        Example
+        -------
+        >>> @hub.variant("rsi_70", params={"rsi": 70})
+        ... def rsi_70(ctx):
+        ...     if ctx.rsi and ctx.rsi > 70:
+        ...         ctx.buy("DOWN", 10)
+        """
+        if not name or not isinstance(name, str):
+            raise ValueError("variant name must be a non-empty string")
+
+        def decorator(fn: Callable[[StrategyContext], None]) -> Callable:
+            existing = {s.name for s in self._strategies}
+            existing |= {v.name for v in self._variants}
+            if name in existing:
+                raise ValueError(f"variant/strategy '{name}' already registered")
+            self._variants.append(
+                Variant(
+                    name=name,
+                    fn=fn,
+                    balance=balance if balance is not None else self.default_balance,
+                    params=dict(params) if params else {},
+                    id=id or name,
+                )
+            )
+            self._log.info(
+                "Registered variant '%s' (balance=$%.2f, params=%s)",
+                name, balance or self.default_balance, params or {},
+            )
+            return fn
+
+        return decorator
+
+    def add_variant(
+        self,
+        name: str,
+        fn: Callable[[StrategyContext], None],
+        balance: Optional[float] = None,
+        params: Optional[dict] = None,
+        id: str = "",
+    ) -> None:
+        """Register a variant without decorator syntax."""
+        self.variant(name, balance=balance, params=params, id=id)(fn)
+
     @property
     def tick_count(self) -> int:
         """Total price ticks received this session."""
@@ -384,35 +541,64 @@ class BotHub:
 
     @property
     def strategy_count(self) -> int:
-        """Number of registered strategies."""
+        """Number of registered strategies (excludes variants)."""
         return len(self._strategies)
 
     @property
+    def variant_count(self) -> int:
+        """Number of registered variants."""
+        return len(self._variants)
+
+    @property
+    def total_count(self) -> int:
+        """Total registered strategies + variants."""
+        return len(self._strategies) + len(self._variants)
+
+    @property
+    def variants(self) -> list[Variant]:
+        """Read-only view of registered variants (copies the list)."""
+        return list(self._variants)
+
+    @property
     def stats(self) -> dict:
-        """Per-strategy running stats."""
+        """Per-strategy and per-variant running stats."""
+        strategies = {
+            s.name: {
+                "balance": s.paper.balance if s.paper else s.balance,
+                "pnl": sum(p.pnl for p in s.paper.all_positions())
+                    if s.paper else 0.0,
+                "open_positions": len(s.paper.positions()) if s.paper else 0,
+            }
+            for s in self._strategies
+        }
+        variants = {
+            v.name: {
+                "balance": v.paper.balance if v.paper else v.balance,
+                "pnl": sum(p.pnl for p in v.paper.all_positions())
+                    if v.paper else 0.0,
+                "open_positions": len(v.paper.positions()) if v.paper else 0,
+                "params": dict(v.params),
+            }
+            for v in self._variants
+        }
         return {
             "ticks": self._tick_count,
-            "strategies": {
-                s.name: {
-                    "balance": s.paper.balance if s.paper else s.balance,
-                    "pnl": sum(p.pnl for p in s.paper.all_positions())
-                        if s.paper else 0.0,
-                    "open_positions": len(s.paper.positions()) if s.paper else 0,
-                }
-                for s in self._strategies
-            },
+            "strategies": strategies,
+            "variants": variants,
         }
 
     def run(self) -> None:
         """Start the hub (blocking). Runs until stop() or fatal error."""
-        if not self._strategies:
+        if not self._strategies and not self._variants:
             raise RuntimeError(
-                "No strategies registered. Use @hub.strategy(...) first."
+                "No strategies or variants registered. "
+                "Use @hub.strategy(...) or @hub.variant(...) first."
             )
         self._log.info(
-            "BotHub starting: %s %s | strategies=%d | total_balance=$%.2f",
-            self.asset, self.timeframe, len(self._strategies),
-            sum(s.balance for s in self._strategies),
+            "BotHub starting: %s %s | strategies=%d | variants=%d | total_balance=$%.2f",
+            self.asset, self.timeframe,
+            len(self._strategies), len(self._variants),
+            sum(s.balance for s in self._active_tickers()),
         )
         self._stop_event.clear()
 
@@ -429,13 +615,15 @@ class BotHub:
 
     async def run_async(self) -> None:
         """Start the hub using async IO. Runs until stop() or fatal error."""
-        if not self._strategies:
+        if not self._strategies and not self._variants:
             raise RuntimeError(
-                "No strategies registered. Use @hub.strategy(...) first."
+                "No strategies or variants registered. "
+                "Use @hub.strategy(...) or @hub.variant(...) first."
             )
         self._log.info(
-            "BotHub starting (async): %s %s | strategies=%d",
-            self.asset, self.timeframe, len(self._strategies),
+            "BotHub starting (async): %s %s | strategies=%d | variants=%d",
+            self.asset, self.timeframe,
+            len(self._strategies), len(self._variants),
         )
         self._stop_event.clear()
 
@@ -491,13 +679,13 @@ class BotHub:
     # ── Lifecycle steps ─────────────────────────────────────────────────────
 
     def _discover(self) -> None:
-        """Discover the latest market ONCE for all strategies."""
+        """Discover the latest market ONCE for all strategies and variants."""
         self._market = self._shared_client.markets.latest(self.asset, self.timeframe)
-        self._log.info("Market found: %s (shared by %d strategies)",
-                       self._market.slug, len(self._strategies))
+        self._log.info("Market found: %s (shared by %d tickers)",
+                       self._market.slug, len(self._active_tickers()))
 
-        # Build / refresh each strategy's PaperEngine and Context.
-        for s in self._strategies:
+        # Build / refresh each strategy's and variant's PaperEngine + Context.
+        for s in self._active_tickers():
             if s.paper is None:
                 from .trading.paper_engine import PaperEngine
                 s.paper = PaperEngine(
@@ -513,12 +701,12 @@ class BotHub:
             )
 
     def _stream_prices(self) -> None:
-        """Set up ONE stream and fan ticks out to all strategies."""
+        """Set up ONE stream and fan ticks out to all strategies + variants."""
         self._stream = self._shared_client.stream(self._market)
 
-        # Attach each strategy's paper engine to the SAME stream so that
-        # limit orders auto-fill for every strategy independently.
-        for s in self._strategies:
+        # Attach each strategy's and variant's paper engine to the SAME stream
+        # so that limit orders auto-fill for every ticker independently.
+        for s in self._active_tickers():
             if s.paper is not None:
                 s.paper.attach_stream(self._stream, self._market)
             if s.ctx is not None:
@@ -532,12 +720,12 @@ class BotHub:
             self._price_history.append(up)
             # Invalidate each context's cached price series so indicators
             # recompute on the new history.
-            for s in self._strategies:
+            for s in self._active_tickers():
                 if s.ctx is not None:
                     s.ctx._invalidate_series_cache()
 
-            # ── Fan-out: call each strategy with error isolation ──────────
-            for s in self._strategies:
+            # ── Fan-out: call each strategy/variant with error isolation ──
+            for s in self._active_tickers():
                 if s.ctx is None or self._stop_event.is_set():
                     continue
                 try:
@@ -555,10 +743,10 @@ class BotHub:
         self._stream.start(background=False)
 
     async def _stream_prices_async(self) -> None:
-        """Async variant: one stream, fan-out to all strategies."""
+        """Async single-stream fan-out to all strategies + variants."""
         self._stream = self._shared_client.stream(self._market)
 
-        for s in self._strategies:
+        for s in self._active_tickers():
             if s.paper is not None:
                 s.paper.attach_stream(self._stream, self._market)
             if s.ctx is not None:
@@ -570,11 +758,11 @@ class BotHub:
                 return
             self._tick_count += 1
             self._price_history.append(up)
-            for s in self._strategies:
+            for s in self._active_tickers():
                 if s.ctx is not None:
                     s.ctx._invalidate_series_cache()
 
-            for s in self._strategies:
+            for s in self._active_tickers():
                 if s.ctx is None or self._stop_event.is_set():
                     continue
                 try:
@@ -591,10 +779,10 @@ class BotHub:
         await self._stream.run_async()
 
     def _resolve_all(self) -> None:
-        """Resolve positions for every strategy after the market closes."""
+        """Resolve positions for every strategy and variant after the market closes."""
         if not self._market:
             return
-        for s in self._strategies:
+        for s in self._active_tickers():
             if s.paper is None:
                 continue
             for pos in s.paper.positions():
@@ -613,7 +801,7 @@ class BotHub:
                 pass
             self._stream = None
         self._market = None
-        for s in self._strategies:
+        for s in self._active_tickers():
             s.ctx = None
         self._log.info("Rolling over to next market...")
         self._sleep(2)
@@ -626,7 +814,7 @@ class BotHub:
                 pass
             self._stream = None
         self._market = None
-        for s in self._strategies:
+        for s in self._active_tickers():
             s.ctx = None
         self._log.info("Rolling over to next market...")
         await self._asleep(2)
@@ -656,6 +844,29 @@ class BotHub:
                 pass
         self._shared_client.close()
         self._log.info(
-            "BotHub stopped — total ticks=%d, strategies=%d",
-            self._tick_count, len(self._strategies),
+            "BotHub stopped — total ticks=%d, strategies=%d, variants=%d",
+            self._tick_count, len(self._strategies), len(self._variants),
         )
+
+    # ── Variant comparison & persistence ─────────────────────────────────────
+
+    def compare_variants(self) -> ComparisonReport:
+        from .report.comparison import ComparisonReport as CR, build_variant_result
+        if not self._variants:
+            return CR(results=[], asset=self.asset, timeframe=self.timeframe)
+        results = [build_variant_result(v) for v in self._variants]
+        for v in self._variants:
+            v.run_count += 1
+        return CR(
+            results=sorted(results, key=lambda r: r.pnl, reverse=True),
+            asset=self.asset,
+            timeframe=self.timeframe,
+        )
+
+    def list_runs(self, directory: Optional[str] = None) -> list[dict]:
+        from .report.comparison import list_runs as _list_runs
+        return _list_runs(directory=directory)
+
+    def load_run(self, timestamp: str, directory: Optional[str] = None) -> ComparisonReport:
+        from .report.comparison import load_run as _load_run
+        return _load_run(timestamp=timestamp, directory=directory)

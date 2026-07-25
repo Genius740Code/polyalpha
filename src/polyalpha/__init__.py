@@ -153,6 +153,7 @@ from .trading.real_orders import RealOrder, RealPosition
 from .trading.real_wallet import WalletManager
 from .trading.auto_redeem import AutoRedeemConfig
 from .report import ReportPreset
+from .report.comparison import ComparisonReport, VariantResult
 from .bots import Sniper, Tracker
 from .analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator, ChainlinkStreamer, ChainlinkStreamerConfig
 from .database import TradeDatabase
@@ -218,6 +219,9 @@ __all__ = [
     # Bot
     "Bot",
     "BotHub",
+    # Comparison
+    "ComparisonReport",
+    "VariantResult",
     # Environment
     "load_env_file",
     "get_env_config",

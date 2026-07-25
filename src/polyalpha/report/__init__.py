@@ -27,11 +27,16 @@ Usage
 
 from .engine import ReportEngine
 from .presets import ReportPreset, list_presets, load_preset, save_preset
+from .comparison import ComparisonReport, VariantResult, list_runs, load_run
 
 __all__ = [
     "ReportEngine",
     "ReportPreset",
+    "ComparisonReport",
+    "VariantResult",
     "list_presets",
     "load_preset",
     "save_preset",
+    "list_runs",
+    "load_run",
 ]
