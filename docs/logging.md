@@ -147,6 +147,49 @@ export NO_COLOR=1                   # force colors off (widely-adopted)
 
 ---
 
+## Per-Strategy File Logging
+
+`Bot` and `BotHub` accept a `log_dir` parameter that creates rotating file handlers for each strategy automatically.
+
+### Bot
+
+```python
+bot = polyalpha.Bot("BTC", "5m", balance=500, log_dir="./logs")
+# Creates ./logs/BTC_5m.log (5 MB max, 3 backups)
+```
+
+### BotHub
+
+```python
+hub = polyalpha.BotHub("BTC", "5m", log_dir="./logs")
+# Creates ./logs/BTC_momentum.log, ./logs/BTC_value.log, etc.
+```
+
+Each strategy/variant gets its own `{asset}_{name}.log` file with `DEBUG`-level output.
+
+### `setup_strategy_logger()` Helper
+
+For custom use outside of `Bot`/`BotHub`:
+
+```python
+from polyalpha.utils.logging_utils import setup_strategy_logger
+
+log = setup_strategy_logger("my_strategy", "./logs")
+# Creates ./logs/my_strategy.log with rotating handler (5 MB, 3 backups)
+```
+
+```python
+setup_strategy_logger(
+    name,          # logger name and log file basename
+    log_dir,       # directory for the .log file
+    level=logging.DEBUG,
+    max_bytes=5 * 1024 * 1024,  # 5 MB
+    backup_count=3,
+)
+```
+
+---
+
 ## Environment Variables
 
 | Variable | Default | Description |

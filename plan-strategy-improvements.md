@@ -6,6 +6,8 @@ Six feature improvements to eliminate custom wrappers (SharedStreamManager), red
 
 ---
 
+> **STATUS: ✅ DONE** — commit `379c66b`
+
 ## Priority 1: Native Chainlink Price Feed in BotHub
 
 **Files:** `src/polyalpha/stream.py`, `src/polyalpha/analysis/streaming.py`, `src/polyalpha/bot_hub.py`
@@ -34,6 +36,8 @@ Currently `ChainlinkStreamer` (in `analysis/streaming.py`) connects to `wss://ws
 **Dependency:** `ChainlinkStreamer` already exists and works. No structural changes to the stream module needed.
 
 ---
+
+> **STATUS: ✅ DONE** — commit `ed1ad59`
 
 ## Priority 2: Multi-Variant Strategy Framework (highest impact)
 
@@ -72,6 +76,8 @@ Currently `ChainlinkStreamer` (in `analysis/streaming.py`) connects to `wss://ws
 
 ---
 
+> **STATUS: ✅ DONE** — commit `719f98a`
+
 ## Priority 3: Candle-Aware Trading Controls
 
 **Files:** `src/polyalpha/bot_hub.py`, `src/polyalpha/bot.py`
@@ -91,6 +97,8 @@ Currently `ChainlinkStreamer` (in `analysis/streaming.py`) connects to `wss://ws
 **Dependency:** Priority 1b (candle tracking) is required.
 
 ---
+
+> **STATUS: ✅ DONE** — commit `63d7d2f`
 
 ## Priority 4: First-Class Indicator Access via `ctx.indicators`
 
@@ -115,6 +123,8 @@ Currently `ChainlinkStreamer` (in `analysis/streaming.py`) connects to `wss://ws
 
 ---
 
+> **STATUS: ✅ DONE** — commit `b197e65`
+
 ## Priority 5: Built-in Per-Strategy File Logging
 
 **Files:** `src/polyalpha/bot_hub.py`, `src/polyalpha/bot.py`, `src/polyalpha/utils/logging_utils.py`
@@ -134,6 +144,8 @@ Currently `ChainlinkStreamer` (in `analysis/streaming.py`) connects to `wss://ws
 **Dependency:** None.
 
 ---
+
+> **STATUS: ⏳ PENDING** — `run_comparison()` and `comparison_summary()` not yet implemented
 
 ## Priority 6: Strategy Comparison Dashboard
 
@@ -160,25 +172,25 @@ Currently `ChainlinkStreamer` (in `analysis/streaming.py`) connects to `wss://ws
 ## Execution Order
 
 ```
-Phase 1 (core enablers):   #5 Logging  →  #1 Chainlink + Candle
-Phase 2 (framework):       #4 Indicators  →  #2 Variant framework
-Phase 3 (quality of life): #3 Candle guards  →  #6 Dashboard
+Phase 1 (core enablers):   ✅ #5 Logging  →  ✅ #1 Chainlink + Candle
+Phase 2 (framework):       ✅ #4 Indicators  →  ✅ #2 Variant framework
+Phase 3 (quality of life): ✅ #3 Candle guards  →  ⏳ #6 Dashboard
 ```
 
-Each phase can be shipped and released independently.
+Phases 1 & 2 are complete. Phase 3 (Priority 6) remains.
 
 ---
 
 ## Files Changed Summary
 
-| File | Changes |
-|------|---------|
-| `src/polyalpha/bot_hub.py` | Chainlink cache, candle tracking, variant decorator, candle guards, IndicatorAccessor, per-strategy logging, run_comparison |
-| `src/polyalpha/bot.py` | Backport candle guards, IndicatorAccessor, log_dir |
-| `src/polyalpha/stream.py` | Optional: expose candle boundary signal |
-| `src/polyalpha/analysis/_native_ta.py` | Add `bollinger_bands()` function |
-| `src/polyalpha/analysis/streaming.py` | No changes (reused by ChainlinkPriceCache) |
-| `src/polyalpha/core/chainlink_cache.py` | **New** — singleton background ChainlinkStreamer |
-| `src/polyalpha/report/comparison.py` | **New** — variant comparison engine, Rich table, HTML dashboard |
-| `src/polyalpha/utils/logging_utils.py` | `setup_strategy_logger()` helper |
-| `src/polyalpha/__init__.py` | Export new public API symbols |
+| File | Changes | Status |
+|------|---------|--------|
+| `src/polyalpha/bot_hub.py` | Chainlink cache, candle tracking, variant decorator, candle guards, IndicatorAccessor, per-strategy logging | ✅ |
+| `src/polyalpha/bot.py` | Backport candle guards, IndicatorAccessor, log_dir | ✅ |
+| `src/polyalpha/stream.py` | Optional: expose candle boundary signal | ✅ |
+| `src/polyalpha/analysis/_native_ta.py` | Add `bollinger_bands()` function | ✅ |
+| `src/polyalpha/analysis/streaming.py` | No changes (reused by ChainlinkPriceCache) | ✅ |
+| `src/polyalpha/core/chainlink_cache.py` | **New** — singleton background ChainlinkStreamer | ✅ |
+| `src/polyalpha/report/comparison.py` | **New** — variant comparison engine, Rich table | ✅ (HTML dashboard TBD) |
+| `src/polyalpha/utils/logging_utils.py` | `setup_strategy_logger()` helper | ✅ |
+| `src/polyalpha/__init__.py` | Export new public API symbols | ✅ |

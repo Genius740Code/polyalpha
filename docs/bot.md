@@ -28,6 +28,7 @@ bot = polyalpha.Bot(
     paper=True,            # True → paper trade, False → real trade
     mode="simple",         # "simple", "realistic", or "custom"
     paper_config=None,     # PaperConfig for mode="custom"
+    log_dir=None,          # directory for rotating log files
     **kwargs,              # forwarded to polyalpha.Client
 )
 ```
@@ -42,6 +43,7 @@ bot = polyalpha.Bot(
 | `paper` | `True` | `True` for paper trading, `False` for real trading |
 | `mode` | `"simple"` | Execution template: `"simple"`, `"realistic"`, or `"custom"` |
 | `paper_config` | `None` | `PaperConfig` instance (only used when `mode="custom"`) |
+| `log_dir` | `None` | Directory for rotating per-bot log files (5 MB max, 3 backups) |
 | `**kwargs` | — | Extra keyword arguments forwarded to `polyalpha.Client` |
 
 Raises `ValueError` if the asset or timeframe is unsupported.
@@ -217,14 +219,41 @@ def strategy(ctx):
 | `market` | `Market \| None` | The currently active market |
 | `tick_count` | `int` | Number of price ticks received this session |
 | `trade_count` | `int` | Number of trades executed |
-| `rsi` | `float \| None` | RSI(14) — requires `pandas` |
-| `sma_20` | `float \| None` | SMA(20) — requires `pandas` |
-| `ema_12` | `float \| None` | EMA(12) — requires `pandas` |
+| `candle_id` | `int` | Current candle identifier (increments on each new candle) |
+| `seconds_in` | `float` | Seconds elapsed since the start of the current candle |
+| `indicators` | `IndicatorAccessor` | First-class indicator access — see below |
+| `rsi` | `float \| None` | RSI(14) — legacy, prefer `ctx.indicators.rsi(14)` |
+| `sma_20` | `float \| None` | SMA(20) — legacy, prefer `ctx.indicators.sma(20)` |
+| `ema_12` | `float \| None` | EMA(12) — legacy, prefer `ctx.indicators.ema(12)` |
 
-Indicator properties return `None` if:
-- `pandas` is not installed
-- The native TA module is unavailable
-- Not enough price history (minimum 14 ticks for RSI)
+### IndicatorAccessor (`ctx.indicators`)
+
+First-class indicator API with per-tick caching. All methods accept parameterized periods.
+
+```python
+# RSI with custom period
+rsi = ctx.indicators.rsi(14)
+
+# MACD with custom fast/slow/signal
+macd = ctx.indicators.macd(12, 26, 9)  # → MACDResult(macd, signal, histogram)
+
+# Bollinger Bands
+bb = ctx.indicators.bollinger_bands(20, 2)  # → BBResult(upper, mid, lower)
+
+# Moving averages
+sma = ctx.indicators.sma(20)
+ema = ctx.indicators.ema(12)
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `rsi(period=14)` | `float \| None` | Relative Strength Index |
+| `sma(period=20)` | `float \| None` | Simple Moving Average |
+| `ema(period=12)` | `float \| None` | Exponential Moving Average |
+| `macd(fast=12, slow=26, signal=9)` | `MACDResult \| None` | MACD line, signal, histogram |
+| `bollinger_bands(period=20, std=2)` | `BBResult \| None` | Upper, mid, lower bands |
+
+All return `None` when `pandas` is not installed or there is insufficient price history.
 
 ### Methods
 
@@ -261,6 +290,17 @@ Close (sell) an open position.
 | `amount` | `float \| None` | USDC amount to sell. Defaults to the full position |
 
 Returns a `PaperOrder`.
+
+#### `buy_once_per_candle(side, amount)`
+
+Buy only if `side` hasn't been bought yet in the current candle. Safe to call repeatedly — subsequent calls within the same candle for the same side are silently skipped.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `side` | `str` | `"UP"` or `"DOWN"` |
+| `amount` | `float` | USDC to spend |
+
+Returns a `PaperOrder` or `None` (if already bought this candle).
 
 ---
 
@@ -382,9 +422,21 @@ hub = polyalpha.BotHub(
     default_balance=100.0,    # default starting balance per strategy
     mode="simple",            # "simple", "realistic", or "custom"
     paper_config=None,        # PaperConfig for mode="custom"
+    chainlink=True,           # enable Chainlink oracle price feed
+    log_dir=None,             # directory for per-strategy rotating log files
     **kwargs,                 # forwarded to polyalpha.Client
 )
 ```
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `asset` | `"BTC"` | Trading asset |
+| `timeframe` | `"5m"` | Market timeframe |
+| `default_balance` | `100.0` | Default starting balance per strategy/variant |
+| `mode` | `"simple"` | Fee/execution template |
+| `paper_config` | `None` | `PaperConfig` for `mode="custom"` |
+| `chainlink` | `True` | Enable background Chainlink oracle price feed (`ctx.spot_price`) |
+| `log_dir` | `None` | Directory for per-strategy rotating log files (5 MB max, 3 backups) |
 
 ### Registration
 
@@ -412,23 +464,114 @@ Non-decorator equivalent:
 hub.add_strategy("momentum", momentum_fn, balance=500)
 ```
 
+#### `@hub.variant(name, balance=None, params=None, id="")`
+
+Decorator that registers a **variant** — like a strategy, but carries parameter metadata for cross-variant comparison. Variants share the same stream but get isolated paper engines.
+
+```python
+@hub.variant("rsi_70", params={"threshold": 70})
+def rsi_70(ctx):
+    if ctx.indicators.rsi(14) and ctx.indicators.rsi(14) > 70:
+        ctx.buy("DOWN", 10)
+
+@hub.variant("rsi_30", params={"threshold": 30})
+def rsi_30(ctx):
+    if ctx.indicators.rsi(14) and ctx.indicators.rsi(14) < 30:
+        ctx.buy("UP", 10)
+
+hub.run()
+report = hub.compare_variants()  # sorted by P&L
+report.print()
+```
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | `str` | — | Unique variant name |
+| `balance` | `float \| None` | `default_balance` | Per-variant starting balance |
+| `params` | `dict \| None` | `{}` | Free-form metadata surfaced in comparison reports |
+| `id` | `str` | `""` | Stable identifier for persistence (defaults to name) |
+
+#### `hub.add_variant(name, fn, balance=None, params=None, id="")`
+
+Non-decorator equivalent for variant registration.
+
 ### StrategyContext
 
-Same public API as `TickContext` (`.price`, `.buy()`, `.limit()`, `.rsi`, `.sma_20`, etc.), plus a `.name` property identifying which strategy is running.
+Same public API as `TickContext` plus Chainlink/candle properties and a `.name` identifier.
+
+```python
+@hub.strategy("example")
+def strategy(ctx):
+    # Chainlink spot price (requires chainlink=True)
+    spot = ctx.spot_price
+
+    # Candle-aware trading
+    ctx.buy_once_per_candle("UP", 20)
+    ctx.buy_in_window("DOWN", 10, min_seconds=30, max_seconds=120)
+
+    # Indicators
+    macd = ctx.indicators.macd(12, 26, 9)
+    bb = ctx.indicators.bollinger_bands(20, 2)
+```
 
 | Property | Returns | Description |
 |----------|---------|-------------|
 | `price` | `PriceSnapshot` | Current UP/DOWN prices from the shared stream |
+| `spot_price` | `float \| None` | Current Chainlink oracle price (requires `chainlink=True`) |
 | `balance` | `float` | This strategy's paper balance |
 | `positions` | `list` | This strategy's open positions |
 | `pnl` | `float` | This strategy's realised P&L |
 | `market` | `Market \| None` | The current shared market |
 | `name` | `str` | This strategy's registered name |
-| `rsi` | `float \| None` | RSI(14) — requires `pandas` |
-| `sma_20` | `float \| None` | SMA(20) — requires `pandas` |
-| `ema_12` | `float \| None` | EMA(12) — requires `pandas` |
+| `candle_open` | `float \| None` | Opening price of the current candle |
+| `seconds_in` | `float` | Seconds elapsed since the start of the current candle |
+| `candle_id` | `int` | Current candle identifier (increments on each new candle) |
+| `indicators` | `IndicatorAccessor` | Parameterized indicators — `rsi(14)`, `macd(12,26,9)`, `bollinger_bands(20,2)`, `sma(20)`, `ema(12)` |
+| `rsi` | `float \| None` | RSI(14) — legacy, prefer `ctx.indicators.rsi(14)` |
+| `sma_20` | `float \| None` | SMA(20) — legacy, prefer `ctx.indicators.sma(20)` |
+| `ema_12` | `float \| None` | EMA(12) — legacy, prefer `ctx.indicators.ema(12)` |
 
-Methods: `buy(side, amount)`, `limit(side, price, amount)`, `close_position(side, amount=None)` — same signatures as `TickContext`.
+Methods: `buy(side, amount)`, `limit(side, price, amount)`, `close_position(side, amount=None)`, `buy_once_per_candle(side, amount)`, `buy_in_window(side, amount, min_seconds, max_seconds)` — same signatures as `TickContext`.
+
+### Cross-Variant Comparison
+
+After running the hub, compare all registered variants:
+
+```python
+hub.run()
+report = hub.compare_variants()
+report.print()
+```
+
+Output is a Rich table sorted by P&L:
+
+| Rank | Variant | Trades | Win% | P&L | Sharpe | DD | Balance |
+|------|---------|--------|------|-----|--------|----|---------|
+
+```python
+# Access results programmatically
+for r in report.results:
+    print(f"{r.name}: P&L=${r.pnl:.2f} win%={r.win_rate:.1f}")
+
+report.top_variant    # highest P&L
+report.bottom_variant # lowest P&L
+report.variant_count  # number of variants
+report.to_dict()      # JSON-serialisable dict
+```
+
+### Persisting & Loading Runs
+
+Comparison snapshots are automatically saved to `~/.polyalpha/variants/`.
+
+```python
+# List past runs
+hub.list_runs()
+# [{"timestamp": "...", "path": "...", "variants": ["rsi_70", "rsi_30"]}, ...]
+
+# Load a previous run
+report = hub.load_run("20260724_153000")
+report.print()
+```
 
 ### Running
 
@@ -447,9 +590,12 @@ hub.stop()
 
 | Property | Returns | Description |
 |----------|---------|-------------|
-| `stats` | `dict` | Per-strategy running stats |
+| `stats` | `dict` | Per-strategy and per-variant running stats |
 | `tick_count` | `int` | Total price ticks received |
-| `strategy_count` | `int` | Number of registered strategies |
+| `strategy_count` | `int` | Number of registered strategies (excludes variants) |
+| `variant_count` | `int` | Number of registered variants |
+| `total_count` | `int` | Combined strategies + variants |
+| `variants` | `list[Variant]` | Read-only view of registered variants |
 
 `stats` format:
 
@@ -459,6 +605,10 @@ hub.stop()
     "strategies": {
         "momentum": {"balance": 480.0, "pnl": -20.0, "open_positions": 2},
         "value":    {"balance": 520.0, "pnl": 20.0,  "open_positions": 0},
+    },
+    "variants": {
+        "rsi_70": {"balance": 510.0, "pnl": 10.0, "open_positions": 1, "params": {"threshold": 70}},
+        "rsi_30": {"balance": 490.0, "pnl": -10.0, "open_positions": 0, "params": {"threshold": 30}},
     },
 }
 ```
