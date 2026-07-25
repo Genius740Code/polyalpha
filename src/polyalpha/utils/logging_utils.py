@@ -9,16 +9,17 @@ import functools
 import inspect
 import json
 import logging
+import logging.handlers
 import os
 import re
 import sys
 import time
-from contextvars import ContextVar
-from contextlib import contextmanager
-from datetime import datetime, timezone
-from typing import Any, Optional, Generator
 import uuid
-
+from collections.abc import Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from datetime import datetime, timezone
+from typing import Any, Optional
 
 DEFAULT_LOG_FORMAT = "[%(asctime)s] %(levelname)-8s %(name)s %(message)s"
 DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -132,7 +133,7 @@ class SensitiveDataFilter(logging.Filter):
         """
         super().__init__()
         self.redact_file_paths = redact_file_paths
-        
+
         if redact_file_paths:
             # Add file path pattern
             self.PATTERNS.append(
@@ -191,10 +192,10 @@ class SensitiveDataFilter(logging.Filter):
                 else:
                     new_args.append(arg)
             record.args = tuple(new_args)
-        
+
         # Don't redact the message template - it may contain format specifiers
         # The args are already redacted, so the final formatted message will be safe
-        
+
         return True
 
 
@@ -243,15 +244,15 @@ class SensitiveDataFormatter(logging.Formatter):
         """
         # First apply the filter to redact args and msg
         self.filter.filter(record)
-        
+
         # Then format normally
         formatted = super().format(record)
-        
+
         # Prepend correlation ID if set
         cid = get_correlation_id()
         if self.include_correlation_id and cid:
             formatted = f"[cid={cid[:8]}] {formatted}"
-        
+
         # Finally redact the formatted message to catch any remaining sensitive data
         return self.filter.redact_string(formatted)
 
@@ -374,14 +375,14 @@ def setup_sensitive_data_logging(
         logger = logging.getLogger(logger_name)
     else:
         logger = logging.getLogger()
-    
+
     # Add the sensitive data filter
     sensitive_filter = SensitiveDataFilter(redact_file_paths=redact_file_paths)
     logger.addFilter(sensitive_filter)
-    
+
     # Set the logging level
     logger.setLevel(level)
-    
+
     return logger
 
 
@@ -660,3 +661,55 @@ def _make_logged(func, level, log_args, log_result, log_error, skip_args, max_ar
     if inspect.iscoroutinefunction(func):
         return async_wrapper
     return wrapper
+
+
+# ── Per-strategy file logging ────────────────────────────────────────────────
+
+def setup_strategy_logger(
+    name: str,
+    log_dir: str,
+    level: int = logging.DEBUG,
+    max_bytes: int = 5 * 1024 * 1024,
+    backup_count: int = 3,
+) -> logging.Logger:
+    """Create a logger with a rotating file handler for a strategy.
+
+    The logger is named ``polyalpha.strategy.{name}``.  Each call for the
+    same *name* returns the same logger without adding duplicate handlers.
+
+    Parameters
+    ----------
+    name : str
+        Strategy name (used as the log file base name and logger suffix).
+    log_dir : str
+        Directory for log files (created if missing).
+    level : int
+        Logging level (default ``DEBUG``).
+    max_bytes : int
+        Maximum size per log file before rotation (default 5 MB).
+    backup_count : int
+        Number of rotated backup files to keep (default 3).
+
+    Returns
+    -------
+    logging.Logger
+        The configured logger.
+    """
+    logger = logging.getLogger(f"polyalpha.strategy.{name}")
+    if logger.handlers:
+        return logger
+    logger.setLevel(level)
+    logger.propagate = False
+
+    os.makedirs(log_dir, exist_ok=True)
+    handler = logging.handlers.RotatingFileHandler(
+        os.path.join(log_dir, f"{name}.log"),
+        maxBytes=max_bytes,
+        backupCount=backup_count,
+    )
+    handler.setLevel(level)
+    handler.setFormatter(
+        logging.Formatter(DEFAULT_LOG_FORMAT, datefmt=DEFAULT_DATE_FORMAT)
+    )
+    logger.addHandler(handler)
+    return logger

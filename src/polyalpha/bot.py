@@ -24,9 +24,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Callable, Optional
-
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
 
 from .client import Client
 from .core import (
@@ -50,8 +48,11 @@ except ImportError:
     pd = None  # type: ignore[assignment]
 
 try:
-    from .analysis._native_ta import rsi as _rsi, sma as _sma, ema as _ema
-    from .analysis._native_ta import macd as _macd, bbands as _bbands
+    from .analysis._native_ta import bbands as _bbands
+    from .analysis._native_ta import ema as _ema
+    from .analysis._native_ta import macd as _macd
+    from .analysis._native_ta import rsi as _rsi
+    from .analysis._native_ta import sma as _sma
 except ImportError:
     _rsi = _sma = _ema = _macd = _bbands = None
 
@@ -343,6 +344,9 @@ class Bot:
         or ``"custom"`` (use ``paper_config``) (default ``"simple"``).
     paper_config : PaperConfig, optional
         PaperConfig instance for ``mode="custom"``. Ignored otherwise.
+    log_dir : str, optional
+        Directory for a rotating log file.  If set, a ``{asset}_{timeframe}.log``
+        file (5 MB max, 3 backups) is created with DEBUG-level output.
     kwargs
         Extra keyword arguments forwarded to polyalpha.Client.
 
@@ -365,7 +369,8 @@ class Bot:
         balance: float = 100.0,
         paper: bool = True,
         mode: str = "simple",
-        paper_config: Optional["PaperConfig"] = None,
+        paper_config: Optional[PaperConfig] = None,
+        log_dir: Optional[str] = None,
         **kwargs,
     ):
         asset = asset.upper()
@@ -395,7 +400,7 @@ class Bot:
         self._stream = None
         self._strategy: Optional[Callable] = None
         self._on_resolve: Optional[Callable] = None
-        self._condition: Optional["Condition"] = None
+        self._condition: Optional[Condition] = None
         self._buy_side: Optional[str] = None
         self._buy_amount: Optional[float] = None
         self._bought_this_cycle: bool = False
@@ -408,6 +413,14 @@ class Bot:
         self._trade_count = 0
         self._ctx: Optional[TickContext] = None
         self._log = logging.getLogger("polyalpha.Bot")
+        self._log_dir = log_dir
+        if log_dir:
+            from .utils.logging_utils import setup_strategy_logger
+            self._slog = setup_strategy_logger(
+                f"{asset}_{timeframe}", log_dir,
+            )
+        else:
+            self._slog = self._log
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -435,7 +448,7 @@ class Bot:
         self._on_resolve = fn
         return fn
 
-    def when(self, condition: "Condition") -> "Bot":
+    def when(self, condition: Condition) -> Bot:
         """
         Set a condition that triggers a trade.
 
@@ -458,7 +471,7 @@ class Bot:
         self._condition = condition
         return self
 
-    def buy(self, side: str, amount: float) -> "Bot":
+    def buy(self, side: str, amount: float) -> Bot:
         """
         Set the default trade action when the condition is met.
 
@@ -645,7 +658,7 @@ class Bot:
                 try:
                     self._strategy(self._ctx)
                 except Exception as exc:
-                    self._log.exception("Strategy error: %s", exc)
+                    self._slog.exception("Strategy error: %s", exc)
 
         @self._stream.on("close")
         def on_close():
@@ -681,7 +694,7 @@ class Bot:
                 try:
                     self._strategy(self._ctx)
                 except Exception as exc:
-                    self._log.exception("Strategy error: %s", exc)
+                    self._slog.exception("Strategy error: %s", exc)
 
         @self._stream.on("close")
         def on_close():
@@ -712,7 +725,7 @@ class Bot:
         for pos in self._client.paper.positions():
             if pos.resolved:
                 self._trade_count += 1
-                self._log.info(
+                self._slog.info(
                     "Trade resolved: %s %s | pnl=$%.2f",
                     pos.side, pos.outcome, pos.pnl,
                 )
@@ -720,7 +733,7 @@ class Bot:
                     try:
                         self._on_resolve(pos)
                     except Exception as exc:
-                        self._log.exception("onresolve handler error: %s", exc)
+                        self._slog.exception("onresolve handler error: %s", exc)
 
     def _rollover(self) -> None:
         """Clean up and prepare for next cycle."""

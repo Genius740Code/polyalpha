@@ -72,11 +72,11 @@ except ImportError:
     pd = None  # type: ignore[assignment]
 
 try:
+    from .analysis._native_ta import bbands as _bbands
     from .analysis._native_ta import ema as _ema
+    from .analysis._native_ta import macd as _macd
     from .analysis._native_ta import rsi as _rsi
     from .analysis._native_ta import sma as _sma
-    from .analysis._native_ta import macd as _macd
-    from .analysis._native_ta import bbands as _bbands
 except ImportError:
     _rsi = _sma = _ema = _macd = _bbands = None
 
@@ -505,6 +505,10 @@ class BotHub:
         Fee/execution template: ``"simple"``, ``"realistic"``, ``"custom"``.
     paper_config : PaperConfig, optional
         Custom paper config when ``mode="custom"``.
+    log_dir : str, optional
+        Directory for per-strategy rotating log files.  If set, each
+        strategy and variant gets its own ``{name}.log`` file (5 MB max,
+        3 backups) with DEBUG-level output.
 
     Usage
     -----
@@ -531,6 +535,7 @@ class BotHub:
         mode: str = "simple",
         paper_config: Optional[PaperConfig] = None,
         chainlink: bool = True,
+        log_dir: Optional[str] = None,
         **kwargs,
     ):
         asset = asset.upper()
@@ -548,6 +553,7 @@ class BotHub:
         self.timeframe = timeframe
         self.default_balance = default_balance
         self.mode = mode
+        self._log_dir = log_dir
 
         from .trading.paper_config import get_paper_config_from_preset
 
@@ -585,6 +591,7 @@ class BotHub:
             except Exception as exc:
                 self._log.warning("Chainlink cache unavailable: %s", exc)
         self._log = logging.getLogger("polyalpha.BotHub")
+        self._strategy_loggers: dict[str, logging.Logger] = {}
 
     # ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -898,6 +905,13 @@ class BotHub:
                 get_candle_id=lambda: self._candle_id,
                 bought_this_candle=self._bought_this_candle,
             )
+            # Per-strategy rotating file logger
+            if self._log_dir and s.name not in self._strategy_loggers:
+                from .utils.logging_utils import setup_strategy_logger
+                slog = setup_strategy_logger(
+                    f"{self.asset}_{s.name}", self._log_dir,
+                )
+                self._strategy_loggers[s.name] = slog
 
     def _stream_prices(self) -> None:
         """Set up ONE stream and fan ticks out to all strategies + variants."""
@@ -939,7 +953,8 @@ class BotHub:
                 try:
                     s.fn(s.ctx)
                 except Exception as exc:
-                    self._log.exception(
+                    slog = self._strategy_loggers.get(s.name, self._log)
+                    slog.exception(
                         "Strategy '%s' raised: %s", s.name, exc
                     )
 
@@ -985,7 +1000,8 @@ class BotHub:
                 try:
                     s.fn(s.ctx)
                 except Exception as exc:
-                    self._log.exception(
+                    slog = self._strategy_loggers.get(s.name, self._log)
+                    slog.exception(
                         "Strategy '%s' raised: %s", s.name, exc
                     )
 
@@ -1004,9 +1020,10 @@ class BotHub:
                 continue
             for pos in s.paper.positions():
                 if pos.resolved:
-                    self._log.info(
-                        "[%s] Trade resolved: %s %s | pnl=$%.2f",
-                        s.name, pos.side, pos.outcome, pos.pnl,
+                    slog = self._strategy_loggers.get(s.name, self._log)
+                    slog.info(
+                        "Trade resolved: %s %s | pnl=$%.2f",
+                        pos.side, pos.outcome, pos.pnl,
                     )
 
     def _rollover(self) -> None:
@@ -1077,7 +1094,8 @@ class BotHub:
     # ── Variant comparison & persistence ─────────────────────────────────────
 
     def compare_variants(self) -> ComparisonReport:
-        from .report.comparison import ComparisonReport as CR, build_variant_result
+        from .report.comparison import ComparisonReport as CR
+        from .report.comparison import build_variant_result
         if not self._variants:
             return CR(results=[], asset=self.asset, timeframe=self.timeframe)
         results = [build_variant_result(v) for v in self._variants]
