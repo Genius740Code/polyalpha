@@ -48,7 +48,7 @@ import random
 import threading
 import time
 from collections import defaultdict
-from typing import Callable
+from typing import Any, Callable
 
 from .utils.logging_utils import mask_transaction_hash
 
@@ -410,6 +410,7 @@ class Stream:
                 async for raw in ws:
                     if self._is_stopped():
                         break
+                    await self._message_rate_limiter.acquire_async()
                     self._on_message_async(ws, raw)
             except websockets.ConnectionClosed:
                 pass
@@ -712,8 +713,8 @@ class Stream:
         if changed:
             self._last_price_time = time.time()
             # Only emit if price change exceeds threshold
-            if (abs(self.up - self._last_emitted_up) >= self._price_threshold or
-                abs(self.down - self._last_emitted_down) >= self._price_threshold):
+            if (abs(self.up - self._last_emitted_up) > self._price_threshold or
+                abs(self.down - self._last_emitted_down) > self._price_threshold):
                 self._emit("price", self.up, self.down)
                 self._last_emitted_up = self.up
                 self._last_emitted_down = self.down
@@ -728,5 +729,4 @@ class Stream:
                 log.exception("Stream: handler '%s' raised: %s", event, exc)
 
 
-# Type hint alias used inside _publish_prices
-from typing import Any
+

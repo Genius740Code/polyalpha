@@ -11,6 +11,7 @@ the next two so we always catch a market even if the clock is mid-window.
 
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import logging
 import time
@@ -92,14 +93,12 @@ class RateLimiter:
         self.last_update = time.time()
         self._lock = Lock()
 
-    def acquire(self) -> None:
-        """Block until a token is available."""
-        wait_time = 0.0
+    def _wait_time(self) -> float:
+        """Compute wait time and consume a token. Returns seconds to wait."""
         with self._lock:
             now = time.time()
             elapsed = now - self.last_update
             
-            # Refill tokens based on elapsed time
             self.tokens = min(
                 float(self.max_requests),
                 self.tokens + elapsed * (self.max_requests / self.period)
@@ -107,14 +106,24 @@ class RateLimiter:
             self.last_update = now
             
             if self.tokens < 1:
-                # Queue request by allowing tokens to go negative, compute wait
-                wait_time = (1 - self.tokens) * (self.period / self.max_requests)
-                self.tokens -= 1
+                wt = (1.0 - self.tokens) * (self.period / self.max_requests)
+                self.tokens = 0.0
+                return wt
             else:
-                self.tokens -= 1
-                
-        if wait_time > 0:
-            time.sleep(wait_time)
+                self.tokens -= 1.0
+                return 0.0
+
+    def acquire(self) -> None:
+        """Block until a token is available."""
+        wt = self._wait_time()
+        if wt > 0:
+            time.sleep(wt)
+
+    async def acquire_async(self) -> None:
+        """Await until a token is available (async-friendly)."""
+        wt = self._wait_time()
+        if wt > 0:
+            await asyncio.sleep(wt)
 
 # ── MarketClient ───────────────────────────────────────────────────────────────
 

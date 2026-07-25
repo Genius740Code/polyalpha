@@ -270,8 +270,9 @@ def test_stream_dispatch_price_change():
     
     # Price should be updated
     assert stream.up == 0.60
-    # Event should be emitted (if threshold exceeded)
-    assert len(events_called) >= 0
+    # Event should be emitted (0.05 change exceeds 0.0001 threshold)
+    assert len(events_called) == 1
+    assert events_called[0] == ("price", 0.60, 0.45)
 
 
 @pytest.mark.unit
