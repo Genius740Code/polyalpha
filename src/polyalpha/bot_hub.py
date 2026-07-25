@@ -142,12 +142,20 @@ class StrategyContext:
         paper: PaperEngine,
         market: Optional[Market],
         price_history: deque,
+        asset: str = "BTC",
+        chainlink_cache: Optional[object] = None,
+        get_candle_open=None,
+        get_seconds_in=None,
     ):
         self.name = name
+        self._asset = asset
         self._stream = stream
         self._paper = paper
         self._market = market
         self._price_history = price_history  # shared across strategies
+        self._chainlink_cache = chainlink_cache
+        self._get_candle_open = get_candle_open or (lambda: None)
+        self._get_seconds_in = get_seconds_in or (lambda: 0.0)
         self._cached_series = None
 
     # ── Prices ──────────────────────────────────────────────────────────────
@@ -158,6 +166,26 @@ class StrategyContext:
             up=getattr(self._stream, "up", FALLBACK_PRICE),
             down=getattr(self._stream, "down", FALLBACK_PRICE),
         )
+
+    @property
+    def spot_price(self) -> Optional[float]:
+        """Current Chainlink oracle price for the hub's asset, or *None*."""
+        if self._chainlink_cache is not None:
+            try:
+                return self._chainlink_cache.get_price(self._asset)
+            except Exception:
+                pass
+        return None
+
+    @property
+    def candle_open(self) -> Optional[float]:
+        """Opening price of the current candle, or *None* if no tick yet."""
+        return self._get_candle_open()
+
+    @property
+    def seconds_in(self) -> float:
+        """Seconds elapsed since the start of the current candle."""
+        return self._get_seconds_in()
 
     # ── Account ─────────────────────────────────────────────────────────────
 
@@ -349,6 +377,7 @@ class BotHub:
         default_balance: float = 100.0,
         mode: str = "simple",
         paper_config: Optional[PaperConfig] = None,
+        chainlink: bool = True,
         **kwargs,
     ):
         asset = asset.upper()
@@ -391,6 +420,15 @@ class BotHub:
         self._price_history: deque[float] = deque(maxlen=200)
         self._stop_event = threading.Event()
         self._tick_count = 0
+        self._candle_start_time: float = 0.0
+        self._candle_open_price: Optional[float] = None
+        self._chainlink_cache: Optional[object] = None
+        if chainlink:
+            try:
+                from .core.chainlink_cache import ChainlinkPriceCache
+                self._chainlink_cache = ChainlinkPriceCache(symbol=self.asset)
+            except Exception as exc:
+                self._log.warning("Chainlink cache unavailable: %s", exc)
         self._log = logging.getLogger("polyalpha.BotHub")
 
     # ── Helpers ─────────────────────────────────────────────────────────────
@@ -698,6 +736,10 @@ class BotHub:
                 paper=s.paper,
                 market=self._market,
                 price_history=self._price_history,
+                asset=self.asset,
+                chainlink_cache=self._chainlink_cache,
+                get_candle_open=lambda: self._candle_open_price,
+                get_seconds_in=lambda: max(0.0, time.time() - self._candle_start_time),
             )
 
     def _stream_prices(self) -> None:
@@ -718,6 +760,13 @@ class BotHub:
                 return
             self._tick_count += 1
             self._price_history.append(up)
+            # ── Candle tracking ──────────────────────────────────────────
+            now = time.time()
+            tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
+            candle_start = (now // tf_seconds) * tf_seconds
+            if candle_start != self._candle_start_time:
+                self._candle_start_time = candle_start
+                self._candle_open_price = up
             # Invalidate each context's cached price series so indicators
             # recompute on the new history.
             for s in self._active_tickers():
@@ -758,6 +807,13 @@ class BotHub:
                 return
             self._tick_count += 1
             self._price_history.append(up)
+            # ── Candle tracking ──────────────────────────────────────────
+            now = time.time()
+            tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
+            candle_start = (now // tf_seconds) * tf_seconds
+            if candle_start != self._candle_start_time:
+                self._candle_start_time = candle_start
+                self._candle_open_price = up
             for s in self._active_tickers():
                 if s.ctx is not None:
                     s.ctx._invalidate_series_cache()
@@ -840,6 +896,11 @@ class BotHub:
         if self._stream:
             try:
                 self._stream.stop()
+            except Exception:
+                pass
+        if self._chainlink_cache is not None:
+            try:
+                self._chainlink_cache.stop()
             except Exception:
                 pass
         self._shared_client.close()
