@@ -145,7 +145,7 @@ from .core import Market
 from .core.env import load_env_file, get_env_config
 from .stream import Stream
 from .bot import Bot
-from .bot_hub import BotHub
+from .bot_hub import BotHub, IndicatorAccessor, MACDResult, BBResult
 from .trading import PaperEngine, RealTradingEngine
 from .trading.paper_config import PaperConfig
 from .trading.real_config import RealTradingConfig
@@ -222,6 +222,10 @@ __all__ = [
     # Comparison
     "ComparisonReport",
     "VariantResult",
+    # Indicators
+    "IndicatorAccessor",
+    "MACDResult",
+    "BBResult",
     # Environment
     "load_env_file",
     "get_env_config",

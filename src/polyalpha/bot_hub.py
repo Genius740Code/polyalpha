@@ -58,10 +58,10 @@ import asyncio
 import logging
 import threading
 import time
-from collections import deque
+from collections import deque, namedtuple
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional, Union
 
 if TYPE_CHECKING:
     from .report.comparison import ComparisonReport
@@ -75,8 +75,13 @@ try:
     from .analysis._native_ta import ema as _ema
     from .analysis._native_ta import rsi as _rsi
     from .analysis._native_ta import sma as _sma
+    from .analysis._native_ta import macd as _macd
+    from .analysis._native_ta import bbands as _bbands
 except ImportError:
-    _rsi = _sma = _ema = None
+    _rsi = _sma = _ema = _macd = _bbands = None
+
+MACDResult = namedtuple("MACDResult", ["macd", "signal", "histogram"])
+BBResult = namedtuple("BBResult", ["upper", "mid", "lower"])
 
 from .client import Client
 from .core import (
@@ -99,6 +104,88 @@ class PriceSnapshot:
     """Current UP/DOWN prices from the shared stream."""
     up: float
     down: float
+
+
+# ── Indicator Accessor ─────────────────────────────────────────────────────────
+
+class IndicatorAccessor:
+    """First-class indicator access via ``ctx.indicators.rsi(14)``, etc.
+
+    Wraps the shared price history deque and caches computed results within
+    a single tick. Call ``invalidate()`` to clear the per-tick cache when
+    new price data arrives.
+    """
+
+    def __init__(self, get_series_fn):
+        self._get_series = get_series_fn
+        self._cache: dict[tuple, object] = {}
+
+    def invalidate(self) -> None:
+        self._cache.clear()
+
+    def _resolve(self, val):
+        if val is None:
+            return None
+        try:
+            return None if pd.isna(val) else float(val)
+        except Exception:
+            return None
+
+    def _get(self, key, compute_fn):
+        if key in self._cache:
+            return self._cache[key]
+        series = self._get_series()
+        if series is None:
+            return None
+        result = compute_fn(series)
+        self._cache[key] = result
+        return result
+
+    def rsi(self, period: int = 14) -> Optional[float]:
+        """Relative Strength Index."""
+        if _rsi is None:
+            return None
+        return self._get(("rsi", period), lambda s: self._resolve(_rsi(s, period).iloc[-1]))
+
+    def sma(self, period: int = 20) -> Optional[float]:
+        """Simple Moving Average."""
+        if _sma is None:
+            return None
+        return self._get(("sma", period), lambda s: self._resolve(_sma(s, period).iloc[-1]))
+
+    def ema(self, period: int = 12) -> Optional[float]:
+        """Exponential Moving Average."""
+        if _ema is None:
+            return None
+        return self._get(("ema", period), lambda s: self._resolve(_ema(s, period).iloc[-1]))
+
+    def macd(self, fast: int = 12, slow: int = 26, signal: int = 9) -> Optional[MACDResult]:
+        """MACD indicator returning ``MACDResult(macd, signal, histogram)``."""
+        if _macd is None:
+            return None
+        def _compute(s):
+            df = _macd(s, fast, slow, signal)
+            macd_v = float(df.iloc[-1, 0])
+            sig_v = float(df.iloc[-1, 1])
+            hist_v = float(df.iloc[-1, 2])
+            if pd.isna(macd_v) or pd.isna(sig_v) or pd.isna(hist_v):
+                return None
+            return MACDResult(macd=macd_v, signal=sig_v, histogram=hist_v)
+        return self._get(("macd", fast, slow, signal), _compute)
+
+    def bollinger_bands(self, period: int = 20, std: Union[float, int] = 2.0) -> Optional[BBResult]:
+        """Bollinger Bands returning ``BBResult(upper, mid, lower)``."""
+        if _bbands is None:
+            return None
+        def _compute(s):
+            df = _bbands(s, period, float(std))
+            upper_v = float(df.iloc[-1, 2])
+            mid_v = float(df.iloc[-1, 1])
+            lower_v = float(df.iloc[-1, 0])
+            if pd.isna(upper_v) or pd.isna(mid_v) or pd.isna(lower_v):
+                return None
+            return BBResult(upper=upper_v, mid=mid_v, lower=lower_v)
+        return self._get(("bb", period, std), _compute)
 
 
 # ── Strategy Context ───────────────────────────────────────────────────────────
@@ -125,8 +212,12 @@ class StrategyContext:
         The current shared market.
     name : str
         This strategy's registered name.
+    indicators : IndicatorAccessor
+        First-class indicator access: ``.indicators.rsi(14)``,
+        ``.indicators.macd(12, 26, 9)``,
+        ``.indicators.bollinger_bands(20, 2)``, etc.
     rsi, sma_20, ema_12 : float | None
-        Indicators computed on the shared price history.
+        Legacy indicators (prefer ``ctx.indicators.rsi(14)``, etc.).
 
     Methods
     -------
@@ -161,6 +252,7 @@ class StrategyContext:
         self._get_candle_id: Callable[[], int] = get_candle_id or (lambda: 0)
         self._bought_this_candle: dict[int, dict[str, set[str]]] = bought_this_candle if bought_this_candle is not None else {}
         self._cached_series = None
+        self._indicators: IndicatorAccessor = IndicatorAccessor(self._get_price_series)
 
     # ── Prices ──────────────────────────────────────────────────────────────
 
@@ -283,8 +375,23 @@ class StrategyContext:
         self._cached_series = pd.Series(list(self._price_history))
         return self._cached_series
 
+    @property
+    def indicators(self) -> IndicatorAccessor:
+        """First-class indicator access (RSI, MACD, Bollinger Bands, SMA, EMA).
+
+        Examples
+        --------
+        >>> ctx.indicators.rsi(14)
+        >>> ctx.indicators.macd(12, 26, 9)
+        >>> ctx.indicators.bollinger_bands(20, 2)
+        >>> ctx.indicators.sma(20)
+        >>> ctx.indicators.ema(12)
+        """
+        return self._indicators
+
     def _invalidate_series_cache(self) -> None:
         self._cached_series = None
+        self._indicators.invalidate()
 
     @property
     def rsi(self) -> Optional[float]:

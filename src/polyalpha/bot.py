@@ -51,8 +51,14 @@ except ImportError:
 
 try:
     from .analysis._native_ta import rsi as _rsi, sma as _sma, ema as _ema
+    from .analysis._native_ta import macd as _macd, bbands as _bbands
 except ImportError:
-    _rsi = _sma = _ema = None
+    _rsi = _sma = _ema = _macd = _bbands = None
+
+try:
+    from .bot_hub import IndicatorAccessor
+except ImportError:
+    IndicatorAccessor = None  # type: ignore[assignment, misc]
 
 
 # ── Price Snapshot ─────────────────────────────────────────────────────────────
@@ -82,12 +88,16 @@ class TickContext:
         Total realised P&L.
     market : Market
         The current market being traded.
+    indicators : IndicatorAccessor | None
+        First-class indicator access: ``.indicators.rsi(14)``,
+        ``.indicators.macd(12, 26, 9)``,
+        ``.indicators.bollinger_bands(20, 2)``, etc.
     rsi : float | None
-        RSI indicator (requires optional analysis deps).
+        RSI indicator (legacy — prefer ``.indicators.rsi(14)``).
     sma : float | None
-        SMA for a given period.
+        SMA for a given period (legacy).
     ema : float | None
-        EMA for a given period.
+        EMA for a given period (legacy).
 
     Methods
     -------
@@ -102,6 +112,8 @@ class TickContext:
         self._stream = bot._stream
         self._price_history: deque[float] = deque(maxlen=200)
         self._cross_state: dict[int, float] = {}
+        self._cached_series = None
+        self._indicators: Optional[IndicatorAccessor] = IndicatorAccessor(self._get_price_series) if IndicatorAccessor is not None else None  # type: ignore[arg-type]
 
     # ── Prices ──────────────────────────────────────────────────────────────
 
@@ -234,11 +246,25 @@ class TickContext:
         sides.add(side)
         return result
 
+    @property
+    def indicators(self):
+        """First-class indicator access (RSI, MACD, Bollinger Bands, SMA, EMA).
+
+        Examples
+        --------
+        >>> ctx.indicators.rsi(14)
+        >>> ctx.indicators.macd(12, 26, 9)
+        >>> ctx.indicators.bollinger_bands(20, 2)
+        >>> ctx.indicators.sma(20)
+        >>> ctx.indicators.ema(12)
+        """
+        return self._indicators
+
     # ── Indicators (optional — requires analysis deps) ──────────────────────
 
     def _get_price_series(self):
         """Lazy-load the price history as a pandas Series."""
-        if getattr(self, "_cached_series", None) is not None:
+        if self._cached_series is not None:
             return self._cached_series
         if pd is None:
             raise RuntimeError(
@@ -248,6 +274,11 @@ class TickContext:
             return None
         self._cached_series = pd.Series(list(self._price_history))
         return self._cached_series
+
+    def _invalidate_series_cache(self) -> None:
+        self._cached_series = None
+        if self._indicators is not None:
+            self._indicators.invalidate()
 
     def record_price(self, price: float) -> None:
         """Append a price point for indicator calculations."""
@@ -599,6 +630,7 @@ class Bot:
             self._tick_count += 1
             if self._ctx:
                 self._ctx.record_price(up)
+                self._ctx._invalidate_series_cache()
             # ── Candle tracking ──────────────────────────────────────────
             now = time.time()
             tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
@@ -635,6 +667,7 @@ class Bot:
             self._tick_count += 1
             if self._ctx:
                 self._ctx.record_price(up)
+                self._ctx._invalidate_series_cache()
             # ── Candle tracking ──────────────────────────────────────────
             now = time.time()
             tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
