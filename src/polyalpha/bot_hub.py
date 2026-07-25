@@ -146,6 +146,8 @@ class StrategyContext:
         chainlink_cache: Optional[object] = None,
         get_candle_open=None,
         get_seconds_in=None,
+        get_candle_id=None,
+        bought_this_candle=None,
     ):
         self.name = name
         self._asset = asset
@@ -156,6 +158,8 @@ class StrategyContext:
         self._chainlink_cache = chainlink_cache
         self._get_candle_open = get_candle_open or (lambda: None)
         self._get_seconds_in = get_seconds_in or (lambda: 0.0)
+        self._get_candle_id: Callable[[], int] = get_candle_id or (lambda: 0)
+        self._bought_this_candle: dict[int, dict[str, set[str]]] = bought_this_candle if bought_this_candle is not None else {}
         self._cached_series = None
 
     # ── Prices ──────────────────────────────────────────────────────────────
@@ -222,6 +226,48 @@ class StrategyContext:
         return self._paper.sell_position(
             market=self._market, side=side, amount=amount
         )
+
+    # ── Candle-aware trading guards ───────────────────────────────────────
+
+    def buy_once_per_candle(self, side: str, amount: float):
+        """Buy only if *side* hasn't been bought yet in the current candle.
+
+        Tracks buys per candle via the hub's ``_bought_this_candle`` dict.
+        Safe to call multiple times — subsequent calls within the same
+        candle for the same side are silently skipped.
+
+        Parameters
+        ----------
+        side : "UP" | "DOWN"
+        amount : USDC to spend
+        """
+        cid = self._get_candle_id()
+        sides = self._bought_this_candle.setdefault(cid, {}).setdefault(self.name, set())
+        side = side.upper()
+        if side in sides:
+            return
+        result = self.buy(side, amount)
+        sides.add(side)
+        return result
+
+    def buy_in_window(self, side: str, amount: float, min_seconds: float, max_seconds: float):
+        """Only buy if ``seconds_in`` is within ``[min_seconds, max_seconds]``.
+
+        Useful for buying early in a candle (e.g. first 30 s) or waiting
+        for confirmation (e.g. after 60 s of a 5 m candle).
+
+        Parameters
+        ----------
+        side : "UP" | "DOWN"
+        amount : USDC to spend
+        min_seconds : float
+            Minimum seconds into the candle before buying.
+        max_seconds : float
+            Maximum seconds into the candle; no buy after this point.
+        """
+        secs = self.seconds_in
+        if min_seconds <= secs <= max_seconds:
+            return self.buy(side, amount)
 
     # ── Indicators (shared price history) ──────────────────────────────────
 
@@ -422,6 +468,8 @@ class BotHub:
         self._tick_count = 0
         self._candle_start_time: float = 0.0
         self._candle_open_price: Optional[float] = None
+        self._candle_id: int = 0
+        self._bought_this_candle: dict[int, dict[str, set[str]]] = {}
         self._chainlink_cache: Optional[object] = None
         if chainlink:
             try:
@@ -740,6 +788,8 @@ class BotHub:
                 chainlink_cache=self._chainlink_cache,
                 get_candle_open=lambda: self._candle_open_price,
                 get_seconds_in=lambda: max(0.0, time.time() - self._candle_start_time),
+                get_candle_id=lambda: self._candle_id,
+                bought_this_candle=self._bought_this_candle,
             )
 
     def _stream_prices(self) -> None:
@@ -767,6 +817,8 @@ class BotHub:
             if candle_start != self._candle_start_time:
                 self._candle_start_time = candle_start
                 self._candle_open_price = up
+                self._candle_id += 1
+                self._bought_this_candle[self._candle_id] = {}
             # Invalidate each context's cached price series so indicators
             # recompute on the new history.
             for s in self._active_tickers():
@@ -814,6 +866,8 @@ class BotHub:
             if candle_start != self._candle_start_time:
                 self._candle_start_time = candle_start
                 self._candle_open_price = up
+                self._candle_id += 1
+                self._bought_this_candle[self._candle_id] = {}
             for s in self._active_tickers():
                 if s.ctx is not None:
                     s.ctx._invalidate_series_cache()
@@ -857,6 +911,8 @@ class BotHub:
                 pass
             self._stream = None
         self._market = None
+        self._candle_id = 0
+        self._bought_this_candle = {}
         for s in self._active_tickers():
             s.ctx = None
         self._log.info("Rolling over to next market...")
@@ -870,6 +926,8 @@ class BotHub:
                 pass
             self._stream = None
         self._market = None
+        self._candle_id = 0
+        self._bought_this_candle = {}
         for s in self._active_tickers():
             s.ctx = None
         self._log.info("Rolling over to next market...")

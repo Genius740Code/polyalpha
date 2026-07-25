@@ -202,6 +202,38 @@ class TickContext:
             market=self._market, side=side, amount=amount
         )
 
+    # ── Candle-aware trading guards ───────────────────────────────────────
+
+    @property
+    def candle_id(self) -> int:
+        """Current candle identifier (increments on each new candle)."""
+        return self._bot._candle_id
+
+    @property
+    def seconds_in(self) -> float:
+        """Seconds elapsed since the start of the current candle."""
+        return max(0.0, time.time() - self._bot._candle_start_time)
+
+    def buy_once_per_candle(self, side: str, amount: float):
+        """Buy only if *side* hasn't been bought yet in the current candle.
+
+        Tracks buys per candle. Safe to call multiple times — subsequent
+        calls within the same candle for the same side are silently skipped.
+
+        Parameters
+        ----------
+        side : "UP" | "DOWN"
+        amount : USDC to spend
+        """
+        cid = self._bot._candle_id
+        sides = self._bot._bought_this_candle.setdefault(cid, set())
+        side = side.upper()
+        if side in sides:
+            return
+        result = self.buy(side, amount)
+        sides.add(side)
+        return result
+
     # ── Indicators (optional — requires analysis deps) ──────────────────────
 
     def _get_price_series(self):
@@ -336,6 +368,10 @@ class Bot:
         self._buy_side: Optional[str] = None
         self._buy_amount: Optional[float] = None
         self._bought_this_cycle: bool = False
+        self._candle_start_time: float = 0.0
+        self._candle_open_price: Optional[float] = None
+        self._candle_id: int = 0
+        self._bought_this_candle: dict[int, set[str]] = {}
         self._stop_event = threading.Event()
         self._tick_count = 0
         self._trade_count = 0
@@ -563,6 +599,15 @@ class Bot:
             self._tick_count += 1
             if self._ctx:
                 self._ctx.record_price(up)
+            # ── Candle tracking ──────────────────────────────────────────
+            now = time.time()
+            tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
+            candle_start = (now // tf_seconds) * tf_seconds
+            if candle_start != self._candle_start_time:
+                self._candle_start_time = candle_start
+                self._candle_open_price = up
+                self._candle_id += 1
+                self._bought_this_candle[self._candle_id] = set()
             # Call the strategy
             if self._strategy and self._ctx:
                 try:
@@ -590,6 +635,15 @@ class Bot:
             self._tick_count += 1
             if self._ctx:
                 self._ctx.record_price(up)
+            # ── Candle tracking ──────────────────────────────────────────
+            now = time.time()
+            tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
+            candle_start = (now // tf_seconds) * tf_seconds
+            if candle_start != self._candle_start_time:
+                self._candle_start_time = candle_start
+                self._candle_open_price = up
+                self._candle_id += 1
+                self._bought_this_candle[self._candle_id] = set()
             if self._strategy and self._ctx:
                 try:
                     self._strategy(self._ctx)
@@ -612,6 +666,8 @@ class Bot:
             self._stream = None
         self._market = None
         self._ctx = None
+        self._candle_id = 0
+        self._bought_this_candle = {}
         self._log.info("Rolling over to next market...")
         await self._asleep(2)
 
@@ -643,6 +699,8 @@ class Bot:
             self._stream = None
         self._market = None
         self._ctx = None
+        self._candle_id = 0
+        self._bought_this_candle = {}
         self._log.info("Rolling over to next market...")
         self._sleep(2)
 
