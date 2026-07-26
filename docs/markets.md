@@ -116,10 +116,10 @@ print(market.json())
 
 **`market.refresh(client) -> Market`**
 
-Re-fetch from the Gamma API. Returns a new `Market` with updated prices, status, volume, and liquidity.
+Re-fetch from the Gamma API. Returns a new `Market` with updated prices, status, volume, and liquidity. Pass ``client.markets`` (a ``MarketClient``), not the top-level ``Client``.
 
 ```python
-updated = market.refresh(client)
+updated = market.refresh(client.markets)
 ```
 
 **`market.show()`**

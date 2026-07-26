@@ -104,7 +104,7 @@ class Market:
 
         Parameters
         ----------
-        client : MarketClient - The client instance to use for re-fetching.
+        client : MarketClient — pass ``client.markets`` (not the top-level ``Client``).
 
         Raises
         ------
@@ -114,7 +114,7 @@ class Market:
         Example
         -------
         >>> market = client.markets.latest("BTC", "5m")
-        >>> updated = market.refresh(client)
+        >>> updated = market.refresh(client.markets)  # not ``client``
         """
         return client.get(self.slug)
 

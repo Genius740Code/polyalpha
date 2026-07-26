@@ -1,12 +1,12 @@
 """
 Market discovery via the Polymarket Gamma API.
 
-Slug format:  {asset}-updown-{timeframe}-{unix_end_ts}
+Slug format:  {asset}-updown-{timeframe}-{unix_start_ts}
               e.g.  btc-updown-5m-1751234700
 
-The timestamp is the END of the prediction window
-(window_start + interval_seconds).  We probe the current window plus
-the next two so we always catch a market even if the clock is mid-window.
+The timestamp is the START of the prediction window.
+We probe the current window plus the next two so we always catch
+a market even if the clock is mid-window.
 """
 
 from __future__ import annotations
@@ -60,18 +60,21 @@ def _jloads(value: Any, default: Any) -> Any:
     return value if value is not None else default
 
 
-def _current_window_end(timeframe: str) -> int:
-    """Return the Unix timestamp of the END of the window that contains now."""
+def _current_window_start(timeframe: str) -> int:
+    """Return the Unix timestamp of the START of the window that contains now."""
     interval    = TIMEFRAME_SECONDS[timeframe]
     now         = int(time.time())
-    window_start = (now // interval) * interval
-    return window_start + interval
+    return (now // interval) * interval
 
 
-def _candidate_ends(timeframe: str, count: int = MARKET_CANDIDATE_COUNT) -> list[int]:
-    """Return [current, next, next+1] window-end timestamps to probe."""
+def _candidate_starts(timeframe: str, count: int = MARKET_CANDIDATE_COUNT) -> list[int]:
+    """Return [current, next, next+1] window-start timestamps to probe.
+
+    Polymarket Up/Down slugs use the START timestamp of the window,
+    NOT the end timestamp.
+    """
     interval = TIMEFRAME_SECONDS[timeframe]
-    current  = _current_window_end(timeframe)
+    current  = _current_window_start(timeframe)
     return [current + i * interval for i in range(count)]
 
 
@@ -196,7 +199,7 @@ class MarketClient:
                 f"Supported: {list(TIMEFRAME_SECONDS)}"
             )
 
-        candidates = _candidate_ends(timeframe)
+        candidates = _candidate_starts(timeframe)
         for end_ts in candidates:
             slug = build_slug(asset, timeframe, end_ts)
             log.debug("Trying slug: %s", slug)
