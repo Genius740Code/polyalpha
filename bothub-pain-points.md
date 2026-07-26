@@ -49,19 +49,26 @@ Added in `bot_hub.py`:
 
 ---
 
-### 3. Strategy errors silently swallowed
+### ~~3. Strategy errors silently swallowed~~ ✅ Fixed
 
 Strategy 8 crashed every tick with `AttributeError`. The BotHub caught it internally but produced zero visible output — no per-strategy error log, no traceback in the terminal. Strategy ran "silently broken" and the user had no idea.
 
 ```python
-# From _stream_prices — catch swallows everything:
+# Now:
 try:
     s.fn(s.ctx)
 except Exception as exc:
-    ...  # no visible output
+    slog = self._strategy_loggers.get(s.name, self._log)
+    slog.exception("Strategy '%s' raised: %s", s.name, exc)
+    self._fire("error", s.name, exc)
 ```
 
-**Ask:** Log strategy errors at `ERROR` level with traceback by default, or expose an `on_error` hook.
+Added in `bot_hub.py`:
+- `slog.exception(...)` — logs at `ERROR` level with full traceback via `logging.exception()`
+- Errors propagate through the default `polyalpha` logger to stderr (visible in terminal), or to per-strategy rotating log files when `log_dir` is set
+- `self._fire("error", s.name, exc)` — dispatches the error event to `hub.on("error")` handlers
+- `hub.on("error")` — user-facing hook receives `(strategy_name, exception)` for custom handling
+- Isolated error handling — one strategy's crash does not stop the others or the hub
 
 ---
 
