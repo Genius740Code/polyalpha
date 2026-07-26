@@ -336,9 +336,9 @@ class ComparisonReport:
 def build_variant_result(variant: Variant) -> VariantResult:
     """
     Extract a ``VariantResult`` (P&L, win rate, trades, Sharpe, max DD) from
-    a BotHub ``Variant``'s isolated ``PaperEngine``.
+    a BotHub strategy's isolated ``PaperEngine``.
 
-    If the variant's ``PaperEngine`` is ``None`` (not yet discovered) or
+    If the strategy's ``PaperEngine`` is ``None`` (not yet discovered) or
     has produced no resolved trades, the returned row carries NaN values
     and a zero trade count so it sorts last by P&L descending.
     """

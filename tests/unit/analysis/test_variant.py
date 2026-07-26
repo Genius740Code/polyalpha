@@ -106,12 +106,12 @@ class TestVariantDecorator:
     def test_variant_name_must_be_non_empty(self):
         hub = BotHub(asset="BTC", timeframe="5m")
 
-        with pytest.raises(ValueError, match="variant name must be a non-empty string"):
+        with pytest.raises(ValueError, match="strategy name must be a non-empty string"):
             @hub.variant("")
             def fn(ctx):
                 pass
 
-        with pytest.raises(ValueError, match="variant name must be a non-empty string"):
+        with pytest.raises(ValueError, match="strategy name must be a non-empty string"):
             hub.variant("")(lambda ctx: None)
 
     def test_cannot_duplicate_variant_name(self):
@@ -165,7 +165,7 @@ class TestVariantDecorator:
         lst.append(Variant(name="x", fn=lambda ctx: None, balance=0))
         assert hub.variant_count == 1
 
-    def test_strategy_and_variant_count_separate(self):
+    def test_strategy_and_variant_count(self):
         hub = BotHub(asset="BTC", timeframe="5m")
 
         @hub.strategy("s1")
@@ -180,13 +180,13 @@ class TestVariantDecorator:
         def v2(ctx):
             pass
 
-        assert hub.strategy_count == 1
-        assert hub.variant_count == 2
+        assert hub.strategy_count == 3
+        assert hub.variant_count == 3
         assert hub.total_count == 3
 
     def test_run_requires_any_ticker(self):
         hub = BotHub(asset="BTC", timeframe="5m")
-        with pytest.raises(RuntimeError, match="No strategies or variants"):
+        with pytest.raises(RuntimeError, match="No strategies registered"):
             hub.run()
 
     def test_has_strategies_or_variants_passes(self):
