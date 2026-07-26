@@ -214,13 +214,13 @@ def strategy_9_maker_rebate(ctx):
     if s > 240:
         if state["up_id"] is not None:
             try:
-                ctx._paper.cancel(state["up_id"])
+                ctx._paper.cancel(state["up_id"])  # NB: uses private API — no public cancel on StrategyContext yet
             except Exception:
                 pass
             state["up_id"] = None
         if state["down_id"] is not None:
             try:
-                ctx._paper.cancel(state["down_id"])
+                ctx._paper.cancel(state["down_id"])  # NB: uses private API
             except Exception:
                 pass
             state["down_id"] = None

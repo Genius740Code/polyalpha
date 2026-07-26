@@ -231,6 +231,10 @@ def strategy(ctx):
 First-class indicator API with per-tick caching. All methods accept parameterized periods.
 
 ```python
+# Query which indicators are available at runtime
+available = ctx.indicators.available()
+# → ["rsi", "sma", "ema", "macd", "bollinger_bands", "roc"]
+
 # RSI with custom period
 rsi = ctx.indicators.rsi(14)
 
@@ -243,15 +247,20 @@ bb = ctx.indicators.bollinger_bands(20, 2)  # → BBResult(upper, mid, lower)
 # Moving averages
 sma = ctx.indicators.sma(20)
 ema = ctx.indicators.ema(12)
+
+# Rate of Change
+roc = ctx.indicators.roc(12)
 ```
 
 | Method | Returns | Description |
 |--------|---------|-------------|
+| `available()` | `list[str]` | List of available indicator names |
 | `rsi(period=14)` | `float \| None` | Relative Strength Index |
 | `sma(period=20)` | `float \| None` | Simple Moving Average |
 | `ema(period=12)` | `float \| None` | Exponential Moving Average |
 | `macd(fast=12, slow=26, signal=9)` | `MACDResult \| None` | MACD line, signal, histogram |
 | `bollinger_bands(period=20, std=2)` | `BBResult \| None` | Upper, mid, lower bands |
+| `roc(period=12)` | `float \| None` | Rate of Change (percent) |
 
 All return `None` when `pandas` is not installed or there is insufficient price history.
 
@@ -385,6 +394,8 @@ bot = polyalpha.Bot("SOL", "15m", balance=1000, api_key="...")
 
 `BotHub` runs **multiple strategies from a single data connection**. One market discovery, one WebSocket stream — N isolated paper engines. Eliminates redundant rate-limited connections when running many strategies on the same asset/timeframe.
 
+Unlike `strategy()`, `variant()` is identical — it is an alias that exists purely for readability. The only distinction is the `params` argument: strategies with non-empty `params` metadata are treated as "variants" for comparison via `compare_variants()`.
+
 ```python
 import polyalpha
 
@@ -466,7 +477,9 @@ hub.add_strategy("momentum", momentum_fn, balance=500)
 
 #### `@hub.variant(name, balance=None, params=None, id="")`
 
-Decorator that registers a **variant** — like a strategy, but carries parameter metadata for cross-variant comparison. Variants share the same stream but get isolated paper engines.
+Identity alias for `@hub.strategy()`. Exists purely for readability — use it when you want to emphasise that a strategy carries parameter metadata for comparison.
+
+The only distinction: strategies with **non-empty `params`** are included in `compare_variants()` output. Strategies registered via `strategy()` without `params` are still compared if no other strategy has `params`.
 
 ```python
 @hub.variant("rsi_70", params={"threshold": 70})
@@ -488,22 +501,27 @@ report.print()
 |-------|------|---------|-------------|
 | `name` | `str` | — | Unique variant name |
 | `balance` | `float \| None` | `default_balance` | Per-variant starting balance |
-| `params` | `dict \| None` | `{}` | Free-form metadata surfaced in comparison reports |
+| `params` | `dict \| None` | `{}` | Free-form metadata surfaced in comparison reports — this is what distinguishes a variant from a plain strategy |
 | `id` | `str` | `""` | Stable identifier for persistence (defaults to name) |
 
 #### `hub.add_variant(name, fn, balance=None, params=None, id="")`
 
-Non-decorator equivalent for variant registration.
+Non-decorator equivalent. Identity alias for `hub.add_strategy()`.
 
 ### StrategyContext
 
-Same public API as `TickContext` plus Chainlink/candle properties and a `.name` identifier.
+Same public API as `TickContext` plus Chainlink/candle/orderbook properties and a `.name` identifier.
 
 ```python
 @hub.strategy("example")
 def strategy(ctx):
     # Chainlink spot price (requires chainlink=True)
     spot = ctx.spot_price
+
+    # Order book (auto-attached to shared WebSocket stream)
+    bids = ctx.orderbook.up.bids        # tuple[BookLevel]
+    spread = ctx.orderbook.down.spread  # float
+    ctx.orderbook.refresh()             # force REST refresh
 
     # Candle-aware trading
     ctx.buy_once_per_candle("UP", 20)
@@ -512,6 +530,10 @@ def strategy(ctx):
     # Indicators
     macd = ctx.indicators.macd(12, 26, 9)
     bb = ctx.indicators.bollinger_bands(20, 2)
+
+    # Query available indicators at runtime
+    available = ctx.indicators.available()
+    # → ["rsi", "sma", "ema", "macd", "bollinger_bands", "roc"]
 ```
 
 | Property | Returns | Description |
@@ -526,12 +548,33 @@ def strategy(ctx):
 | `candle_open` | `float \| None` | Opening price of the current candle |
 | `seconds_in` | `float` | Seconds elapsed since the start of the current candle |
 | `candle_id` | `int` | Current candle identifier (increments on each new candle) |
-| `indicators` | `IndicatorAccessor` | Parameterized indicators — `rsi(14)`, `macd(12,26,9)`, `bollinger_bands(20,2)`, `sma(20)`, `ema(12)` |
+| `indicators` | `IndicatorAccessor` | Parameterized indicators — see below |
+| `orderbook` | `OrderBookAccessor \| None` | Live order book for the current market (auto-attached) |
 | `rsi` | `float \| None` | RSI(14) — legacy, prefer `ctx.indicators.rsi(14)` |
 | `sma_20` | `float \| None` | SMA(20) — legacy, prefer `ctx.indicators.sma(20)` |
 | `ema_12` | `float \| None` | EMA(12) — legacy, prefer `ctx.indicators.ema(12)` |
 
 Methods: `buy(side, amount)`, `limit(side, price, amount)`, `close_position(side, amount=None)`, `buy_once_per_candle(side, amount)`, `buy_in_window(side, amount, min_seconds, max_seconds)` — same signatures as `TickContext`.
+
+#### OrderBookAccessor (`ctx.orderbook`)
+
+Lazily creates and auto-attaches an `OrderBookFeed` to the shared WebSocket stream. Fetches an initial REST snapshot on first access so data is available immediately.
+
+```python
+ctx.orderbook.up.bids        # tuple[BookLevel] — UP token bids
+ctx.orderbook.down.asks      # tuple[BookLevel] — DOWN token asks
+ctx.orderbook.up.spread      # float — UP bid-ask spread
+ctx.orderbook.up.mid_price   # float — UP mid price
+ctx.orderbook.book           # MarketOrderBook — combined book
+ctx.orderbook.refresh()      # force fresh REST snapshot
+```
+
+| Property | Returns | Description |
+|----------|---------|-------------|
+| `up` | `OrderBookSnapshot \| None` | UP token order book (bids, asks, spread, mid_price) |
+| `down` | `OrderBookSnapshot \| None` | DOWN token order book (bids, asks, spread, mid_price) |
+| `book` | `MarketOrderBook` | Combined UP + DOWN market order book |
+| `refresh()` | `MarketOrderBook` | Fetches fresh REST snapshots for both tokens |
 
 ### Cross-Variant Comparison
 
@@ -553,10 +596,11 @@ Output is a Rich table sorted by P&L:
 for r in report.results:
     print(f"{r.name}: P&L=${r.pnl:.2f} win%={r.win_rate:.1f}")
 
-report.top_variant    # highest P&L
-report.bottom_variant # lowest P&L
+report.best           # VariantResult with highest P&L
+report.worst          # VariantResult with lowest P&L
+report.get("rsi_70")  # Look up a specific variant by name
 report.variant_count  # number of variants
-report.to_dict()      # JSON-serialisable dict
+report.dump()         # JSON-serialisable dict
 ```
 
 ### Persisting & Loading Runs
@@ -564,12 +608,15 @@ report.to_dict()      # JSON-serialisable dict
 Comparison snapshots are automatically saved to `~/.polyalpha/variants/`.
 
 ```python
+# Save manually (returns the Path written to)
+path = report.save()
+
 # List past runs
 hub.list_runs()
 # [{"timestamp": "...", "path": "...", "variants": ["rsi_70", "rsi_30"]}, ...]
 
 # Load a previous run
-report = hub.load_run("20260724_153000")
+report = hub.load_run("2026-07-24T15-30-00")
 report.print()
 ```
 
@@ -590,12 +637,13 @@ hub.stop()
 
 | Property | Returns | Description |
 |----------|---------|-------------|
-| `stats` | `dict` | Per-strategy and per-variant running stats |
+| `stats` | `dict` | Per-strategy running stats (balance, pnl, open_positions, params) |
 | `tick_count` | `int` | Total price ticks received |
-| `strategy_count` | `int` | Number of registered strategies (excludes variants) |
-| `variant_count` | `int` | Number of registered variants |
+| `strategy_count` | `int` | Number of registered strategies |
+| `variant_count` | `int` | Number of registered variants (alias for `strategy_count`) |
 | `total_count` | `int` | Combined strategies + variants |
-| `variants` | `list[Variant]` | Read-only view of registered variants |
+| `strategies` | `list[RegisteredStrategy]` | Read-only view of all registered strategies |
+| `variants` | `list[RegisteredStrategy]` | Read-only view of all registered strategies (alias for `strategies`) |
 
 `stats` format:
 
@@ -685,4 +733,4 @@ If no market is found, retries every 30 seconds.
 
 ### Example
 
-See [`examples/bot_hub.py`](../examples/bot_hub.py) for a complete runnable example with 4 strategies.
+See [`examples/bot_hub.py`](../examples/bot_hub.py) for a complete runnable example with strategies, variants, event hooks, and periodic timers.

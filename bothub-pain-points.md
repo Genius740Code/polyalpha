@@ -86,7 +86,7 @@ Added in `bot_hub.py`:
 
 ---
 
-### 5. Strategy vs variant API blurred
+### ~~5. Strategy vs variant API blurred~~ ✅ Clarified in docs
 
 ```python
 hub.strategy("name", balance=100)    # decorator
@@ -96,13 +96,16 @@ hub.add_variant("name", fn, 100)     # imperative
 hub.compare_variants()               # only for variants?
 ```
 
-When to use `strategy` vs `variant`? How does that affect `compare_variants()` output? Unclear.
+**Resolution:** `variant()` is now documented as an alias for `strategy()`. The only distinction is the `params` argument — any strategy with non-empty `params` metadata is treated as a "variant" for comparison. `compare_variants()` includes all strategies that have params (or falls back to all strategies if none have params).
 
-**Ask:** Either merge them or document the distinction clearly with examples.
+Added in docs:
+- Explicit note in `docs/bot.md` that `variant()` is identical to `strategy()` and exists purely for readability
+- Clear examples showing `params` as the differentiating factor
+- Cross-reference in `bot_hub.py` docstring
 
 ---
 
-### 6. Indicator availability unclear
+### ~~6. Indicator availability unclear~~ ✅ Fixed
 
 ```
 INFO polyalpha.analysis.indicators pandas-ta not installed; using native TA implementations
@@ -110,7 +113,12 @@ INFO polyalpha.analysis.indicators pandas-ta not installed; using native TA impl
 
 Which indicators are available natively? Same signatures as pandas-ta? What's missing? Had to guess RSI and SMA would work — they did, but with zero confidence.
 
-**Ask:** Print available native indicators on startup, or expose `ctx.indicators.available()`.
+**Resolution:** Both requested features are now implemented:
+- `ctx.indicators.available()` returns `["rsi", "sma", "ema", "macd", "bollinger_bands", "roc"]` — so you can query at runtime
+- BotHub logs the available indicator set at startup via `_log_indicators()`:
+  ```
+  INFO polyalpha.bot_hub TA indicators available: rsi, sma, ema, macd, bollinger_bands, roc
+  ```
 
 
 
@@ -190,5 +198,6 @@ Manual paper config application per strategy
 Custom performance tracker (library may have this undocumented)
 External data fetching (no built-in integration)
 Time-to-close calculation (not in context)
-Strategy stats access (private API)
+Strategy stats access (private API) — e.g. ``ctx._paper.cancel()`` for order cancellation
+Cancel order not exposed on StrategyContext (must use ``ctx._paper.cancel()``)
 These improvements would make building multi-strategy systems significantly easier and more robust.

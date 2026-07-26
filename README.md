@@ -235,6 +235,12 @@ hub.run()
 
 Each strategy gets its own balance, positions, and P&L. Error isolation — one crash doesn't stop the others.
 
+**Event hooks & timers:** `hub.on("tick")`, `hub.on("candle_open")`, `hub.every(30)` for lifecycle callbacks.
+
+**Variants:** Register strategies with `params` metadata and compare side-by-side via `hub.compare_variants()` (Rich table sorted by P&L, win rate, Sharpe, max drawdown).
+
+**Order book:** `ctx.orderbook.up.bids`, `ctx.orderbook.down.asks`, `ctx.orderbook.refresh()` — auto-attached to the shared stream.
+
 | Scenario | Use |
 |----------|-----|
 | One strategy | `Bot` |
