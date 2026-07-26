@@ -58,7 +58,7 @@ import asyncio
 import logging
 import threading
 import time
-from collections import deque, namedtuple
+from collections import defaultdict, deque, namedtuple
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable, Optional, Union
@@ -593,6 +593,10 @@ class BotHub:
         self._log = logging.getLogger("polyalpha.BotHub")
         self._strategy_loggers: dict[str, logging.Logger] = {}
 
+        # ── Event / hook system ──────────────────────────────────────────
+        self._handlers: dict[str, list[Callable]] = defaultdict(list)
+        self._interval_handlers: list[dict] = []
+
     # ── Helpers ─────────────────────────────────────────────────────────────
 
     def _active_tickers(self) -> list[_RegisteredStrategy]:
@@ -734,6 +738,110 @@ class BotHub:
         """Register a variant without decorator syntax."""
         self.variant(name, balance=balance, params=params, id=id)(fn)
 
+    # ── Event / hook system ─────────────────────────────────────────────
+
+    def on(self, event: str, fn: Optional[Callable] = None):
+        """Register an event handler (decorator or imperative).
+
+        Supported events
+        ----------------
+        ``"start"``
+            Hub started — handler receives no args.
+        ``"stop"``
+            Hub stopping gracefully — handler receives no args.
+        ``"tick"``
+            Every price tick — handler receives ``(up, down)``.
+        ``"candle_open"``
+            A new candle started — handler receives ``(open_price, candle_id)``.
+        ``"candle_close"``
+            The current candle closed — handler receives
+            ``(candle_id, open_price, close_price)``.
+        ``"error"``
+            A strategy raised an exception — handler receives
+            ``(strategy_name, exception)``.
+
+        Usage
+        -----
+            @hub.on("tick")
+            def on_tick(up, down):
+                print(f"price={up:.3f}/{down:.3f}")
+
+            @hub.on("candle_open")
+            def on_candle_open(open_price, candle_id):
+                print(f"New candle #{candle_id} opened at {open_price}")
+
+            hub.on("stop", my_cleanup_fn)
+        """
+        if fn is None:
+            return lambda f: self._add_handler(event, f)
+        self._add_handler(event, fn)
+        return fn
+
+    def add_handler(self, event: str, fn: Callable) -> None:
+        """Imperative event handler registration.
+
+        See :meth:`on` for supported events and signatures.
+        """
+        self._add_handler(event, fn)
+
+    def _add_handler(self, event: str, fn: Callable) -> None:
+        if not callable(fn):
+            raise TypeError(f"handler must be callable, got {type(fn).__name__}")
+        self._handlers[event].append(fn)
+        self._log.debug("Registered handler for event '%s'", event)
+
+    def every(self, seconds: Union[float, int], fn: Optional[Callable] = None):
+        """Register a periodic timer callback (decorator or imperative).
+
+        The handler is called roughly every *seconds* seconds, checked
+        on each price tick.  Handlers receive no arguments.
+
+        Examples
+        --------
+            @hub.every(30)
+            def status_check():
+                print("30-second ticker")
+
+            hub.every(60, my_minute_fn)
+        """
+        seconds = float(seconds)
+        if seconds <= 0:
+            raise ValueError("seconds must be positive")
+
+        def _register(f):
+            self._interval_handlers.append({
+                "interval": seconds,
+                "fn": f,
+                "last_called": 0.0,
+            })
+            self._log.debug("Registered interval handler every %.1fs", seconds)
+            return f
+
+        if fn is None:
+            return _register
+        return _register(fn)
+
+    # ── Event dispatch ──────────────────────────────────────────────────
+
+    def _fire(self, event: str, *args, **kwargs) -> None:
+        """Dispatch *event* to all registered handlers, isolating errors."""
+        for fn in list(self._handlers.get(event, [])):
+            try:
+                fn(*args, **kwargs)
+            except Exception as exc:
+                self._log.exception("Handler for '%s' raised: %s", event, exc)
+
+    def _fire_interval_handlers(self, *args, **kwargs) -> None:
+        """Check and fire any due interval handlers."""
+        now = time.time()
+        for h in self._interval_handlers:
+            if now - h["last_called"] >= h["interval"]:
+                h["last_called"] = now
+                try:
+                    h["fn"](*args, **kwargs)
+                except Exception as exc:
+                    self._log.exception("Interval handler raised: %s", exc)
+
     @property
     def tick_count(self) -> int:
         """Total price ticks received this session."""
@@ -801,6 +909,7 @@ class BotHub:
             sum(s.balance for s in self._active_tickers()),
         )
         self._stop_event.clear()
+        self._fire("start")
 
         try:
             while not self._stop_event.is_set():
@@ -826,6 +935,7 @@ class BotHub:
             len(self._strategies), len(self._variants),
         )
         self._stop_event.clear()
+        self._fire("start")
 
         try:
             while not self._stop_event.is_set():
@@ -936,10 +1046,12 @@ class BotHub:
             tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
             candle_start = (now // tf_seconds) * tf_seconds
             if candle_start != self._candle_start_time:
+                self._fire("candle_close", self._candle_id, self._candle_open_price, up)
                 self._candle_start_time = candle_start
                 self._candle_open_price = up
                 self._candle_id += 1
                 self._bought_this_candle[self._candle_id] = {}
+                self._fire("candle_open", self._candle_open_price, self._candle_id)
             # Invalidate each context's cached price series so indicators
             # recompute on the new history.
             for s in self._active_tickers():
@@ -957,6 +1069,11 @@ class BotHub:
                     slog.exception(
                         "Strategy '%s' raised: %s", s.name, exc
                     )
+                    self._fire("error", s.name, exc)
+
+            # ── Hub-level events ───────────────────────────────────────
+            self._fire("tick", up, down)
+            self._fire_interval_handlers(up, down)
 
         @self._stream.on("close")
         def on_close():
@@ -986,10 +1103,12 @@ class BotHub:
             tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
             candle_start = (now // tf_seconds) * tf_seconds
             if candle_start != self._candle_start_time:
+                self._fire("candle_close", self._candle_id, self._candle_open_price, up)
                 self._candle_start_time = candle_start
                 self._candle_open_price = up
                 self._candle_id += 1
                 self._bought_this_candle[self._candle_id] = {}
+                self._fire("candle_open", self._candle_open_price, self._candle_id)
             for s in self._active_tickers():
                 if s.ctx is not None:
                     s.ctx._invalidate_series_cache()
@@ -1004,6 +1123,11 @@ class BotHub:
                     slog.exception(
                         "Strategy '%s' raised: %s", s.name, exc
                     )
+                    self._fire("error", s.name, exc)
+
+            # ── Hub-level events ───────────────────────────────────────
+            self._fire("tick", up, down)
+            self._fire_interval_handlers(up, down)
 
         @self._stream.on("close")
         def on_close():
@@ -1075,6 +1199,7 @@ class BotHub:
 
     def _cleanup(self) -> None:
         """Clean up shared resources."""
+        self._fire("stop")
         if self._stream:
             try:
                 self._stream.stop()

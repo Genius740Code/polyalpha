@@ -316,34 +316,17 @@ def main():
     log("HUB", "Press Ctrl+C to stop and print comparison report")
     print()
 
-    _ticker = {"ts": time.time(), "_btc_feed_snapshot": []}
-
-    def _status_ticker(ctx):
-
-        elapsed = time.time() - _ticker["ts"]
-        if elapsed >= 30 and hasattr(ctx, "price") and ctx.price is not None:
-            up, down = ctx.price.up, ctx.price.down
-            s_in = ctx.seconds_in
-
-            with BTC_FEED_LOCK:
-                btc_snap = list(BTC_FEED)
-            btc_delta = ""
-            if len(btc_snap) >= 5:
-                dp = (btc_snap[-1] - btc_snap[-5]) / btc_snap[-5] * 100
-                btc_delta = f" BTC_d={dp:+.2f}%"
-            rsi_str = ""
-            if ctx.indicators:
-                try:
-                    r = ctx.indicators.rsi(14)
-                    s = ctx.indicators.sma(20)
-                    if r is not None:
-                        rsi_str = f" RSI={r:.0f} SMA={s:.4f}" if s else f" RSI={r:.0f}"
-                except Exception:
-                    pass
-            log("STATUS", f"UP={up:.3f} DOWN={down:.3f} | {s_in:.0f}s / 300s{btc_delta}{rsi_str}")
-            _ticker["ts"] = time.time()
-
-    hub.add_strategy("STATUS", _status_ticker, 1.0)
+    # ── Periodic status ticker (every 30s) ─────────────────────────────
+    @hub.every(30)
+    def status_ticker(up, down):
+        s_in = time.time() % 300
+        with BTC_FEED_LOCK:
+            btc_snap = list(BTC_FEED)
+        btc_delta = ""
+        if len(btc_snap) >= 5:
+            dp = (btc_snap[-1] - btc_snap[-5]) / btc_snap[-5] * 100
+            btc_delta = f" BTC_d={dp:+.2f}%"
+        log("STATUS", f"UP={up:.3f} DOWN={down:.3f} | {s_in:.0f}s / 300s{btc_delta}")
 
     try:
         hub.run()

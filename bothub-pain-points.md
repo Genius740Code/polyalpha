@@ -4,17 +4,29 @@ Discovered while building a paper-trading script running 6 strategies across 5-m
 
 ---
 
-### 1. No event/hook system on BotHub
+### ~~1. No event/hook system on BotHub~~ ✅ Fixed
 
-```python
-# This doesn't exist:
+```
+# Now exists:
 @hub.on("tick")
-def ticker(ctx): ...
+def ticker(up, down): ...
+
+@hub.every(30)
+def periodic(up, down): ...
+
+hub.on("candle_open", handler)
+hub.on("start", handler)
+hub.on("stop", handler)
+hub.on("error", handler)
+hub.add_handler("stop", handler)
 ```
 
-There's no way to register periodic callbacks (timer, candle-open, status ticker). The only mechanism is the strategy function itself, which fires on every price tick. Had to hack a `time.time()` guard inside a 7th "strategy" just to log status every 30s.
-
-**Ask:** Expose `hub.on(event)` or `hub.add_handler(event, fn)` with events like `"tick"`, `"candle_open"`, `"interval:30s"`.
+Added in `bot_hub.py`:
+- `hub.on(event)` — decorator/imperative for events: `"start"`, `"tick"`, `"candle_open"`, `"candle_close"`, `"stop"`, `"error"`
+- `hub.every(seconds)` — decorator/imperative for periodic timers (receives latest up/down)
+- `hub.add_handler(event, fn)` — imperative form
+- Events fire at correct lifecycle points: start, tick, candle boundary, strategy error, cleanup
+- Updated docs (`docs/bot.md`) and example (`examples/paper_6_strategies.py`)
 
 ---
 

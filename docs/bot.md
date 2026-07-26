@@ -613,6 +613,64 @@ hub.stop()
 }
 ```
 
+### Event Hooks & Timers
+
+BotHub provides a hook system for lifecycle events and periodic callbacks, so you don't need to register dummy strategies just for logging or maintenance tasks.
+
+#### `hub.on(event)`
+
+Register a handler for a lifecycle event. Works as a decorator or imperatively.
+
+| Event | Handler Signature | Description |
+|-------|-------------------|-------------|
+| `"start"` | `()` | Hub started |
+| `"stop"` | `()` | Hub stopping gracefully |
+| `"tick"` | `(up, down)` | Every price tick |
+| `"candle_open"` | `(open_price, candle_id)` | A new candle started |
+| `"candle_close"` | `(candle_id, open_price, close_price)` | The current candle closed |
+| `"error"` | `(strategy_name, exception)` | A strategy raised an exception |
+
+```python
+@hub.on("start")
+def on_start():
+    log("HUB", "BotHub started!")
+
+@hub.on("tick")
+def on_tick(up, down):
+    if up > 0.95:
+        log("TICK", f"UP heavily favored: {up:.3f}")
+
+@hub.on("candle_open")
+def on_candle_open(open_price, candle_id):
+    log("CANDLE", f"Candle #{candle_id} opened at {open_price}")
+
+@hub.on("error")
+def on_error(name, exc):
+    log("ERROR", f"Strategy '{name}' failed: {exc}")
+
+# Imperative form
+hub.on("stop", my_cleanup)
+
+# Or use add_handler (equivalent)
+hub.add_handler("start", my_start_fn)
+```
+
+#### `hub.every(seconds)`
+
+Register a periodic timer callback that fires roughly every `seconds` seconds, checked on each price tick. The handler receives the latest `(up, down)` prices.
+
+```python
+@hub.every(30)
+def status_check(up, down):
+    print(f"Status tick: UP={up:.3f} DOWN={down:.3f}")
+
+hub.every(60, my_minute_fn)
+```
+
+This replaces the old workaround of registering a dummy strategy just for periodic logging.
+
+
+
 ### Lifecycle
 
 Same cycle as `Bot`, but runs once for all strategies:
