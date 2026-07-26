@@ -72,11 +72,17 @@ Added in `bot_hub.py`:
 
 ---
 
-### 4. No periodic timer / scheduled callback
+### ~~4. No periodic timer / scheduled callback~~ ✅ Fixed
 
 Can't schedule 30-second, 1-minute, or candle-level callbacks. Everything is tick-driven. If BTC sits at the same price for 2 minutes, strategies still fire on every mid-price jitter but there's no way to run maintenance logic (cancel stale orders, log status) on a schedule.
 
 **Ask:** `hub.every(seconds=30, fn=my_ticker)` or `hub.on("candle", fn)`.
+
+Added in `bot_hub.py`:
+- `hub.every(seconds)` — decorator/imperative for periodic timers (receives latest `up`/`down`)
+- Fires on each tick when the interval has elapsed, checked against `time.time()`
+- Handlers receive `(up, down)` — the latest mid-prices
+- Works alongside `candle_open` / `candle_close` events for candle-level callbacks
 
 ---
 

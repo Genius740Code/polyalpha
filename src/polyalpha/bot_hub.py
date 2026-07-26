@@ -897,13 +897,14 @@ class BotHub:
         """Register a periodic timer callback (decorator or imperative).
 
         The handler is called roughly every *seconds* seconds, checked
-        on each price tick.  Handlers receive no arguments.
+        on each price tick.  Handlers receive ``(up, down)`` — the
+        latest mid-prices from the shared stream.
 
         Examples
         --------
             @hub.every(30)
-            def status_check():
-                print("30-second ticker")
+            def status_check(up, down):
+                print(f"30s ticker — up={up:.3f} down={down:.3f}")
 
             hub.every(60, my_minute_fn)
         """
