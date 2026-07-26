@@ -1,0 +1,50 @@
+"""
+Full Sniper — time-window, entry/exit thresholds, event callbacks.
+
+Usage:
+    python examples/sniper.py
+"""
+import polyalpha
+from polyalpha.bots import Sniper
+
+client = polyalpha.Client(balance=100)
+
+sniper = Sniper(
+    client=client,
+    asset="BTC",
+    side="UP",
+    entry_price=0.92,
+    exit_price=0.88,
+    window_seconds=35,
+    amount=20.0,
+)
+
+@sniper.on("market_found")
+def on_market_found(market):
+    print(f"Market found: {market}")
+
+@sniper.on("entry")
+def on_entry(order):
+    print(f"Entry filled: {order}")
+
+@sniper.on("exit")
+def on_exit(order):
+    print(f"Exit filled: {order}")
+
+@sniper.on("resolve")
+def on_resolve(result):
+    print(f"Resolved: P&L={result.pnl:.2f}")
+
+@sniper.on("rollover")
+def on_rollover():
+    print("Position rolled over to next window")
+
+@sniper.on("error")
+def on_error(err):
+    print(f"Error: {err}")
+
+@sniper.on("stop")
+def on_stop(reason):
+    print(f"Stopped: {reason}")
+
+sniper.run()
