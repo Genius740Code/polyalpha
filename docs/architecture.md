@@ -83,7 +83,7 @@ src/polyalpha/
 │
 ├── analysis/             # Technical analysis
 │   ├── __init__.py       #   DataFeed, IndicatorCalculator, SignalGenerator, DeltaCalculator
-│   ├── data_feed.py      #   DataFeed + DataFeedConfig
+│   ├── data_feed.py      #   DataFeed + DataFeedConfig (Binance volume support)
 │   ├── indicators.py     #   24 indicator methods
 │   ├── signals.py        #   30 signal methods
 │   ├── delta.py          #   DeltaCalculator

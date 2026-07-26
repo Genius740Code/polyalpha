@@ -73,6 +73,7 @@ class DataFeedConfig:
     ----------
     source : str
         Data source: "binance" | "chainlink" | "scraping" | "custom" | "websocket"
+        Binance provides full OHLCV data including volume, quote volume, and trade count.
     asset_map : dict
         Mapping of Polymarket assets to data source symbols.
     timeframe : str
@@ -100,6 +101,18 @@ class DataFeedConfig:
         Mapping of assets to WebSocket symbols for scraping.
     scraping_timeout : int
         WebSocket timeout in seconds for scraping (default: 90).
+    
+    Volume Support
+    --------------
+    When using source="binance", the following volume data is available:
+    - volume: Base asset trading volume
+    - quote_volume: Quote asset (USDT) trading volume
+    - trades: Number of trades in the candle
+    - taker_buy_base_volume: Taker buy base asset volume
+    - taker_buy_quote_volume: Taker buy quote asset volume
+    
+    Use DataFeed methods: get_volume(), get_avg_volume(), get_volume_ratio(),
+    get_quote_volume(), get_trade_count()
     """
 
     source: str = "scraping"
@@ -178,6 +191,15 @@ class DataFeed:
     Supports multiple data sources and provides caching, resampling,
     and real-time update capabilities.
 
+    Volume Support (Binance)
+    ------------------------
+    When using source="binance", the following volume methods are available:
+    - get_volume(asset): Current candle volume
+    - get_avg_volume(asset, period=20): Average volume over N periods
+    - get_volume_ratio(asset, period=20): Current volume / average volume
+    - get_quote_volume(asset): Quote asset (USDT) volume
+    - get_trade_count(asset): Number of trades in current candle
+
     Parameters
     ----------
     config : DataFeedConfig
@@ -189,6 +211,8 @@ class DataFeed:
     >>> feed = DataFeed(config)
     >>> data = feed.fetch("BTC")
     >>> print(data.head())
+    >>> volume = feed.get_volume("BTC")
+    >>> volume_ratio = feed.get_volume_ratio("BTC", 20)
     """
 
     def __init__(self, config: DataFeedConfig):
@@ -920,3 +944,141 @@ class DataFeed:
             self._log.debug("Saved cache for %s", asset)
         except Exception as exc:
             self._log.warning("Failed to save cache: %s", exc)
+
+    # ── Volume Methods (Binance-specific) ────────────────────────────────────────
+
+    def get_volume(self, asset: str) -> Optional[float]:
+        """
+        Get current volume for asset from latest candle.
+
+        Parameters
+        ----------
+        asset : str
+            Asset symbol (e.g., "BTC", "ETH").
+
+        Returns
+        -------
+        float or None
+            Current volume or None if data unavailable.
+        """
+        if self._data is None or self._current_asset != asset:
+            try:
+                self.fetch(asset)
+            except Exception:
+                return None
+
+        if self._data is None or len(self._data) == 0:
+            return None
+
+        return float(self._data.iloc[-1]['volume'])
+
+    def get_avg_volume(self, asset: str, period: int = 20) -> Optional[float]:
+        """
+        Get average volume over N periods for asset.
+
+        Parameters
+        ----------
+        asset : str
+            Asset symbol (e.g., "BTC", "ETH").
+        period : int
+            Number of periods to average (default: 20).
+
+        Returns
+        -------
+        float or None
+            Average volume or None if data unavailable.
+        """
+        if self._data is None or self._current_asset != asset:
+            try:
+                self.fetch(asset)
+            except Exception:
+                return None
+
+        if self._data is None or len(self._data) < period:
+            return None
+
+        return float(self._data.tail(period)['volume'].mean())
+
+    def get_volume_ratio(self, asset: str, period: int = 20) -> Optional[float]:
+        """
+        Get current volume divided by average volume over N periods.
+
+        Useful for detecting volume spikes (ratio > 1.5 indicates high volume).
+
+        Parameters
+        ----------
+        asset : str
+            Asset symbol (e.g., "BTC", "ETH").
+        period : int
+            Number of periods for average (default: 20).
+
+        Returns
+        -------
+        float or None
+            Volume ratio or None if data unavailable.
+        """
+        current_vol = self.get_volume(asset)
+        avg_vol = self.get_avg_volume(asset, period)
+
+        if current_vol is None or avg_vol is None or avg_vol == 0:
+            return None
+
+        return current_vol / avg_vol
+
+    def get_quote_volume(self, asset: str) -> Optional[float]:
+        """
+        Get current quote volume (USDT value) for asset from Binance.
+
+        Parameters
+        ----------
+        asset : str
+            Asset symbol (e.g., "BTC", "ETH").
+
+        Returns
+        -------
+        float or None
+            Quote volume or None if data unavailable.
+        """
+        if self._data is None or self._current_asset != asset:
+            try:
+                self.fetch(asset)
+            except Exception:
+                return None
+
+        if self._data is None or len(self._data) == 0:
+            return None
+
+        # Check if quote_volume column exists (Binance data)
+        if 'quote_volume' in self._data.columns:
+            return float(self._data.iloc[-1]['quote_volume'])
+
+        return None
+
+    def get_trade_count(self, asset: str) -> Optional[int]:
+        """
+        Get number of trades in current candle from Binance.
+
+        Parameters
+        ----------
+        asset : str
+            Asset symbol (e.g., "BTC", "ETH").
+
+        Returns
+        -------
+        int or None
+            Trade count or None if data unavailable.
+        """
+        if self._data is None or self._current_asset != asset:
+            try:
+                self.fetch(asset)
+            except Exception:
+                return None
+
+        if self._data is None or len(self._data) == 0:
+            return None
+
+        # Check if trades column exists (Binance data)
+        if 'trades' in self._data.columns:
+            return int(self._data.iloc[-1]['trades'])
+
+        return None

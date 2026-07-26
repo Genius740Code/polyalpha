@@ -84,9 +84,10 @@ try:
     from .analysis._native_ta import rsi as _rsi
     from .analysis._native_ta import sma as _sma
     from .analysis._native_ta import roc as _roc
+    from .analysis._native_ta import vwap as _vwap
     _NATIVE_TA_AVAILABLE = True
 except ImportError:
-    _rsi = _sma = _ema = _macd = _bbands = _roc = None
+    _rsi = _sma = _ema = _macd = _bbands = _roc = _vwap = None
     _NATIVE_TA_AVAILABLE = False
 
 MACDResult = namedtuple("MACDResult", ["macd", "signal", "histogram"])
@@ -119,6 +120,7 @@ def _log_indicators() -> None:
     if _macd is not None: names.append("macd")
     if _bbands is not None: names.append("bollinger_bands")
     if _roc is not None: names.append("roc")
+    if _vwap is not None: names.append("vwap")
     log.info("TA indicators available: %s", ", ".join(names))
 
 
@@ -177,7 +179,7 @@ class IndicatorAccessor:
         Example
         -------
         >>> ctx.indicators.available()
-        ['rsi', 'sma', 'ema', 'macd', 'bollinger_bands', 'roc']
+        ['rsi', 'sma', 'ema', 'macd', 'bollinger_bands', 'roc', 'vwap']
         """
         names = []
         if _rsi is not None:
@@ -192,6 +194,8 @@ class IndicatorAccessor:
             names.append("bollinger_bands")
         if _roc is not None:
             names.append("roc")
+        if _vwap is not None:
+            names.append("vwap")
         return names
 
     def rsi(self, period: int = 14) -> Optional[float]:
@@ -245,6 +249,12 @@ class IndicatorAccessor:
         if _roc is None:
             return None
         return self._get(("roc", period), lambda s: self._resolve(_roc(s, period).iloc[-1]))
+
+    def vwap(self) -> Optional[float]:
+        """Volume Weighted Average Price."""
+        if _vwap is None:
+            return None
+        return self._get(("vwap",), lambda s: self._resolve(_vwap(s).iloc[-1]))
 
 
 # ── Order Book Accessor ────────────────────────────────────────────────────────
