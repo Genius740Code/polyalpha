@@ -91,6 +91,7 @@ from .core import (
     Market,
 )
 from .core.errors import MarketNotFound
+from .orderbook import ClobBookClient, OrderBookFeed
 from .trading.paper_config import PaperConfig
 from .trading.paper_engine import PaperEngine
 
@@ -188,6 +189,79 @@ class IndicatorAccessor:
         return self._get(("bb", period, std), _compute)
 
 
+# ── Order Book Accessor ────────────────────────────────────────────────────────
+
+class OrderBookAccessor:
+    """
+    Live order book for the strategy's current market.
+
+    Lazily creates and auto-attaches an ``OrderBookFeed`` to the shared
+    WebSocket stream on first property access.  Fetches an initial REST
+    snapshot so data is available immediately even before the stream
+    connects.
+
+    Usage
+    -----
+        >>> ctx.orderbook.up.bids            # tuple[BookLevel] — UP bids
+        >>> ctx.orderbook.down.asks          # tuple[BookLevel] — DOWN asks
+        >>> ctx.orderbook.up.spread          # float — UP bid-ask spread
+        >>> ctx.orderbook.up.mid_price       # float — UP mid price
+        >>> ctx.orderbook.down.best_bid      # float — best DOWN bid
+        >>> ctx.orderbook.refresh()          # force REST refresh
+
+    Properties
+    ----------
+    up : OrderBookSnapshot | None
+        UP token order book (bids, asks, spread, mid_price, …).
+    down : OrderBookSnapshot | None
+        DOWN token order book (bids, asks, spread, mid_price, …).
+    book : MarketOrderBook
+        Combined UP + DOWN market book.
+    """
+
+    def __init__(
+        self,
+        ctx: StrategyContext,
+        market: Market,
+        clob: ClobBookClient,
+    ):
+        self._ctx = ctx
+        self._feed = OrderBookFeed(market=market, clob=clob)
+        self._stream_attached = False
+
+    def _ensure(self) -> None:
+        if self._stream_attached:
+            return
+        self._feed.refresh()
+        stream = self._ctx._stream
+        if stream is not None:
+            self._feed.attach_stream(stream)
+        self._stream_attached = True
+
+    @property
+    def up(self) -> OrderBookSnapshot | None:
+        """UP token order book snapshot."""
+        self._ensure()
+        return self._feed.up
+
+    @property
+    def down(self) -> OrderBookSnapshot | None:
+        """DOWN token order book snapshot."""
+        self._ensure()
+        return self._feed.down
+
+    @property
+    def book(self) -> MarketOrderBook:
+        """Combined UP + DOWN market order book."""
+        self._ensure()
+        return self._feed.book
+
+    def refresh(self) -> MarketOrderBook:
+        """Fetch fresh REST snapshots for UP and DOWN tokens."""
+        self._ensure()
+        return self._feed.refresh()
+
+
 # ── Strategy Context ───────────────────────────────────────────────────────────
 
 class StrategyContext:
@@ -234,6 +308,7 @@ class StrategyContext:
         market: Optional[Market],
         price_history: deque,
         asset: str = "BTC",
+        clob: Optional[ClobBookClient] = None,
         chainlink_cache: Optional[object] = None,
         get_candle_open=None,
         get_seconds_in=None,
@@ -246,6 +321,7 @@ class StrategyContext:
         self._paper = paper
         self._market = market
         self._price_history = price_history  # shared across strategies
+        self._clob = clob
         self._chainlink_cache = chainlink_cache
         self._get_candle_open = get_candle_open or (lambda: None)
         self._get_seconds_in = get_seconds_in or (lambda: 0.0)
@@ -253,6 +329,7 @@ class StrategyContext:
         self._bought_this_candle: dict[int, dict[str, set[str]]] = bought_this_candle if bought_this_candle is not None else {}
         self._cached_series = None
         self._indicators: IndicatorAccessor = IndicatorAccessor(self._get_price_series)
+        self._orderbook: Optional[OrderBookAccessor] = None
 
     # ── Prices ──────────────────────────────────────────────────────────────
 
@@ -300,6 +377,32 @@ class StrategyContext:
     @property
     def market(self) -> Optional[Market]:
         return self._market
+
+    # ── Order book ──────────────────────────────────────────────────────────
+
+    @property
+    def orderbook(self) -> Optional[OrderBookAccessor]:
+        """Live order book for the current market (auto-attached).
+
+        Returns ``None`` if the market is not yet known (should not happen
+        during normal operation).
+
+        Usage
+        -----
+            >>> ctx.orderbook.up.bids       # top-of-book UP bids
+            >>> ctx.orderbook.down.asks     # top-of-book DOWN asks
+            >>> ctx.orderbook.up.spread     # UP bid-ask spread
+            >>> ctx.orderbook.refresh()     # force REST refresh
+        """
+        if self._market is None or self._clob is None:
+            return None
+        if self._orderbook is None:
+            self._orderbook = OrderBookAccessor(
+                ctx=self,
+                market=self._market,
+                clob=self._clob,
+            )
+        return self._orderbook
 
     # ── Orders ──────────────────────────────────────────────────────────────
 
@@ -1009,6 +1112,7 @@ class BotHub:
                 market=self._market,
                 price_history=self._price_history,
                 asset=self.asset,
+                clob=self._shared_client._clob,
                 chainlink_cache=self._chainlink_cache,
                 get_candle_open=lambda: self._candle_open_price,
                 get_seconds_in=lambda: max(0.0, time.time() - self._candle_start_time),

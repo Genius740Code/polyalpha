@@ -30,21 +30,22 @@ Added in `bot_hub.py`:
 
 ---
 
-### 2. OrderBookFeed API is opaque
+### ~~2. OrderBookFeed API is opaque~~ ✅ Fixed
 
 ```python
-# Doesn't work:
-ctx._ob_feed.bids   # AttributeError
-ctx._ob_feed.asks   # AttributeError
-
-# Actual API (found by reading source):
-ctx._ob_feed.up.bids   # OrderBookSnapshot -> tuple[BookLevel]
-ctx._ob_feed.down.asks
+# Now works:
+ctx.orderbook.up.bids       # tuple[BookLevel] — UP bids
+ctx.orderbook.down.asks     # tuple[BookLevel] — DOWN asks
+ctx.orderbook.up.spread     # float — UP bid-ask spread
+ctx.orderbook.refresh()     # force REST refresh
 ```
 
-No documentation. No auto-attach to the market — had to lazy-init a `Client()`, call `client.orderbook(market)`, and attach via `hasattr` boilerplate in the strategy. Also unclear when `.refresh()` is needed vs happens automatically.
-
-**Ask:** Expose `ctx.orderbook` on StrategyContext that auto-attaches to the current market, with documented properties (`up`, `down`, `spread`, etc.).
+Added in `bot_hub.py`:
+- `OrderBookAccessor` class wrapping `OrderBookFeed` with clean, documented API
+- `ctx.orderbook` property on `StrategyContext` — lazy-init, auto-attaches to the shared WebSocket stream
+- Auto-fetches an initial REST snapshot on first access so data is available immediately
+- `BotHub._discover()` passes the shared `ClobBookClient` to each strategy context (no second `Client()` needed)
+- Updated docs and example (`examples/paper_6_strategies.py`)
 
 ---
 

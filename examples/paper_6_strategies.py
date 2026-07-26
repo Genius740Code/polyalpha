@@ -167,14 +167,15 @@ def strategy_6_vwap_rsi(ctx):
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 def strategy_8_orderbook_imbalance(ctx):
+    ob = ctx.orderbook
+    if ob is None:
+        return
     try:
-        if not hasattr(ctx, "_ob_feed") or ctx._ob_feed is None:
-            return
-        ctx._ob_feed.refresh()
+        ob.refresh()
     except Exception:
         return
-    up_book = ctx._ob_feed.up
-    down_book = ctx._ob_feed.down
+    up_book = ob.up
+    down_book = ob.down
     if up_book is None or down_book is None:
         return
     bids = up_book.bids[:10] if up_book.bids else []
@@ -282,20 +283,7 @@ def main():
 
     @hub.strategy("08_orderbook_imbalance", balance=args.balance)
     def s8(ctx):
-        # Lazy-attach orderbook feed on first tick when market is known
-        if not hasattr(ctx, "_ob_feed") or ctx._ob_feed is None:
-            m = ctx.market
-            if m is not None:
-                try:
-                    from polyalpha import Client
-                    c = Client()
-                    ctx._ob_feed = c.orderbook(m)
-                    ctx._ob_feed.refresh()
-                    log("08_imbalance", f"OrderBookFeed attached: {m.slug}")
-                except Exception as exc:
-                    log("08_imbalance", f"OrderBookFeed init failed: {exc}")
-                    ctx._ob_feed = None
-        if hasattr(ctx, "_ob_feed") and ctx._ob_feed is not None:
+        if ctx.orderbook is not None:
             strategy_8_orderbook_imbalance(ctx)
 
     @hub.strategy("09_maker_rebate", balance=args.balance)
