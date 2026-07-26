@@ -404,8 +404,10 @@ class MarketClient:
             sub.get("closed", True) for sub in markets
         )
 
-        if closed and not active:
+        if closed:
             raise MarketClosed(f"Market is closed: {slug}")
+        if not active:
+            raise MarketClosed(f"Market is not active: {slug}")
 
         return Market(
             id          = str(event.get("id", "")),
