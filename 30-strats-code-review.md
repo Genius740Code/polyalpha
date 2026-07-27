@@ -6,7 +6,7 @@ Polyalpha is a **Polymarket prediction markets SDK** — it trades UP/DOWN binar
 
 ## Strategy-by-Strategy Review
 
-### 1. EMA Crossover — ✅ DOABLE
+### 1. EMA Crossover — ✅ DOABLE IMPLEMENTED
 
 ```
 ctx.indicators.ema(9) and ctx.indicators.ema(21) exist.
@@ -34,7 +34,7 @@ def strat(ctx):
 
 ---
 
-### 2. Supertrend Momentum — ❌ IMPOSSIBLE (indicator missing)
+### 2. Supertrend Momentum — ❌ IMPOSSIBLE (indicator missing) Implemented
 
 ```
 Supertrend does NOT exist in polyalpha.

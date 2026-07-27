@@ -106,6 +106,36 @@ def atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> 
     return tr.rolling(window=length).mean()
 
 
+def supertrend(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 7, multiplier: float = 3.0) -> pd.DataFrame:
+    atr_series = atr(high, low, close, length)
+    hl2 = (high + low) / 2
+    upper_band = hl2 + multiplier * atr_series
+    lower_band = hl2 - multiplier * atr_series
+
+    trend = pd.Series(np.nan, index=close.index)
+    direction = pd.Series(1, index=close.index)
+
+    for i in range(1, len(close)):
+        if close.iloc[i] > upper_band.iloc[i - 1]:
+            direction.iloc[i] = 1
+        elif close.iloc[i] < lower_band.iloc[i - 1]:
+            direction.iloc[i] = -1
+        else:
+            direction.iloc[i] = direction.iloc[i - 1]
+            if direction.iloc[i] == 1 and lower_band.iloc[i] < lower_band.iloc[i - 1]:
+                lower_band.iloc[i] = lower_band.iloc[i - 1]
+            if direction.iloc[i] == -1 and upper_band.iloc[i] > upper_band.iloc[i - 1]:
+                upper_band.iloc[i] = upper_band.iloc[i - 1]
+
+        trend.iloc[i] = lower_band.iloc[i] if direction.iloc[i] == 1 else upper_band.iloc[i]
+
+    result = pd.DataFrame({
+        f"SUPERT_{length}_{multiplier}": trend,
+        f"SUPERTd_{length}_{multiplier}": direction,
+    })
+    return result
+
+
 def obv(close: pd.Series, volume: pd.Series) -> pd.Series:
     direction = np.sign(close.diff())
     direction[0] = 0

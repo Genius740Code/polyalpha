@@ -315,6 +315,66 @@ class EMACrossedBelow(Condition):
         return crossed
 
 
+class SuperTrendUp(Condition):
+    """True when SuperTrend indicates an uptrend (direction == 1)."""
+
+    def __init__(self, period: int = 7, multiplier: float = 3.0):
+        self._period = period
+        self._multiplier = multiplier
+
+    def __call__(self, ctx: TickContext) -> bool:
+        st = ctx.indicators.supertrend(self._period, self._multiplier)
+        direction = st["direction"].dropna()
+        if direction.empty:
+            return False
+        return direction.iloc[-1] == 1
+
+
+class SuperTrendDown(Condition):
+    """True when SuperTrend indicates a downtrend (direction == -1)."""
+
+    def __init__(self, period: int = 7, multiplier: float = 3.0):
+        self._period = period
+        self._multiplier = multiplier
+
+    def __call__(self, ctx: TickContext) -> bool:
+        st = ctx.indicators.supertrend(self._period, self._multiplier)
+        direction = st["direction"].dropna()
+        if direction.empty:
+            return False
+        return direction.iloc[-1] == -1
+
+
+class SuperTrendJustTurnedUp(Condition):
+    """True when SuperTrend just flipped from downtrend to uptrend."""
+
+    def __init__(self, period: int = 7, multiplier: float = 3.0):
+        self._period = period
+        self._multiplier = multiplier
+
+    def __call__(self, ctx: TickContext) -> bool:
+        st = ctx.indicators.supertrend(self._period, self._multiplier)
+        direction = st["direction"].dropna()
+        if len(direction) < 2:
+            return False
+        return direction.iloc[-2] == -1 and direction.iloc[-1] == 1
+
+
+class SuperTrendJustTurnedDown(Condition):
+    """True when SuperTrend just flipped from uptrend to downtrend."""
+
+    def __init__(self, period: int = 7, multiplier: float = 3.0):
+        self._period = period
+        self._multiplier = multiplier
+
+    def __call__(self, ctx: TickContext) -> bool:
+        st = ctx.indicators.supertrend(self._period, self._multiplier)
+        direction = st["direction"].dropna()
+        if len(direction) < 2:
+            return False
+        return direction.iloc[-2] == 1 and direction.iloc[-1] == -1
+
+
 class Always(Condition):
     """Always true — useful as a default / fallthrough."""
 
@@ -391,6 +451,26 @@ def never() -> Condition:
     return Never()
 
 
+def supertrend_up(period: int = 7, multiplier: float = 3.0) -> Condition:
+    """SuperTrend indicates an uptrend."""
+    return SuperTrendUp(period, multiplier)
+
+
+def supertrend_down(period: int = 7, multiplier: float = 3.0) -> Condition:
+    """SuperTrend indicates a downtrend."""
+    return SuperTrendDown(period, multiplier)
+
+
+def supertrend_just_turned_up(period: int = 7, multiplier: float = 3.0) -> Condition:
+    """SuperTrend just flipped from downtrend to uptrend."""
+    return SuperTrendJustTurnedUp(period, multiplier)
+
+
+def supertrend_just_turned_down(period: int = 7, multiplier: float = 3.0) -> Condition:
+    """SuperTrend just flipped from uptrend to downtrend."""
+    return SuperTrendJustTurnedDown(period, multiplier)
+
+
 def when(fn: Callable[[TickContext], bool]) -> Condition:
     """Wrap a lambda as a Condition."""
     return LambdaCondition(fn)
@@ -411,6 +491,10 @@ __all__ = [
     "ema_below",
     "ema_crossed_above",
     "ema_crossed_below",
+    "supertrend_up",
+    "supertrend_down",
+    "supertrend_just_turned_up",
+    "supertrend_just_turned_down",
     "always",
     "never",
     "when",

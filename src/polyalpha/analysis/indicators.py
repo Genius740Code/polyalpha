@@ -2,8 +2,8 @@
 Technical indicator calculations using pandas-ta.
 
 Provides a clean interface to pandas-ta indicators including:
-- Trend indicators: SMA, EMA, MACD, ADX
-- Momentum indicators: RSI, Stochastic, Williams %R, CCI
+        - Trend indicators: SMA, EMA, MACD, ADX, SuperTrend
+        - Momentum indicators: RSI, Stochastic, Williams %R, CCI
 - Volatility indicators: Bollinger Bands, ATR, Keltner Channels
 - Volume indicators: OBV, Volume SMA, Volume ROC
 - Additional: VWAP, Fair Value Gap, Pivot Points
@@ -225,6 +225,52 @@ class IndicatorCalculator:
             "adx": adx_result[f"ADX_{period}"].rename("ADX"),
             "plus_di": adx_result[f"DMP_{period}"].rename("+DI"),
             "minus_di": adx_result[f"DMN_{period}"].rename("-DI"),
+        }
+
+    def supertrend(self, period: int = 7, multiplier: float = 3.0) -> dict[str, pd.Series]:
+        """
+        SuperTrend indicator.
+
+        A trend-following indicator that uses ATR to create trailing bands.
+        Direction: 1 = uptrend (above band), -1 = downtrend (below band).
+
+        Parameters
+        ----------
+        period : int
+            ATR period (default: 7).
+        multiplier : float
+            ATR multiplier (default: 3.0).
+
+        Returns
+        -------
+        dict[str, pd.Series]
+            Dictionary with keys: "trend" (band value), "direction" (1 or -1).
+        """
+        if period <= 0:
+            raise ValueError("period must be positive")
+        if multiplier <= 0:
+            raise ValueError("multiplier must be positive")
+
+        try:
+            st_result = ta.supertrend(
+                self.data["high"], self.data["low"], self.data["close"],
+                length=period, multiplier=multiplier
+            )
+        except Exception as exc:
+            self._log.error("pandas-ta SuperTrend calculation failed: %s", exc)
+            raise RuntimeError(f"SuperTrend calculation failed: {exc}") from exc
+
+        trend_key = f"SUPERT_{period}_{multiplier}"
+        dir_key = f"SUPERTd_{period}_{multiplier}"
+
+        if trend_key not in st_result.columns:
+            trend_col = [c for c in st_result.columns if c.startswith("SUPERT_")][0]
+            dir_col = [c for c in st_result.columns if c.startswith("SUPERTd_")][0]
+            trend_key, dir_key = trend_col, dir_col
+
+        return {
+            "trend": st_result[trend_key].rename(f"SuperTrend_{period}_{multiplier}"),
+            "direction": st_result[dir_key].rename(f"SuperTrend_Dir_{period}_{multiplier}"),
         }
 
     # ── Momentum Indicators ───────────────────────────────────────────────────
@@ -626,6 +672,14 @@ class IndicatorCalculator:
         if "atr" in config:
             for period in config["atr"]:
                 results[f"atr_{period}"] = self.atr(period)
+
+        # SuperTrend
+        if "supertrend" in config:
+            st_config = config["supertrend"]
+            results["supertrend"] = self.supertrend(
+                st_config.get("period", 7),
+                st_config.get("multiplier", 3.0)
+            )
 
         return results
 
