@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polyalpha"
-version = "0.2.25"
+version = "0.2.26"
 description = "Python SDK for Polymarket — market discovery, real-time price streaming, and paper trading"
 readme = "README.md"
 license = {file = "License.md"}
@@ -51,6 +51,10 @@ report = [
     "kaleido>=0.2.1",   # optional — only needed for save_png()
 ]
 
+telegram = [
+    "python-telegram-bot>=20.0",
+]
+
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
@@ -62,7 +66,7 @@ dev = [
 ]
 
 all = [
-    "polyalpha[analysis,report,dev]",
+    "polyalpha[analysis,report,telegram,dev]",
 ]
 
 [project.urls]

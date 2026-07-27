@@ -344,6 +344,33 @@ bot.run()
 
 When both conditions are met on a tick, the bot executes a market buy. The condition is checked on every tick but only triggers once per market cycle.
 
+### Price Filtering Conditions
+
+The conditions module includes powerful price filtering capabilities:
+
+```python
+from polyalpha.conditions import (
+    and_, price_in_range, price_not_in_ranges
+)
+
+# Only enter when UP price is in range [0.90, 0.95]
+bot.when(price_in_range("up", 0.90, 0.95)).buy("UP", 20)
+
+# Avoid specific price segments (e.g., low liquidity zones)
+bot.when(
+    and_(
+        price_in_range("up", 0.90, 0.98),
+        price_not_in_ranges("up", [(0.93, 0.94), (0.96, 0.97)])
+    )
+).buy("UP", 20)
+```
+
+Available price conditions:
+- `price_above(side, threshold)` — price > threshold
+- `price_below(side, threshold)` — price < threshold
+- `price_in_range(side, min, max)` — price in range [min, max]
+- `price_not_in_ranges(side, ranges)` — price NOT in excluded ranges
+
 ---
 
 ## Async Multi-Bot

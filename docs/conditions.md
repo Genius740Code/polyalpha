@@ -123,6 +123,37 @@ from polyalpha.conditions import price_below
 condition = price_below("down", 0.2)
 ```
 
+### `price_in_range(side, min_price, max_price)`
+
+True when the side's current price is in range [min_price, max_price].
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `side` | `str` | `"UP"` or `"DOWN"` |
+| `min_price` | `float` | Minimum price threshold (0–1) |
+| `max_price` | `float` | Maximum price threshold (0–1) |
+
+```python
+from polyalpha.conditions import price_in_range
+
+condition = price_in_range("up", 0.90, 0.95)
+```
+
+### `price_not_in_ranges(side, ranges)`
+
+True when the side's current price is NOT in any of the excluded ranges. Useful for avoiding specific price segments (e.g., low liquidity zones).
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `side` | `str` | `"UP"` or `"DOWN"` |
+| `ranges` | `list[tuple[float, float]]` | List of (min, max) tuples to exclude |
+
+```python
+from polyalpha.conditions import price_not_in_ranges
+
+condition = price_not_in_ranges("up", [(0.93, 0.94), (0.96, 0.97)])
+```
+
 ### `crossed_above(side, threshold)`
 
 True when the side's price crossed **above** the threshold since the last tick. Returns `False` on the first tick (no history to compare).
@@ -328,16 +359,17 @@ from polyalpha.conditions import (
     and_, or_, not_,
     rsi_above, rsi_below,
     price_above, price_below,
+    price_in_range, price_not_in_ranges,
     crossed_above,
 )
 
 bot = polyalpha.Bot("BTC", "5m", balance=500)
 
-# Complex strategy: enter when RSI crosses above 30 AND price is above 0.85
+# Complex strategy: enter when RSI crosses above 30 AND price is in range 0.85-0.95
 # OR when price drops below 0.1 (oversold bounce play)
 bot.when(
     or_(
-        and_(crossed_above("up", 0.85), rsi_above(30)),
+        and_(crossed_above("up", 0.85), rsi_above(30), price_in_range("up", 0.85, 0.95)),
         price_below("down", 0.1),
     )
 ).buy("UP", 20)
@@ -355,6 +387,8 @@ bot.run()
 | `rsi_below(t)` | `RSIBelow` | RSI(14) < threshold |
 | `price_above(side, t)` | `PriceAbove` | Side price > threshold |
 | `price_below(side, t)` | `PriceBelow` | Side price < threshold |
+| `price_in_range(side, min, max)` | `PriceInRange` | Side price in range [min, max] |
+| `price_not_in_ranges(side, ranges)` | `PriceNotInRanges` | Side price NOT in excluded ranges |
 | `crossed_above(side, t)` | `CrossedAbove` | Price crossed above since last tick |
 | `crossed_below(side, t)` | `CrossedBelow` | Price crossed below since last tick |
 | `ema_above(side, p=20)` | `EMAAbove` | Price > EMA(p) |

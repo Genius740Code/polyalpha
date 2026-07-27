@@ -9,6 +9,8 @@ automated trading.
 Features:
 - Time-window entry (only trades in final N seconds)
 - Dual-threshold strategy (entry/exit thresholds)
+- Price range filtering (entry_price_min to entry_price_max)
+- Excluded price ranges (avoid specific price segments)
 - Auto-rollover to next market
 - Risk management (position limits, consecutive loss protection)
 - Performance monitoring (P&L, win rate, statistics)
@@ -18,6 +20,7 @@ Usage
 -----
     from polyalpha.bots import Sniper
 
+    # Basic usage with single entry price
     sniper = Sniper(
         client=client,
         asset="BTC",
@@ -25,6 +28,31 @@ Usage
         side="UP",
         entry_price=0.92,
         exit_price=0.88,
+        window_seconds=35,
+        amount=20.0,
+    )
+
+    # Price range usage (only enter between 0.90 and 0.95)
+    sniper = Sniper(
+        client=client,
+        asset="BTC",
+        timeframe="5m",
+        side="UP",
+        entry_price=0.90,
+        entry_price_max=0.95,
+        window_seconds=35,
+        amount=20.0,
+    )
+
+    # Excluded price ranges (avoid 0.93-0.94 and 0.96-0.97)
+    sniper = Sniper(
+        client=client,
+        asset="BTC",
+        timeframe="5m",
+        side="UP",
+        entry_price=0.90,
+        entry_price_max=0.98,
+        excluded_price_ranges=[(0.93, 0.94), (0.96, 0.97)],
         window_seconds=35,
         amount=20.0,
     )
@@ -86,7 +114,9 @@ class SniperConfig:
 
     # Trading parameters
     entry_price: float = 0.92
+    entry_price_max: Optional[float] = None  # Maximum entry price for price range
     exit_price: Optional[float] = 0.88
+    excluded_price_ranges: Optional[List[tuple[float, float]]] = None  # List of (min, max) ranges to exclude
     window_seconds: int = DEFAULT_WINDOW_SECONDS
     amount: float = 20.0
 
@@ -141,6 +171,34 @@ class SniperConfig:
             raise ValueError(
                 f"entry_price must be between 0 and 1, got {self.entry_price}"
             )
+
+        # Validate entry_price_max if provided
+        if self.entry_price_max is not None:
+            if not (0 < self.entry_price_max < 1):
+                raise ValueError(
+                    f"entry_price_max must be between 0 and 1, got {self.entry_price_max}"
+                )
+            if self.entry_price_max <= self.entry_price:
+                raise ValueError(
+                    f"entry_price_max ({self.entry_price_max}) must be greater than "
+                    f"entry_price ({self.entry_price})"
+                )
+
+        # Validate excluded_price_ranges if provided
+        if self.excluded_price_ranges is not None:
+            for i, (min_price, max_price) in enumerate(self.excluded_price_ranges):
+                if not (0 < min_price < 1):
+                    raise ValueError(
+                        f"excluded_price_ranges[{i}][0] (min) must be between 0 and 1, got {min_price}"
+                    )
+                if not (0 < max_price < 1):
+                    raise ValueError(
+                        f"excluded_price_ranges[{i}][1] (max) must be between 0 and 1, got {max_price}"
+                    )
+                if min_price >= max_price:
+                    raise ValueError(
+                        f"excluded_price_ranges[{i}] min ({min_price}) must be less than max ({max_price})"
+                    )
 
         # Validate exit price if provided
         if self.exit_price is not None:
@@ -698,10 +756,26 @@ class Sniper:
             self._cancel_order("exit_threshold")
             return
 
-        # Check entry threshold
-        if current_price >= self.config.entry_price and not self._pending_order:
-            self._log.info("Entry threshold triggered: %.4f >= %.4f",
-                          current_price, self.config.entry_price)
+        # Check entry threshold with price range support
+        price_in_range = current_price >= self.config.entry_price
+        if self.config.entry_price_max is not None:
+            price_in_range = price_in_range and current_price <= self.config.entry_price_max
+
+        # Check if price is in excluded ranges
+        price_excluded = False
+        if self.config.excluded_price_ranges:
+            for min_price, max_price in self.config.excluded_price_ranges:
+                if min_price <= current_price <= max_price:
+                    price_excluded = True
+                    if self.config.log_prices:
+                        self._log.debug("Price %.4f in excluded range [%.4f, %.4f]",
+                                      current_price, min_price, max_price)
+                    break
+
+        if price_in_range and not price_excluded and not self._pending_order:
+            max_str = f"-{self.config.entry_price_max:.4f}" if self.config.entry_price_max else ""
+            self._log.info("Entry threshold triggered: %.4f >= %.4f%s",
+                          current_price, self.config.entry_price, max_str)
 
             # Check technical analysis conditions
             if self._check_ta_conditions():

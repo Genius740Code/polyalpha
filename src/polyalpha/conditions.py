@@ -165,6 +165,53 @@ class PriceBelow(Condition):
         return price < self._threshold
 
 
+class PriceInRange(Condition):
+    """True when the side's current price is in range [min_price, max_price]."""
+
+    def __init__(self, side: str, min_price: float, max_price: float):
+        if side.upper() not in ("UP", "DOWN"):
+            raise ValueError(f"side must be 'UP' or 'DOWN', got {side!r}")
+        if not (0 < min_price < 1):
+            raise ValueError(f"min_price must be between 0 and 1, got {min_price}")
+        if not (0 < max_price < 1):
+            raise ValueError(f"max_price must be between 0 and 1, got {max_price}")
+        if min_price >= max_price:
+            raise ValueError(f"min_price ({min_price}) must be less than max_price ({max_price})")
+        self._side = side.lower()
+        self._min_price = min_price
+        self._max_price = max_price
+
+    def __call__(self, ctx: TickContext) -> bool:
+        price = ctx.price.up if self._side == "up" else ctx.price.down
+        return self._min_price <= price <= self._max_price
+
+
+class PriceNotInRanges(Condition):
+    """True when the side's current price is NOT in any of the excluded ranges."""
+
+    def __init__(self, side: str, ranges: list[tuple[float, float]]):
+        if side.upper() not in ("UP", "DOWN"):
+            raise ValueError(f"side must be 'UP' or 'DOWN', got {side!r}")
+        if not ranges:
+            raise ValueError("ranges must be a non-empty list")
+        for i, (min_price, max_price) in enumerate(ranges):
+            if not (0 < min_price < 1):
+                raise ValueError(f"ranges[{i}][0] (min) must be between 0 and 1, got {min_price}")
+            if not (0 < max_price < 1):
+                raise ValueError(f"ranges[{i}][1] (max) must be between 0 and 1, got {max_price}")
+            if min_price >= max_price:
+                raise ValueError(f"ranges[{i}] min ({min_price}) must be less than max ({max_price})")
+        self._side = side.lower()
+        self._ranges = ranges
+
+    def __call__(self, ctx: TickContext) -> bool:
+        price = ctx.price.up if self._side == "up" else ctx.price.down
+        for min_price, max_price in self._ranges:
+            if min_price <= price <= max_price:
+                return False
+        return True
+
+
 class CrossedAbove(Condition):
     """
     True when the side's price crossed *above* the threshold since the
@@ -639,6 +686,16 @@ def price_below(side: str, threshold: float) -> Condition:
     return PriceBelow(side, threshold)
 
 
+def price_in_range(side: str, min_price: float, max_price: float) -> Condition:
+    """side ("UP"|"DOWN") current price is in range [min_price, max_price]."""
+    return PriceInRange(side, min_price, max_price)
+
+
+def price_not_in_ranges(side: str, ranges: list[tuple[float, float]]) -> Condition:
+    """side ("UP"|"DOWN") current price is NOT in any of the excluded ranges."""
+    return PriceNotInRanges(side, ranges)
+
+
 def crossed_above(side: str, threshold: float) -> Condition:
     """side price crossed above threshold since last tick."""
     return CrossedAbove(side, threshold)
@@ -773,6 +830,8 @@ __all__ = [
     "rsi_below",
     "price_above",
     "price_below",
+    "price_in_range",
+    "price_not_in_ranges",
     "crossed_above",
     "crossed_below",
     "ema_above",

@@ -18,11 +18,12 @@ Steps:
 5. Use the chat ID in your .env file as TELEGRAM_CHAT_ID
 """
 
+import asyncio
 import os
 import sys
 
 
-def get_chat_id(bot_token: str) -> str:
+async def get_chat_id(bot_token: str) -> str:
     """
     Get the latest chat ID from Telegram bot updates.
     
@@ -44,7 +45,7 @@ def get_chat_id(bot_token: str) -> str:
     
     try:
         bot = Bot(token=bot_token)
-        updates = bot.get_updates()
+        updates = await bot.get_updates()
         
         if not updates:
             return "No updates found. Please send a message to your bot first, then run this script again."
@@ -64,8 +65,8 @@ def get_chat_id(bot_token: str) -> str:
         return f"Unexpected error: {e}"
 
 
-def main():
-    """Main entry point."""
+async def main_async():
+    """Async main entry point."""
     # Get bot token from command line or environment variable
     if len(sys.argv) > 1:
         bot_token = sys.argv[1]
@@ -83,13 +84,18 @@ def main():
     
     print("Fetching chat ID...")
     print("-" * 50)
-    result = get_chat_id(bot_token)
+    result = await get_chat_id(bot_token)
     print(result)
     print("-" * 50)
     
     if result.startswith("Chat ID:"):
         print("\n✅ Success! Add this to your .env file:")
         print(f"TELEGRAM_CHAT_ID={result.split(':')[1].split()[0]}")
+
+
+def main():
+    """Main entry point."""
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":

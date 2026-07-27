@@ -114,7 +114,9 @@ config = SniperConfig(
 | `timeframe` | `"5m"` | Market timeframe |
 | `side` | `"UP"` | `"UP"` or `"DOWN"` |
 | `entry_price` | `0.92` | Entry price threshold (0–1) |
+| `entry_price_max` | `None` | Maximum entry price for price range (must be > entry) |
 | `exit_price` | `0.88` | Exit price threshold (must be < entry) |
+| `excluded_price_ranges` | `None` | List of (min, max) tuples to exclude from entry |
 | `window_seconds` | `35` | Trading window before market end |
 | `amount` | `20.0` | USDC amount per trade |
 | `max_position_size` | `None` | Maximum position exposure |
@@ -167,6 +169,43 @@ config = SniperConfig(
     ta_sma_period=20,
 )
 ```
+
+### Price Range Filtering
+
+Control entry with a price range instead of a single threshold:
+
+```python
+# Only enter when price is between 0.90 and 0.95
+config = SniperConfig(
+    asset="BTC",
+    timeframe="5m",
+    side="UP",
+    entry_price=0.90,
+    entry_price_max=0.95,
+    window_seconds=35,
+    amount=20.0,
+)
+```
+
+### Excluded Price Ranges
+
+Avoid specific price segments by defining excluded ranges:
+
+```python
+# Enter between 0.90 and 0.98, but avoid 0.93-0.94 and 0.96-0.97
+config = SniperConfig(
+    asset="BTC",
+    timeframe="5m",
+    side="UP",
+    entry_price=0.90,
+    entry_price_max=0.98,
+    excluded_price_ranges=[(0.93, 0.94), (0.96, 0.97)],
+    window_seconds=35,
+    amount=20.0,
+)
+```
+
+This is useful for avoiding price zones with low liquidity or unfavorable conditions.
 
 ---
 
