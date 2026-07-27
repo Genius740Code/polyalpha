@@ -136,6 +136,50 @@ class TestSignalGenerator:
         result = signals.price_below_ema(20)
         assert isinstance(result, bool)
 
+    # ── EMA Crossover Signals ─────────────────────────────────────────────
+
+    def test_ema_bullish_crossover(self):
+        """Test EMA bullish crossover detection."""
+        indicators = self._make_indicator_calculator()
+        signals = SignalGenerator(indicators)
+        result = signals.ema_bullish_crossover()
+        assert isinstance(result, bool)
+
+    def test_ema_bearish_crossover(self):
+        """Test EMA bearish crossover detection."""
+        indicators = self._make_indicator_calculator()
+        signals = SignalGenerator(indicators)
+        result = signals.ema_bearish_crossover()
+        assert isinstance(result, bool)
+
+    def test_ema_crossover_custom_periods(self):
+        """Test EMA crossover with custom periods."""
+        indicators = self._make_indicator_calculator()
+        signals = SignalGenerator(indicators)
+        result = signals.ema_bullish_crossover(fast=5, slow=13)
+        assert isinstance(result, bool)
+
+    def test_ema_crossover_custom_price(self):
+        """Test EMA crossover with custom price column."""
+        indicators = self._make_indicator_calculator()
+        signals = SignalGenerator(indicators)
+        result = signals.ema_bullish_crossover(price="open")
+        assert isinstance(result, bool)
+
+    def test_ema_bullish_crossover_invalid_periods(self):
+        """Test EMA bullish crossover with invalid periods."""
+        indicators = self._make_indicator_calculator()
+        signals = SignalGenerator(indicators)
+        with pytest.raises(ValueError, match="fast period must be less than slow"):
+            signals.ema_bullish_crossover(fast=21, slow=9)
+
+    def test_ema_bearish_crossover_invalid_periods(self):
+        """Test EMA bearish crossover with invalid periods."""
+        indicators = self._make_indicator_calculator()
+        signals = SignalGenerator(indicators)
+        with pytest.raises(ValueError, match="fast period must be less than slow"):
+            signals.ema_bearish_crossover(fast=21, slow=9)
+
     # ── Bollinger Bands Signals ───────────────────────────────────────────
 
     def test_price_above_bb_upper(self):
@@ -348,10 +392,10 @@ class TestSignalGenerator:
         """Test custom condition that returns True."""
         indicators = self._make_indicator_calculator()
         signals = SignalGenerator(indicators)
-        
+
         def condition(indicators):
             return True
-        
+
         result = signals.custom(condition)
         assert result is True
 
@@ -359,10 +403,10 @@ class TestSignalGenerator:
         """Test custom condition that returns False."""
         indicators = self._make_indicator_calculator()
         signals = SignalGenerator(indicators)
-        
+
         def condition(indicators):
             return False
-        
+
         result = signals.custom(condition)
         assert result is False
 
@@ -370,10 +414,10 @@ class TestSignalGenerator:
         """Test custom condition that raises error."""
         indicators = self._make_indicator_calculator()
         signals = SignalGenerator(indicators)
-        
+
         def condition(indicators):
             raise ValueError("Test error")
-        
+
         result = signals.custom(condition)
         assert result is False
 
@@ -383,10 +427,10 @@ class TestSignalGenerator:
         """Test evaluating a single rule."""
         indicators = self._make_indicator_calculator()
         signals = SignalGenerator(indicators)
-        
+
         rules = [{"condition": "price_up", "params": {"candles_back": 1}}]
         result = signals.evaluate(rules)
-        
+
         assert "signals" in result
         assert "result" in result
         assert "details" in result
@@ -396,14 +440,14 @@ class TestSignalGenerator:
         """Test evaluating multiple rules with AND operator."""
         indicators = self._make_indicator_calculator()
         signals = SignalGenerator(indicators)
-        
+
         rules = [
             {"condition": "price_up", "params": {"candles_back": 1}},
             {"operator": "AND"},
             {"condition": "volume_above_sma", "params": {"period": 20}},
         ]
         result = signals.evaluate(rules)
-        
+
         assert len(result["signals"]) == 2
         assert isinstance(result["result"], bool)
 
@@ -411,14 +455,14 @@ class TestSignalGenerator:
         """Test evaluating multiple rules with OR operator."""
         indicators = self._make_indicator_calculator()
         signals = SignalGenerator(indicators)
-        
+
         rules = [
             {"condition": "price_up", "params": {"candles_back": 1}},
             {"operator": "OR"},
             {"condition": "price_down", "params": {"candles_back": 1}},
         ]
         result = signals.evaluate(rules)
-        
+
         assert len(result["signals"]) == 2
         assert isinstance(result["result"], bool)
 
@@ -426,10 +470,10 @@ class TestSignalGenerator:
         """Test evaluating unknown condition."""
         indicators = self._make_indicator_calculator()
         signals = SignalGenerator(indicators)
-        
+
         rules = [{"condition": "unknown_condition", "params": {}}]
         result = signals.evaluate(rules)
-        
+
         assert result["signals"][0] is False
         assert result["result"] is False
 
@@ -437,13 +481,13 @@ class TestSignalGenerator:
         """Test evaluating custom condition in rules."""
         indicators = self._make_indicator_calculator()
         signals = SignalGenerator(indicators)
-        
+
         def custom_func(indicators):
             return True
-        
+
         rules = [{"condition": custom_func, "params": {}}]
         result = signals.evaluate(rules)
-        
+
         assert result["signals"][0] is True
 
     # ── Signal Summary ─────────────────────────────────────────────────
@@ -452,9 +496,9 @@ class TestSignalGenerator:
         """Test signal summary generation."""
         indicators = self._make_indicator_calculator()
         signals = SignalGenerator(indicators)
-        
+
         summary = signals.summary()
-        
+
         assert "rsi" in summary
         assert "rsi_status" in summary
         assert "price_vs_sma20" in summary

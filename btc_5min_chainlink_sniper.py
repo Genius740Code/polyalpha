@@ -107,7 +107,6 @@ last_chainlink_fetch = 0
 
 # Tracking
 last_pnl_log_time = 0
-last_price_update_time = 0
 
 # Per-candle history for min % change
 recent_lows = deque(maxlen=10)
@@ -149,12 +148,11 @@ def log_scorecard(checks: dict[str, bool]) -> None:
 def strategy(ctx):
     global tick_count, binance_data, chainlink_data
     global last_binance_fetch, last_chainlink_fetch
-    global last_pnl_log_time, last_price_update_time
+    global last_pnl_log_time
 
     tick_count += 1
     current_price = ctx.price.up
     current_time = time.time()
-    last_price_update_time = current_time
 
     # ── Periodic logging ──────────────────────────────────────────────────
     if tick_count % 60 == 0:
@@ -194,29 +192,21 @@ def strategy(ctx):
             log.warning("Chainlink fetch failed: %s", e)
             chainlink_data = None
 
-    # ── Staleness guard ───────────────────────────────────────────────────
-    data_age = current_time - last_price_update_time
-    if data_age > 30:
-        if tick_count % 60 == 0:
-            log.warning("⚠️  Data stale: %.1fs since last update", data_age)
-        return
-
     # ── Need indicator data ───────────────────────────────────────────────
     if binance_data is None or len(binance_data) < EMA_SLOW + 10:
         return  # Not enough candles yet
 
-    # ── Get all indicators from ctx ───────────────────────────────────────
+    # ── Get Polymarket sentiment indicators from ctx ──────────────────────
     ind = ctx.indicators
     if ind is None:
         return
 
-    vwap = ind.vwap() if hasattr(ind, "vwap") else None
     ema_fast = ind.ema(EMA_FAST)
     ema_mid = ind.ema(EMA_MID)
     ema_slow = ind.ema(EMA_SLOW)
     rsi = ind.rsi(RSI_PERIOD)
 
-    # ── MACD from Binance data ────────────────────────────────────────────
+    # ── USD-denominated indicators from Binance ───────────────────────────
     macd_line = None
     macd_signal = None
     macd_hist = None
@@ -229,10 +219,19 @@ def strategy(ctx):
     atr_avg = None
     latest_volume = None
     avg_volume = None
+    binance_close = None
+    vwap = None
 
     try:
         from polyalpha.analysis import IndicatorCalculator
         calc = IndicatorCalculator(binance_data)
+        binance_close = float(binance_data.iloc[-1]["close"])
+
+        # VWAP from Binance data (has volume)
+        try:
+            vwap = float(calc.vwap().iloc[-1])
+        except Exception:
+            vwap = None
 
         # MACD
         macd_result = calc.macd(fast=12, slow=26, signal=9)
@@ -312,17 +311,17 @@ def strategy(ctx):
         log.warning("Indicator calculation error: %s", e)
         return
 
-    # ── Track recent lows for min % change ────────────────────────────────
-    if len(binance_data) >= 10:
+    # ── Track recent lows for min % change (Binance USD close) ────────────
+    if binance_close is not None and len(binance_data) >= 10:
         low_10 = float(binance_data.tail(10)["low"].min())
     else:
-        low_10 = current_price
+        low_10 = None
 
-    # ── Green candle check ────────────────────────────────────────────────
+    # ── Green candle check on Polymarket price ────────────────────────────
     candle_open = ctx._bot._candle_open_price
     is_green = candle_open is not None and current_price > candle_open
 
-    # ── Chainlink price validation ────────────────────────────────────────
+    # ── Chainlink price validation (vs Binance close — both USD) ──────────
     chainlink_price = None
     if chainlink_data is not None and len(chainlink_data) > 0:
         chainlink_price = float(chainlink_data.iloc[-1]["close"])
@@ -339,9 +338,9 @@ def strategy(ctx):
         and ema_fast > ema_mid > ema_slow
     )
 
-    # 2. Price > VWAP
+    # 2. Price > VWAP (USD from Binance)
     checks["Price > VWAP"] = (
-        vwap is not None and current_price > vwap
+        binance_close is not None and vwap is not None and binance_close > vwap
     )
 
     # 3. RSI in momentum zone (not overbought)
@@ -366,10 +365,10 @@ def strategy(ctx):
         and stoch_k > stoch_d and stoch_k < STOCH_UPPER
     )
 
-    # 7. Bollinger Band: price above middle, below upper
+    # 7. Bollinger Band: USD price above middle, below upper
     checks["BB middle < Price < BB upper"] = (
-        bb_middle is not None and bb_upper is not None
-        and bb_middle < current_price < bb_upper
+        binance_close is not None and bb_middle is not None and bb_upper is not None
+        and bb_middle < binance_close < bb_upper
     )
 
     # 8. Volume confirmation
@@ -378,8 +377,8 @@ def strategy(ctx):
         and avg_volume > 0 and latest_volume > avg_volume * VOLUME_MULTIPLIER
     )
 
-    # 9. Minimum percentage change from recent low
-    pct_from_low = ((current_price - low_10) / low_10) * 100 if low_10 > 0 else 0
+    # 9. Minimum percentage change from recent low (USD)
+    pct_from_low = ((binance_close - low_10) / low_10) * 100 if low_10 is not None and low_10 > 0 else 0
     checks[f"Price ≥ {MIN_PCT_CHANGE}% above 10-bar low"] = (
         pct_from_low >= MIN_PCT_CHANGE
     )
@@ -393,14 +392,13 @@ def strategy(ctx):
     # 11. Green candle
     checks["Green candle"] = is_green
 
-    # 12. Chainlink validation
-    if chainlink_price is not None and chainlink_price > 0:
-        deviation_pct = abs(current_price - chainlink_price) / chainlink_price * 100
+    # 12. Chainlink vs Binance price sanity check (both USD)
+    if binance_close is not None and chainlink_price is not None and chainlink_price > 0:
+        deviation_pct = abs(binance_close - chainlink_price) / chainlink_price * 100
         checks[f"Chainlink deviation < {CHAINLINK_MAX_DEV}%"] = (
             deviation_pct < CHAINLINK_MAX_DEV
         )
     else:
-        # If Chainlink unavailable, pass this check (graceful degradation)
         checks[f"Chainlink deviation < {CHAINLINK_MAX_DEV}%"] = True
 
     # ── Evaluate ──────────────────────────────────────────────────────────

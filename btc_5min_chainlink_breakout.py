@@ -99,7 +99,6 @@ chainlink_data = None
 last_binance_fetch = 0
 last_chainlink_fetch = 0
 last_pnl_log_time = 0
-last_price_update_time = 0
 
 # Track previous Chainlink oracle readings for direction confirmation
 oracle_history = deque(maxlen=5)
@@ -122,13 +121,12 @@ def calc_size(atr_ratio):
 def strategy(ctx):
     global tick_count, binance_data, chainlink_data
     global last_binance_fetch, last_chainlink_fetch
-    global last_pnl_log_time, last_price_update_time
+    global last_pnl_log_time
 
     tick_count += 1
     current_price = ctx.price.up
     current_down = ctx.price.down
     current_time = time.time()
-    last_price_update_time = current_time
 
     # ── Periodic logging ──────────────────────────────────────────────────
     if tick_count % 60 == 0:
@@ -170,8 +168,6 @@ def strategy(ctx):
             log.warning("Chainlink fetch failed: %s", e)
 
     # ── Guards ────────────────────────────────────────────────────────────
-    if current_time - last_price_update_time > 30:
-        return
     if binance_data is None or len(binance_data) < LOOKBACK_BARS + 10:
         return
 
@@ -180,12 +176,11 @@ def strategy(ctx):
     if ind is None:
         return
 
-    vwap = ind.vwap() if hasattr(ind, "vwap") else None
     ema9 = ind.ema(9)
     ema21 = ind.ema(21)
     rsi = ind.rsi(14)
 
-    # ── Channel, ATR, Volume from Binance candles ─────────────────────────
+    # ── Channel, ATR, Volume, VWAP from Binance candles ───────────────────
     high_channel = None
     low_channel = None
     atr_current = None
@@ -193,12 +188,21 @@ def strategy(ctx):
     atr_ratio = None
     latest_volume = None
     avg_volume = None
+    binance_close = None
+    vwap = None
 
     try:
         from polyalpha.analysis import IndicatorCalculator
         calc = IndicatorCalculator(binance_data)
+        binance_close = float(binance_data.iloc[-1]["close"])
 
-        # 20-candle high/low channel
+        # VWAP from Binance (has volume)
+        try:
+            vwap = float(calc.vwap().iloc[-1])
+        except Exception:
+            vwap = None
+
+        # 20-candle high/low channel (USD)
         lookback = binance_data.tail(LOOKBACK_BARS)
         high_channel = float(lookback["high"].max())
         low_channel = float(lookback["low"].min())
@@ -236,9 +240,10 @@ def strategy(ctx):
 
     up_checks = {}
 
-    # 1. Price above 20-bar high (breakout)
+    # 1. Price above 20-bar high (breakout) — both USD
     up_checks["Price > 20-bar high"] = (
-        high_channel is not None and current_price > high_channel
+        binance_close is not None and high_channel is not None
+        and binance_close > high_channel
     )
 
     # 2. ATR expanding (volatility surge)
@@ -265,17 +270,17 @@ def strategy(ctx):
     # 6. Chainlink oracle rising
     up_checks["Oracle rising"] = oracle_rising
 
-    # 7. Price > VWAP
+    # 7. Price > VWAP (USD)
     up_checks["Price > VWAP"] = (
-        vwap is not None and current_price > vwap
+        binance_close is not None and vwap is not None and binance_close > vwap
     )
 
     if all(up_checks.values()):
         size = calc_size(atr_ratio if atr_ratio else 1.0)
         log.info(
-            "🚀 BREAKOUT UP │ Price: %.4f │ Channel High: %.4f │ "
+            "🚀 BREAKOUT UP │ USD: %.2f │ Channel High: %.2f │ "
             "ATR×: %.2f │ RSI: %.1f │ Vol×: %.1f │ Size: $%.0f",
-            current_price, high_channel,
+            binance_close, high_channel,
             atr_ratio if atr_ratio else 0,
             rsi if rsi else 0,
             (latest_volume / avg_volume) if avg_volume else 0,
@@ -295,9 +300,10 @@ def strategy(ctx):
 
     down_checks = {}
 
-    # 1. Price below 20-bar low (breakdown)
+    # 1. Price below 20-bar low (breakdown) — both USD
     down_checks["Price < 20-bar low"] = (
-        low_channel is not None and current_price < low_channel
+        binance_close is not None and low_channel is not None
+        and binance_close < low_channel
     )
 
     # 2. ATR expanding
@@ -330,9 +336,9 @@ def strategy(ctx):
     if all(down_checks.values()):
         size = calc_size(atr_ratio if atr_ratio else 1.0)
         log.info(
-            "💥 BREAKOUT DOWN │ Price: %.4f │ Channel Low: %.4f │ "
+            "💥 BREAKOUT DOWN │ USD: %.2f │ Channel Low: %.2f │ "
             "ATR×: %.2f │ RSI: %.1f │ DOWN: %.4f │ Size: $%.0f",
-            current_price, low_channel,
+            binance_close, low_channel,
             atr_ratio if atr_ratio else 0,
             rsi if rsi else 0,
             current_down,

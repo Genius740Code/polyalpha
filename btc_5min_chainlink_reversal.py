@@ -96,7 +96,6 @@ chainlink_data = None
 last_binance_fetch = 0
 last_chainlink_fetch = 0
 last_pnl_log_time = 0
-last_price_update_time = 0
 
 
 def size_for_signal(oracle_dev_pct, rsi_value, side):
@@ -125,13 +124,12 @@ def size_for_signal(oracle_dev_pct, rsi_value, side):
 def strategy(ctx):
     global tick_count, binance_data, chainlink_data
     global last_binance_fetch, last_chainlink_fetch
-    global last_pnl_log_time, last_price_update_time
+    global last_pnl_log_time
 
     tick_count += 1
     current_price = ctx.price.up
     current_down = ctx.price.down
     current_time = time.time()
-    last_price_update_time = current_time
 
     # ── Periodic logging ──────────────────────────────────────────────────
     if tick_count % 60 == 0:
@@ -164,20 +162,15 @@ def strategy(ctx):
             log.warning("Chainlink fetch failed: %s", e)
 
     # ── Guards ────────────────────────────────────────────────────────────
-    if current_time - last_price_update_time > 30:
-        return
     if binance_data is None or len(binance_data) < 30:
         return
     if chainlink_data is None or len(chainlink_data) < 1:
         return
 
-    # ── Chainlink oracle price ────────────────────────────────────────────
+    # ── Chainlink oracle price (USD) ──────────────────────────────────────
     oracle_price = float(chainlink_data.iloc[-1]["close"])
     if oracle_price <= 0:
         return
-
-    oracle_dev_up = ((current_price - oracle_price) / oracle_price) * 100
-    oracle_dev_down = ((oracle_price - current_price) / oracle_price) * 100
 
     # ── Indicators ────────────────────────────────────────────────────────
     ind = ctx.indicators
@@ -186,7 +179,8 @@ def strategy(ctx):
 
     rsi = ind.rsi(14)
 
-    # MACD + Bollinger from Binance candles
+    # MACD + Bollinger + VWAP from Binance candles (USD domain)
+    binance_close = None
     macd_hist = None
     bb_lower = None
     bb_upper = None
@@ -196,6 +190,7 @@ def strategy(ctx):
     try:
         from polyalpha.analysis import IndicatorCalculator
         calc = IndicatorCalculator(binance_data)
+        binance_close = float(binance_data.iloc[-1]["close"])
 
         # MACD histogram
         macd_result = calc.macd(fast=12, slow=26, signal=9)
@@ -223,6 +218,13 @@ def strategy(ctx):
         log.warning("Indicator error: %s", e)
         return
 
+    if binance_close is None:
+        return
+
+    # ── Oracle deviation (USD vs USD) ──────────────────────────────────────
+    oracle_dev_up = ((binance_close - oracle_price) / oracle_price) * 100
+    oracle_dev_down = ((oracle_price - binance_close) / oracle_price) * 100
+
     # ── Candle color ──────────────────────────────────────────────────────
     candle_open = ctx._bot._candle_open_price
     is_green = candle_open is not None and current_price > candle_open
@@ -240,7 +242,7 @@ def strategy(ctx):
     up_checks = {}
     up_checks["Price < Oracle by ≥0.08%"] = oracle_dev_down >= ORACLE_DEV_MIN
     up_checks["RSI < 35 (oversold)"] = rsi is not None and rsi < RSI_OVERSOLD
-    up_checks["Price < BB lower"] = bb_lower is not None and current_price < bb_lower
+    up_checks["Price < BB lower"] = bb_lower is not None and binance_close < bb_lower
     up_checks["MACD hist fading"] = (
         macd_hist is not None and (macd_hist > -MACD_HIST_NEAR_ZERO or macd_hist > 0)
     )
@@ -250,9 +252,9 @@ def strategy(ctx):
     if all(up_checks.values()):
         size = size_for_signal(oracle_dev_down, rsi, "UP")
         log.info(
-            "🟢 BUY UP │ Price: %.4f │ Oracle: %.2f │ Dev: -%.2f%% │ "
+            "🟢 BUY UP │ USD: %.2f │ Oracle: %.2f │ Dev: -%.2f%% │ "
             "RSI: %.1f │ Size: $%.0f",
-            current_price, oracle_price, oracle_dev_down, rsi, size,
+            binance_close, oracle_price, oracle_dev_down, rsi, size,
         )
         ctx.buy_once_per_candle("UP", size)
     else:
@@ -269,7 +271,7 @@ def strategy(ctx):
     down_checks = {}
     down_checks["Price > Oracle by ≥0.08%"] = oracle_dev_up >= ORACLE_DEV_MIN
     down_checks["RSI > 70 (overbought)"] = rsi is not None and rsi > RSI_OVERBOUGHT
-    down_checks["Price > BB upper"] = bb_upper is not None and current_price > bb_upper
+    down_checks["Price > BB upper"] = bb_upper is not None and binance_close > bb_upper
     down_checks["MACD hist fading"] = (
         macd_hist is not None and (macd_hist < MACD_HIST_NEAR_ZERO or macd_hist < 0)
     )
@@ -279,9 +281,9 @@ def strategy(ctx):
     if all(down_checks.values()):
         size = size_for_signal(oracle_dev_up, rsi, "DOWN")
         log.info(
-            "🔴 BUY DOWN │ Price: %.4f │ Oracle: %.2f │ Dev: +%.2f%% │ "
+            "🔴 BUY DOWN │ USD: %.2f │ Oracle: %.2f │ Dev: +%.2f%% │ "
             "RSI: %.1f │ Size: $%.0f",
-            current_price, oracle_price, oracle_dev_up, rsi, size,
+            binance_close, oracle_price, oracle_dev_up, rsi, size,
         )
         ctx.buy_once_per_candle("DOWN", size)
     else:

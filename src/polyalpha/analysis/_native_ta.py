@@ -118,15 +118,13 @@ def roc(series: pd.Series, length: int = 12) -> pd.Series:
 
 def vwap(close: pd.Series, volume: pd.Series = None) -> pd.Series:
     """Volume Weighted Average Price.
-    
-    If volume is not provided, assumes equal volume for all periods (simple VWAP).
+
+    Requires volume data. Returns None-filled series when volume is absent.
     """
     if volume is None:
-        # Simple cumulative average when volume data is unavailable
-        return close.expanding().mean()
-    
-    # Standard VWAP calculation
-    tp = close  # Using close as typical price when high/low not available
+        return pd.Series([None] * len(close), index=close.index)
+
+    tp = close
     cum_volume_price = (tp * volume).cumsum()
     cum_volume = volume.cumsum()
     return cum_volume_price / cum_volume

@@ -36,7 +36,6 @@ Usage:
 """
 import logging
 import time
-from collections import deque
 
 import polyalpha
 from polyalpha.analysis import DataFeed, DataFeedConfig
@@ -101,7 +100,6 @@ last_binance_fetch = 0
 last_chainlink_fetch = 0
 
 last_pnl_log_time = 0
-last_price_update_time = 0
 
 
 # ── Helper: Position Sizing with Optional ADX Boost ──────────────────────────
@@ -128,12 +126,11 @@ def calculate_size(adx_value, pct_from_low):
 def strategy(ctx):
     global tick_count, binance_data, chainlink_data
     global last_binance_fetch, last_chainlink_fetch
-    global last_pnl_log_time, last_price_update_time
+    global last_pnl_log_time
 
     tick_count += 1
     current_price = ctx.price.up
     current_time = time.time()
-    last_price_update_time = current_time
 
     # ── Periodic logging ──────────────────────────────────────────────────
     if tick_count % 60 == 0:
@@ -172,31 +169,35 @@ def strategy(ctx):
             log.warning("Chainlink fetch failed: %s", e)
             chainlink_data = None
 
-    # ── Staleness guard ───────────────────────────────────────────────────
-    if current_time - last_price_update_time > 30:
-        return
-
     # ── Need minimum data ─────────────────────────────────────────────────
     if binance_data is None or len(binance_data) < 30:
         return
 
-    # ── Core indicators from ctx ──────────────────────────────────────────
+    # ── Core indicators from ctx (Polymarket sentiment) ───────────────────
     ind = ctx.indicators
     if ind is None:
         return
 
-    vwap = ind.vwap() if hasattr(ind, "vwap") else None
     ema_fast = ind.ema(EMA_FAST)
     ema_slow = ind.ema(EMA_SLOW)
     rsi = ind.rsi(RSI_PERIOD)
 
-    # ── MACD + optional ADX from Binance candles ──────────────────────────
+    # ── Binance-based indicators (USD domain) ─────────────────────────────
+    binance_close = None
+    vwap = None
     macd_hist = None
     adx_value = None
 
     try:
         from polyalpha.analysis import IndicatorCalculator
         calc = IndicatorCalculator(binance_data)
+        binance_close = float(binance_data.iloc[-1]["close"])
+
+        # VWAP from Binance (has volume)
+        try:
+            vwap = float(calc.vwap().iloc[-1])
+        except Exception:
+            vwap = None
 
         # MACD histogram
         macd_result = calc.macd(fast=12, slow=26, signal=9)
@@ -231,23 +232,24 @@ def strategy(ctx):
         latest_volume = float(binance_data.iloc[-1]["volume"])
         avg_volume = float(binance_data.tail(20)["volume"].mean())
 
-    # ── Min % change from 10-bar low ──────────────────────────────────────
-    if len(binance_data) >= 10:
+    # ── Min % change from 10-bar low (USD) ────────────────────────────────
+    if len(binance_data) >= 10 and binance_close is not None:
         low_10 = float(binance_data.tail(10)["low"].min())
+        pct_from_low = ((binance_close - low_10) / low_10) * 100 if low_10 > 0 else 0
     else:
-        low_10 = current_price
-    pct_from_low = ((current_price - low_10) / low_10) * 100 if low_10 > 0 else 0
+        low_10 = binance_close if binance_close else 0
+        pct_from_low = 0
 
     # ── Green candle ──────────────────────────────────────────────────────
     candle_open = ctx._bot._candle_open_price
     is_green = candle_open is not None and current_price > candle_open
 
-    # ── Chainlink price validation ────────────────────────────────────────
+    # ── Chainlink price validation (both USD) ─────────────────────────────
     chainlink_ok = True
-    if chainlink_data is not None and len(chainlink_data) > 0:
+    if chainlink_data is not None and len(chainlink_data) > 0 and binance_close is not None:
         cl_price = float(chainlink_data.iloc[-1]["close"])
         if cl_price > 0:
-            deviation = abs(current_price - cl_price) / cl_price * 100
+            deviation = abs(binance_close - cl_price) / cl_price * 100
             chainlink_ok = deviation < CHAINLINK_MAX_DEV
 
     # ══════════════════════════════════════════════════════════════════════
@@ -262,9 +264,9 @@ def strategy(ctx):
         and ema_fast > ema_slow
     )
 
-    # 2. Price > VWAP
+    # 2. Price > VWAP (USD)
     checks["Price > VWAP"] = (
-        vwap is not None and current_price > vwap
+        binance_close is not None and vwap is not None and binance_close > vwap
     )
 
     # 3. RSI in [50, 75]
@@ -306,9 +308,9 @@ def strategy(ctx):
         size = calculate_size(adx_value, pct_from_low)
 
         log.info(
-            "🎯 ENTRY │ Price: %.4f │ RSI: %.1f │ MACD-H: %.6f │ "
+            "🎯 ENTRY │ USD: %.2f │ RSI: %.1f │ MACD-H: %.6f │ "
             "ADX: %s │ Size: $%.0f",
-            current_price,
+            binance_close,
             rsi if rsi else 0,
             macd_hist if macd_hist else 0,
             f"{adx_value:.1f}" if adx_value else "N/A",

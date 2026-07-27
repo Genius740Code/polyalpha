@@ -16,9 +16,7 @@ Usage
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional, Any
-
-import pandas as pd
+from typing import Any, Callable
 
 from .indicators import IndicatorCalculator
 
@@ -242,6 +240,92 @@ class SignalGenerator:
             return False
 
         return bool(latest_price < latest_ema)
+
+    def ema_bullish_crossover(
+        self,
+        fast: int = 9,
+        slow: int = 21,
+        price: str = "close"
+    ) -> bool:
+        """
+        Check if fast EMA crossed above slow EMA (bullish).
+
+        Parameters
+        ----------
+        fast : int
+            Fast EMA period (default: 9).
+        slow : int
+            Slow EMA period (default: 21).
+        price : str
+            Price column to use (default: "close").
+
+        Returns
+        -------
+        bool
+            True if fast EMA crossed above slow EMA.
+        """
+        if fast >= slow:
+            raise ValueError("fast period must be less than slow period")
+
+        fast_ema = self.indicators.ema(fast, price)
+        slow_ema = self.indicators.ema(slow, price)
+
+        fast_values = fast_ema.dropna().tail(2)
+        slow_values = slow_ema.dropna().tail(2)
+
+        if len(fast_values) < 2 or len(slow_values) < 2:
+            self._log.warning("Insufficient EMA data for crossover check")
+            return False
+
+        prev_fast = fast_values.iloc[-2]
+        curr_fast = fast_values.iloc[-1]
+        prev_slow = slow_values.iloc[-2]
+        curr_slow = slow_values.iloc[-1]
+
+        return bool(prev_fast <= prev_slow and curr_fast > curr_slow)
+
+    def ema_bearish_crossover(
+        self,
+        fast: int = 9,
+        slow: int = 21,
+        price: str = "close"
+    ) -> bool:
+        """
+        Check if fast EMA crossed below slow EMA (bearish).
+
+        Parameters
+        ----------
+        fast : int
+            Fast EMA period (default: 9).
+        slow : int
+            Slow EMA period (default: 21).
+        price : str
+            Price column to use (default: "close").
+
+        Returns
+        -------
+        bool
+            True if fast EMA crossed below slow EMA.
+        """
+        if fast >= slow:
+            raise ValueError("fast period must be less than slow period")
+
+        fast_ema = self.indicators.ema(fast, price)
+        slow_ema = self.indicators.ema(slow, price)
+
+        fast_values = fast_ema.dropna().tail(2)
+        slow_values = slow_ema.dropna().tail(2)
+
+        if len(fast_values) < 2 or len(slow_values) < 2:
+            self._log.warning("Insufficient EMA data for crossover check")
+            return False
+
+        prev_fast = fast_values.iloc[-2]
+        curr_fast = fast_values.iloc[-1]
+        prev_slow = slow_values.iloc[-2]
+        curr_slow = slow_values.iloc[-1]
+
+        return bool(prev_fast >= prev_slow and curr_fast < curr_slow)
 
     def price_above_bb_upper(
         self,

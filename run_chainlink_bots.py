@@ -24,14 +24,14 @@ BOTS = [
     "btc_5min_chainlink_sniper.py",
 ]
 
-# Store subprocesses
+# Store subprocesses as (bot_name, proc) tuples
 processes = []
 
 
 def signal_handler(sig, frame):
     """Handle Ctrl+C to gracefully shutdown all bots."""
     print("\n\n🛑 Shutting down all bots...")
-    for proc in processes:
+    for _, proc in processes:
         if proc.poll() is None:
             proc.terminate()
     sys.exit(0)
@@ -66,25 +66,17 @@ def main():
             [sys.executable, str(bot_path)],
             cwd=str(script_dir),
         )
-        processes.append(proc)
+        processes.append((bot, proc))
         time.sleep(1)  # Stagger starts slightly
     
     print("\n✅ All bots started. Monitoring...")
     print("-" * 72)
     
-    # Monitor processes
-    try:
-        while True:
-            # Check if any process died
-            for i, proc in enumerate(processes):
-                if proc.poll() is not None:
-                    print(f"⚠️  {BOTS[i]} exited with code {proc.returncode}")
-                    # Optionally restart the bot here
-                    # processes[i] = subprocess.Popen(...)
-            
-            time.sleep(5)
-    except KeyboardInterrupt:
-        signal_handler(signal.SIGINT, None)
+    while True:
+        for name, proc in processes:
+            if proc.poll() is not None:
+                print(f"⚠️  {name} exited with code {proc.returncode}")
+        time.sleep(5)
 
 
 if __name__ == "__main__":

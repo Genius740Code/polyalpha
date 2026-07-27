@@ -547,6 +547,20 @@ class IndicatorCalculator:
 
         return result.rename(f"VolROC{period}")
 
+    def vwap(self) -> pd.Series:
+        """
+        Volume Weighted Average Price using high/low/close typical price.
+
+        Returns
+        -------
+        pd.Series
+            VWAP values.
+        """
+        tp = (self.data["high"] + self.data["low"] + self.data["close"]) / 3
+        cum_vol_price = (tp * self.data["volume"]).cumsum()
+        cum_vol = self.data["volume"].cumsum()
+        return (cum_vol_price / cum_vol).rename("VWAP")
+
     # ── Combined Calculations ────────────────────────────────────────────────
 
     def calculate_all(self, config: Optional[dict] = None) -> dict[str, pd.Series | dict[str, pd.Series]]:

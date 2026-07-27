@@ -399,6 +399,8 @@ All functions return a `Condition` object that evaluates `(ctx) -> bool`.
 | `sma_below(side, period)` | Price < SMA(period) |
 | `ema_above(side, period)` | Price > EMA(period) |
 | `ema_below(side, period)` | Price < EMA(period) |
+| `ema_crossed_above(fast, slow)` | Fast EMA crossed **above** slow EMA since last tick |
+| `ema_crossed_below(fast, slow)` | Fast EMA crossed **below** slow EMA since last tick |
 
 ### MACD Conditions
 

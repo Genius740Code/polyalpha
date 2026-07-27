@@ -4,38 +4,46 @@ Tests for polyalpha.conditions — composable trading conditions.
 Run with: pytest tests/unit/core/test_conditions.py -v
 """
 
-import pytest
 from typing import Optional
+
+import pytest
 
 import polyalpha
 from polyalpha.conditions import (
-    Condition,
+    Always,
     AndCondition,
-    OrCondition,
-    NotCondition,
-    LambdaCondition,
-    RSIAbove,
-    RSIBelow,
-    PriceAbove,
-    PriceBelow,
+    Condition,
     CrossedAbove,
     CrossedBelow,
-    Always,
+    EMAAbove,
+    EMABelow,
+    EMACrossedAbove,
+    EMACrossedBelow,
+    LambdaCondition,
     Never,
+    NotCondition,
+    OrCondition,
+    PriceAbove,
+    PriceBelow,
+    RSIAbove,
+    RSIBelow,
+    always,
     and_,
-    or_,
-    not_,
-    rsi_above,
-    rsi_below,
-    price_above,
-    price_below,
     crossed_above,
     crossed_below,
-    always,
+    ema_above,
+    ema_below,
+    ema_crossed_above,
+    ema_crossed_below,
     never,
+    not_,
+    or_,
+    price_above,
+    price_below,
+    rsi_above,
+    rsi_below,
     when,
 )
-
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -47,12 +55,25 @@ class FakePrice:
         self.down = down
 
 
+class FakeIndicators:
+    """Stand-in for IndicatorAccessor."""
+    def __init__(self):
+        self._ema_values: dict[int, float] = {}
+
+    def set_ema(self, period: int, value: float) -> None:
+        self._ema_values[period] = value
+
+    def ema(self, period: int = 12) -> Optional[float]:
+        return self._ema_values.get(period)
+
+
 class FakeCtx:
     """Minimal TickContext stand-in for condition tests."""
     def __init__(self, rsi: Optional[float] = None, up: float = 0.0, down: float = 0.0):
         self.rsi = rsi
         self.price = FakePrice(up=up, down=down)
         self._cross_state: dict[int, float] = {}
+        self.indicators = FakeIndicators()
 
 
 # ── Condition base class ───────────────────────────────────────────────────────
@@ -451,6 +472,180 @@ class TestCrossedBelow:
         assert c(ctx_b) is False  # ctx_b: 0.3 -> 0.3 no cross
 
 
+# ── EMA conditions ──────────────────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+class TestEMAAbove:
+    def test_price_above_ema(self):
+        ctx = FakeCtx(up=0.95)
+        ctx.indicators.set_ema(20, 0.85)
+        c = EMAAbove("UP", 20)
+        assert c(ctx) is True
+
+    def test_price_below_ema(self):
+        ctx = FakeCtx(up=0.75)
+        ctx.indicators.set_ema(20, 0.85)
+        c = EMAAbove("UP", 20)
+        assert c(ctx) is False
+
+    def test_price_equal_ema(self):
+        ctx = FakeCtx(up=0.85)
+        ctx.indicators.set_ema(20, 0.85)
+        c = EMAAbove("UP", 20)
+        assert c(ctx) is False
+
+    def test_none_ema_returns_false(self):
+        ctx = FakeCtx(up=0.95)
+        c = EMAAbove("UP", 20)
+        assert c(ctx) is False
+
+    def test_down_side(self):
+        ctx = FakeCtx(down=0.25)
+        ctx.indicators.set_ema(20, 0.15)
+        c = EMAAbove("DOWN", 20)
+        assert c(ctx) is True
+
+    def test_invalid_side_raises(self):
+        with pytest.raises(ValueError, match="side must be 'UP' or 'DOWN'"):
+            EMAAbove("LEFT", 20)
+
+    def test_custom_period(self):
+        ctx = FakeCtx(up=0.95)
+        ctx.indicators.set_ema(50, 0.80)
+        c = EMAAbove("UP", 50)
+        assert c(ctx) is True
+
+
+@pytest.mark.unit
+class TestEMABelow:
+    def test_price_below_ema(self):
+        ctx = FakeCtx(up=0.75)
+        ctx.indicators.set_ema(20, 0.85)
+        c = EMABelow("UP", 20)
+        assert c(ctx) is True
+
+    def test_price_above_ema(self):
+        ctx = FakeCtx(up=0.95)
+        ctx.indicators.set_ema(20, 0.85)
+        c = EMABelow("UP", 20)
+        assert c(ctx) is False
+
+    def test_price_equal_ema(self):
+        ctx = FakeCtx(up=0.85)
+        ctx.indicators.set_ema(20, 0.85)
+        c = EMABelow("UP", 20)
+        assert c(ctx) is False
+
+    def test_none_ema_returns_false(self):
+        ctx = FakeCtx(up=0.75)
+        c = EMABelow("UP", 20)
+        assert c(ctx) is False
+
+    def test_down_side(self):
+        ctx = FakeCtx(down=0.10)
+        ctx.indicators.set_ema(20, 0.20)
+        c = EMABelow("DOWN", 20)
+        assert c(ctx) is True
+
+    def test_invalid_side_raises(self):
+        with pytest.raises(ValueError, match="side must be 'UP' or 'DOWN'"):
+            EMABelow("LEFT", 20)
+
+
+@pytest.mark.unit
+class TestEMACrossedAbove:
+    def test_first_tick_returns_false(self):
+        ctx = FakeCtx()
+        ctx.indicators.set_ema(9, 0.80)
+        ctx.indicators.set_ema(21, 0.70)
+        c = EMACrossedAbove(9, 21)
+        assert c(ctx) is False
+
+    def test_crosses_above_on_second_tick(self):
+        ctx = FakeCtx()
+        ctx.indicators.set_ema(9, 0.75)
+        ctx.indicators.set_ema(21, 0.80)
+        c = EMACrossedAbove(9, 21)
+        c(ctx)  # first tick
+        ctx.indicators.set_ema(9, 0.85)
+        ctx.indicators.set_ema(21, 0.80)
+        assert c(ctx) is True
+
+    def test_no_cross_stays_below(self):
+        ctx = FakeCtx()
+        ctx.indicators.set_ema(9, 0.70)
+        ctx.indicators.set_ema(21, 0.80)
+        c = EMACrossedAbove(9, 21)
+        c(ctx)
+        ctx.indicators.set_ema(9, 0.75)
+        ctx.indicators.set_ema(21, 0.80)
+        assert c(ctx) is False
+
+    def test_no_cross_stays_above(self):
+        ctx = FakeCtx()
+        ctx.indicators.set_ema(9, 0.85)
+        ctx.indicators.set_ema(21, 0.80)
+        c = EMACrossedAbove(9, 21)
+        c(ctx)
+        ctx.indicators.set_ema(9, 0.90)
+        ctx.indicators.set_ema(21, 0.82)
+        assert c(ctx) is False
+
+    def test_none_ema_returns_false(self):
+        ctx = FakeCtx()
+        c = EMACrossedAbove(9, 21)
+        assert c(ctx) is False
+
+    def test_invalid_periods_raises(self):
+        with pytest.raises(ValueError, match="fast period must be less than slow"):
+            EMACrossedAbove(21, 9)
+
+
+@pytest.mark.unit
+class TestEMACrossedBelow:
+    def test_first_tick_returns_false(self):
+        ctx = FakeCtx()
+        ctx.indicators.set_ema(9, 0.70)
+        ctx.indicators.set_ema(21, 0.80)
+        c = EMACrossedBelow(9, 21)
+        assert c(ctx) is False
+
+    def test_crosses_below_on_second_tick(self):
+        ctx = FakeCtx()
+        ctx.indicators.set_ema(9, 0.85)
+        ctx.indicators.set_ema(21, 0.80)
+        c = EMACrossedBelow(9, 21)
+        c(ctx)
+        ctx.indicators.set_ema(9, 0.75)
+        ctx.indicators.set_ema(21, 0.80)
+        assert c(ctx) is True
+
+    def test_no_cross_stays_above(self):
+        ctx = FakeCtx()
+        ctx.indicators.set_ema(9, 0.85)
+        ctx.indicators.set_ema(21, 0.80)
+        c = EMACrossedBelow(9, 21)
+        c(ctx)
+        ctx.indicators.set_ema(9, 0.90)
+        ctx.indicators.set_ema(21, 0.82)
+        assert c(ctx) is False
+
+    def test_no_cross_stays_below(self):
+        ctx = FakeCtx()
+        ctx.indicators.set_ema(9, 0.70)
+        ctx.indicators.set_ema(21, 0.80)
+        c = EMACrossedBelow(9, 21)
+        c(ctx)
+        ctx.indicators.set_ema(9, 0.72)
+        ctx.indicators.set_ema(21, 0.80)
+        assert c(ctx) is False
+
+    def test_invalid_periods_raises(self):
+        with pytest.raises(ValueError, match="fast period must be less than slow"):
+            EMACrossedBelow(21, 9)
+
+
 # ── Constant conditions ─────────────────────────────────────────────────────────
 
 
@@ -519,6 +714,25 @@ class TestFactories:
     def test_crossed_below(self):
         c = crossed_below("UP", 0.5)
         assert isinstance(c, CrossedBelow)
+
+    def test_ema_above(self):
+        c = ema_above("UP", 20)
+        assert isinstance(c, EMAAbove)
+        ctx = FakeCtx(up=0.9)
+        ctx.indicators.set_ema(20, 0.80)
+        assert c(ctx) is True
+
+    def test_ema_below(self):
+        c = ema_below("DOWN", 20)
+        assert isinstance(c, EMABelow)
+
+    def test_ema_crossed_above(self):
+        c = ema_crossed_above(9, 21)
+        assert isinstance(c, EMACrossedAbove)
+
+    def test_ema_crossed_below(self):
+        c = ema_crossed_below(9, 21)
+        assert isinstance(c, EMACrossedBelow)
 
     def test_always(self):
         c = always()
@@ -604,6 +818,10 @@ class TestExports:
             "price_below",
             "crossed_above",
             "crossed_below",
+            "ema_above",
+            "ema_below",
+            "ema_crossed_above",
+            "ema_crossed_below",
             "always",
             "never",
             "when",

@@ -16,7 +16,7 @@ Each condition is a callable that receives a TickContext and returns bool.
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Callable
 
 from .bot import TickContext
 
@@ -219,6 +219,102 @@ class CrossedBelow(Condition):
         return crossed
 
 
+class EMAAbove(Condition):
+    """True when the side's current price is above its EMA."""
+
+    def __init__(self, side: str, period: int = 20):
+        if side.upper() not in ("UP", "DOWN"):
+            raise ValueError(f"side must be 'UP' or 'DOWN', got {side!r}")
+        self._side = side.lower()
+        self._period = period
+
+    def __call__(self, ctx: TickContext) -> bool:
+        price = ctx.price.up if self._side == "up" else ctx.price.down
+        ema = ctx.indicators.ema(self._period)
+        if ema is None:
+            return False
+        return price > ema
+
+
+class EMABelow(Condition):
+    """True when the side's current price is below its EMA."""
+
+    def __init__(self, side: str, period: int = 20):
+        if side.upper() not in ("UP", "DOWN"):
+            raise ValueError(f"side must be 'UP' or 'DOWN', got {side!r}")
+        self._side = side.lower()
+        self._period = period
+
+    def __call__(self, ctx: TickContext) -> bool:
+        price = ctx.price.up if self._side == "up" else ctx.price.down
+        ema = ctx.indicators.ema(self._period)
+        if ema is None:
+            return False
+        return price < ema
+
+
+class EMACrossedAbove(Condition):
+    """
+    True when the fast EMA crossed *above* the slow EMA since the last tick.
+
+    Stores previous EMA values on the instance to detect the crossing.
+    Returns False on the first evaluation (no history).
+    """
+
+    def __init__(self, fast: int = 9, slow: int = 21):
+        if fast >= slow:
+            raise ValueError("fast period must be less than slow period")
+        self._fast = fast
+        self._slow = slow
+        self._prev_fast: float | None = None
+        self._prev_slow: float | None = None
+
+    def __call__(self, ctx: TickContext) -> bool:
+        fast_val = ctx.indicators.ema(self._fast)
+        slow_val = ctx.indicators.ema(self._slow)
+        if fast_val is None or slow_val is None:
+            return False
+        if self._prev_fast is None or self._prev_slow is None:
+            self._prev_fast = fast_val
+            self._prev_slow = slow_val
+            return False
+        crossed = self._prev_fast <= self._prev_slow and fast_val > slow_val
+        self._prev_fast = fast_val
+        self._prev_slow = slow_val
+        return crossed
+
+
+class EMACrossedBelow(Condition):
+    """
+    True when the fast EMA crossed *below* the slow EMA since the last tick.
+
+    Stores previous EMA values on the instance to detect the crossing.
+    Returns False on the first evaluation (no history).
+    """
+
+    def __init__(self, fast: int = 9, slow: int = 21):
+        if fast >= slow:
+            raise ValueError("fast period must be less than slow period")
+        self._fast = fast
+        self._slow = slow
+        self._prev_fast: float | None = None
+        self._prev_slow: float | None = None
+
+    def __call__(self, ctx: TickContext) -> bool:
+        fast_val = ctx.indicators.ema(self._fast)
+        slow_val = ctx.indicators.ema(self._slow)
+        if fast_val is None or slow_val is None:
+            return False
+        if self._prev_fast is None or self._prev_slow is None:
+            self._prev_fast = fast_val
+            self._prev_slow = slow_val
+            return False
+        crossed = self._prev_fast >= self._prev_slow and fast_val < slow_val
+        self._prev_fast = fast_val
+        self._prev_slow = slow_val
+        return crossed
+
+
 class Always(Condition):
     """Always true — useful as a default / fallthrough."""
 
@@ -265,6 +361,26 @@ def crossed_below(side: str, threshold: float) -> Condition:
     return CrossedBelow(side, threshold)
 
 
+def ema_above(side: str, period: int = 20) -> Condition:
+    """side ("UP"|"DOWN") current price > EMA(period)."""
+    return EMAAbove(side, period)
+
+
+def ema_below(side: str, period: int = 20) -> Condition:
+    """side ("UP"|"DOWN") current price < EMA(period)."""
+    return EMABelow(side, period)
+
+
+def ema_crossed_above(fast: int = 9, slow: int = 21) -> Condition:
+    """fast EMA crossed above slow EMA since last tick."""
+    return EMACrossedAbove(fast, slow)
+
+
+def ema_crossed_below(fast: int = 9, slow: int = 21) -> Condition:
+    """fast EMA crossed below slow EMA since last tick."""
+    return EMACrossedBelow(fast, slow)
+
+
 def always() -> Condition:
     """Condition that is always true."""
     return Always()
@@ -291,6 +407,10 @@ __all__ = [
     "price_below",
     "crossed_above",
     "crossed_below",
+    "ema_above",
+    "ema_below",
+    "ema_crossed_above",
+    "ema_crossed_below",
     "always",
     "never",
     "when",
