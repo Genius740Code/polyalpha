@@ -207,6 +207,56 @@ macd = indicators.macd()
 
 Returns dict with keys: `"macd"`, `"signal"`, `"histogram"`.
 
+#### `supertrend(period=7, multiplier=3.0)`
+
+Supertrend — trailing stop-loss indicator.
+
+```python
+st = indicators.supertrend(7, 3.0)
+# {"trend": pd.Series, "direction": pd.Series}
+```
+
+`direction` is 1 (uptrend, price above band) or -1 (downtrend, price below band).
+
+Returns dict with keys: `"trend"`, `"direction"`.
+
+#### `psar(af=0.02, af_max=0.2)`
+
+Parabolic SAR — trend-following with acceleration factor.
+
+```python
+psar = indicators.psar(0.02, 0.2)
+# {"value": pd.Series, "trend": pd.Series}
+```
+
+`trend` is 1 (price above SAR), -1 (price below SAR), or 0 (unknown).
+
+Returns dict with keys: `"value"`, `"trend"`.
+
+#### `ichimoku(tenkan=9, kijun=26, senkou=52)`
+
+Ichimoku Cloud — comprehensive trend, support/resistance, and momentum.
+
+```python
+ichi = indicators.ichimoku()
+# {"tenkan": pd.Series, "kijun": pd.Series, "chikou": pd.Series,
+#  "span_a": pd.Series, "span_b": pd.Series,
+#  "cloud": {"top": pd.Series, "bottom": pd.Series}}
+```
+
+Returns dict with keys: `"tenkan"`, `"kijun"`, `"chikou"`, `"span_a"`, `"span_b"`, `"cloud"`.
+
+#### `donchian(length=20)`
+
+Donchian Channels — rolling period high/low range.
+
+```python
+dc = indicators.donchian(20)
+# {"upper": pd.Series, "middle": pd.Series, "lower": pd.Series}
+```
+
+Returns dict with keys: `"upper"`, `"middle"`, `"lower"`.
+
 #### `adx(period=14)`
 
 Average Directional Index.
@@ -346,6 +396,16 @@ all_indicators = indicators.calculate_all({
 
 Default config calculates SMA(20,50), EMA(12,26), RSI(14), MACD, Bollinger Bands, and ATR(14).
 
+Supports additional keys: `"supertrend"`, `"psar"`, `"donchian"`, `"ichimoku"`.
+
+```python
+all_indicators = indicators.calculate_all({
+    "supertrend": {"period": 7, "multiplier": 3.0},
+    "donchian": {"length": 20},
+    "ichimoku": {"tenkan": 9, "kijun": 26, "senkou": 52},
+})
+```
+
 ### Helpers
 
 | Method | Description |
@@ -384,6 +444,8 @@ signals = SignalGenerator(indicators)
 | `price_below_sma(period=20, price="close")` | Price < SMA |
 | `price_above_ema(period=20, price="close")` | Price > EMA |
 | `price_below_ema(period=20, price="close")` | Price < EMA |
+| `ema_bullish_crossover(fast=9, slow=21, price="close")` | Fast EMA crossed above slow EMA |
+| `ema_bearish_crossover(fast=9, slow=21, price="close")` | Fast EMA crossed below slow EMA |
 
 ### Bollinger Band Signals
 
@@ -392,6 +454,9 @@ signals = SignalGenerator(indicators)
 | `price_above_bb_upper(period=20, std_dev=2.0)` | Price > upper band |
 | `price_below_bb_lower(period=20, std_dev=2.0)` | Price < lower band |
 | `price_inside_bb(period=20, std_dev=2.0)` | Price inside bands |
+| `bb_width(period=20, std_dev=2.0, price="close")` | Current band width (upper - lower) |
+| `bb_width_pct(period=20, std_dev=2.0, avg_period=50, price="close")` | Width as % of rolling avg — squeeze detection |
+| `bb_squeeze(period=20, std_dev=2.0, avg_period=50, threshold=1.0, price="close")` | True when band width is tight (squeeze) |
 
 ### MACD Signals
 
@@ -401,6 +466,52 @@ signals = SignalGenerator(indicators)
 | `macd_bearish_crossover(fast=12, slow=26, signal=9)` | MACD crossed below signal |
 | `macd_above_zero(fast=12, slow=26, signal=9)` | MACD histogram > 0 |
 | `macd_below_zero(fast=12, slow=26, signal=9)` | MACD histogram < 0 |
+
+### SuperTrend Signals
+
+| Method | Description |
+|--------|-------------|
+| `supertrend_uptrend(period=7, multiplier=3.0)` | Direction == 1 (uptrend) |
+| `supertrend_downtrend(period=7, multiplier=3.0)` | Direction == -1 (downtrend) |
+| `supertrend_turned_up(period=7, multiplier=3.0)` | Direction just flipped from -1 to 1 |
+| `supertrend_turned_down(period=7, multiplier=3.0)` | Direction just flipped from 1 to -1 |
+
+### PSAR Signals
+
+| Method | Description |
+|--------|-------------|
+| `psar_uptrend(af=0.02, af_max=0.2)` | Price above SAR |
+| `psar_downtrend(af=0.02, af_max=0.2)` | Price below SAR |
+| `psar_turned_up(af=0.02, af_max=0.2)` | SAR just flipped from downtrend to uptrend |
+| `psar_turned_down(af=0.02, af_max=0.2)` | SAR just flipped from uptrend to downtrend |
+| `price_above_psar(af=0.02, af_max=0.2, price="close")` | Price > SAR value |
+| `price_below_psar(af=0.02, af_max=0.2, price="close")` | Price < SAR value |
+
+### Ichimoku Signals
+
+| Method | Description |
+|--------|-------------|
+| `ichimoku_tenkan_above_kijun(tenkan=9, kijun=26)` | Tenkan-sen > Kijun-sen |
+| `ichimoku_tenkan_below_kijun(tenkan=9, kijun=26)` | Tenkan-sen < Kijun-sen |
+| `ichimoku_tenkan_crossed_above_kijun(tenkan=9, kijun=26)` | Tenkan just crossed above Kijun |
+| `ichimoku_tenkan_crossed_below_kijun(tenkan=9, kijun=26)` | Tenkan just crossed below Kijun |
+| `ichimoku_price_above_cloud(tenkan=9, kijun=26, senkou=52, price="close")` | Price above both cloud spans |
+| `ichimoku_price_below_cloud(tenkan=9, kijun=26, senkou=52, price="close")` | Price below both cloud spans |
+| `ichimoku_price_inside_cloud(tenkan=9, kijun=26, senkou=52, price="close")` | Price inside the cloud |
+| `ichimoku_chikou_above_price(tenkan=9, kijun=26, price="close")` | Chikou span > price |
+| `ichimoku_chikou_below_price(tenkan=9, kijun=26, price="close")` | Chikou span < price |
+| `ichimoku_bullish_breakout(tenkan=9, kijun=26, senkou=52, price="close")` | Price above cloud AND tenkan > kijun |
+| `ichimoku_bearish_breakout(tenkan=9, kijun=26, senkou=52, price="close")` | Price below cloud AND tenkan < kijun |
+
+### Donchian Channel Signals
+
+| Method | Description |
+|--------|-------------|
+| `price_above_dc_upper(length=20, price="close")` | Price > upper channel |
+| `price_below_dc_lower(length=20, price="close")` | Price < lower channel |
+| `price_inside_dc(length=20, price="close")` | Price inside channel |
+| `dc_breakout_above(length=20, price="close")` | Price just broke above upper channel |
+| `dc_breakout_below(length=20, price="close")` | Price just broke below lower channel |
 
 ### Stochastic Signals
 

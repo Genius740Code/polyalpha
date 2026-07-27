@@ -233,7 +233,7 @@ First-class indicator API with per-tick caching. All methods accept parameterize
 ```python
 # Query which indicators are available at runtime
 available = ctx.indicators.available()
-# → ["rsi", "sma", "ema", "macd", "bollinger_bands", "roc"]
+# → ["rsi", "sma", "ema", "macd", "bollinger_bands", "roc", "vwap", "donchian"]
 
 # RSI with custom period
 rsi = ctx.indicators.rsi(14)
@@ -261,6 +261,8 @@ roc = ctx.indicators.roc(12)
 | `macd(fast=12, slow=26, signal=9)` | `MACDResult \| None` | MACD line, signal, histogram |
 | `bollinger_bands(period=20, std=2)` | `BBResult \| None` | Upper, mid, lower bands |
 | `roc(period=12)` | `float \| None` | Rate of Change (percent) |
+| `vwap()` | `float \| None` | Volume Weighted Average Price |
+| `donchian(length=20)` | `DonchianResult \| None` | Upper, mid, lower Donchian bands |
 
 All return `None` when `pandas` is not installed or there is insufficient price history.
 
@@ -533,7 +535,7 @@ def strategy(ctx):
 
     # Query available indicators at runtime
     available = ctx.indicators.available()
-    # → ["rsi", "sma", "ema", "macd", "bollinger_bands", "roc"]
+    # → ["rsi", "sma", "ema", "macd", "bollinger_bands", "roc", "vwap", "donchian"]
 ```
 
 | Property | Returns | Description |

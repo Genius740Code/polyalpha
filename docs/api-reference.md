@@ -158,7 +158,7 @@ See [Logging](./logging.md) for full usage.
 
 | Symbol | Source | Description |
 |--------|--------|-------------|
-| `conditions` | `conditions.py` | Module. 11 condition classes, 3 combinators (`and_`, `or_`, `not_`), 9 factories (`rsi_above`, `price_below`, `crossed_above`, `when`, etc.), operator overloading (`&`, `\|`, `~`) |
+| `conditions` | `conditions.py` | Module. 28 condition classes, 3 combinators (`and_`, `or_`, `not_`), 26 factories (`rsi_above`, `ema_crossed_above`, `supertrend_up`, `ichimoku_bullish_breakout`, etc.), operator overloading (`&`, `\|`, `~`) |
 
 ---
 
@@ -168,8 +168,8 @@ See [Logging](./logging.md) for full usage.
 |--------|--------|-------------|
 | `DataFeed` | `analysis/data_feed.py` | Market data feed with caching |
 | `DataFeedConfig` | `analysis/data_feed.py` | Data feed configuration |
-| `IndicatorCalculator` | `analysis/indicators.py` | 24 technical indicators (RSI, SMA, EMA, MACD, Bollinger, etc.) |
-| `SignalGenerator` | `analysis/signals.py` | 30 trading signal methods |
+| `IndicatorCalculator` | `analysis/indicators.py` | 28 technical indicators (+ supertrend, psar, ichimoku, donchian) |
+| `SignalGenerator` | `analysis/signals.py` | 55+ trading signal methods (+ EMA cross, BB squeeze, supertrend, psar, ichimoku, donchian) |
 
 ---
 

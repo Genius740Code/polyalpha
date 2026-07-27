@@ -1,6 +1,6 @@
 # Examples Guide
 
-The `examples/` directory contains 32 runnable scripts demonstrating every feature of the SDK. They are organized loosely by category.
+The `examples/` directory contains 15 runnable scripts demonstrating every major SDK pattern. Additional standalone strategy scripts are available in the project root. All examples are organized loosely by category.
 
 ---
 
@@ -100,6 +100,30 @@ Async price streaming using `stream.run_async()` instead of `stream.start(backgr
 
 ### `orderbook_example.py`
 Fetches initial REST order book snapshot via `client.orderbook()`, then attaches a WebSocket stream for live order book updates. Demonstrates `feed.refresh()`, `feed.attach_stream()`, `book.up.best_bid`.
+
+---
+
+## Chainlink Strategy Bots (Project Root)
+
+The project root contains composable 5m BTC strategy scripts using Chainlink oracle data. Each is a self-contained `Bot` strategy that can be run directly or launched via `run_chainlink_bots.py`.
+
+### `btc_5min_chainlink_sniper.py`
+Multi-confluence momentum sniper — 12 conditions (EMA alignment, VWAP, RSI zone, MACD bullish, ADX>20, Stochastic, BB, volume, price change, ATR, green candle, Chainlink deviation <0.5%).
+
+### `btc_5min_chainlink_momentum.py`
+Relaxed momentum — 7 conditions (EMA crossover, VWAP, RSI 50-75, MACD hist>0, volume >= avg, green candle, Chainlink <1.0%).
+
+### `btc_5min_chainlink_supertrend_momentum.py`
+SuperTrend momentum — 7 conditions using SuperTrend direction instead of EMA crossover.
+
+### `btc_5min_chainlink_breakout.py`
+Volatility expansion breakout — trades UP and DOWN when price breaks 20-bar high/low with elevated ATR and volume.
+
+### `btc_5min_chainlink_reversal.py`
+Mean-reversion contrarian — trades against oracle deviations with RSI extremes, BB touch, and fading MACD.
+
+### `run_chainlink_bots.py`
+Launches the first 4 bots concurrently as subprocesses.
 
 ---
 
