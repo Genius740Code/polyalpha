@@ -392,10 +392,22 @@ class IndicatorCalculator:
             self._log.error("pandas-ta Bollinger Bands calculation failed: %s", exc)
             raise RuntimeError(f"Bollinger Bands calculation failed: {exc}") from exc
 
+        # Robust column lookup - handle different naming conventions
+        lower_key = f"BBL_{period}_{std_dev}_0"
+        middle_key = f"BBM_{period}_{std_dev}_0"
+        upper_key = f"BBU_{period}_{std_dev}_0"
+
+        # Fallback to finding columns by pattern if exact match fails
+        if lower_key not in bb_result.columns:
+            lower_col = [c for c in bb_result.columns if c.startswith("BBL")][0]
+            middle_col = [c for c in bb_result.columns if c.startswith("BBM")][0]
+            upper_col = [c for c in bb_result.columns if c.startswith("BBU")][0]
+            lower_key, middle_key, upper_key = lower_col, middle_col, upper_col
+
         return {
-            "lower": bb_result[f"BBL_{period}_{std_dev}_0"].rename("BB_Lower"),
-            "middle": bb_result[f"BBM_{period}_{std_dev}_0"].rename("BB_Middle"),
-            "upper": bb_result[f"BBU_{period}_{std_dev}_0"].rename("BB_Upper"),
+            "lower": bb_result[lower_key].rename("BB_Lower"),
+            "middle": bb_result[middle_key].rename("BB_Middle"),
+            "upper": bb_result[upper_key].rename("BB_Upper"),
         }
 
     def atr(self, period: int = 14) -> pd.Series:
