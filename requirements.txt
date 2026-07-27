@@ -24,4 +24,7 @@ pandas-ta>=0.3.14b0
 pyarrow>=12.0.0  # For Parquet export
 openpyxl>=3.1.0  # For Excel export
 
+# Optional dependencies for Telegram notifications
+python-telegram-bot>=20.0
+
 

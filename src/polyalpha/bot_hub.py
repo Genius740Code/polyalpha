@@ -91,6 +91,11 @@ except ImportError:
     _rsi = _sma = _ema = _macd = _bbands = _roc = _vwap = _donchian = None
     _NATIVE_TA_AVAILABLE = False
 
+try:
+    from .notifications.telegram import TelegramNotifier
+except ImportError:
+    TelegramNotifier = None  # type: ignore[assignment]
+
 MACDResult = namedtuple("MACDResult", ["macd", "signal", "histogram"])
 BBResult = namedtuple("BBResult", ["upper", "mid", "lower"])
 DonchianResult = namedtuple("DonchianResult", ["upper", "mid", "lower"])
@@ -401,6 +406,7 @@ class StrategyContext:
         get_seconds_in=None,
         get_candle_id=None,
         bought_this_candle=None,
+        hub=None,
     ):
         self.name = name
         self._asset = asset
@@ -410,6 +416,7 @@ class StrategyContext:
         self._price_history = price_history  # shared across strategies
         self._clob = clob
         self._chainlink_cache = chainlink_cache
+        self._hub = hub  # Reference to BotHub for Telegram notifications
         self._get_candle_open = get_candle_open or (lambda: None)
         self._get_seconds_in = get_seconds_in or (lambda: 0.0)
         self._get_candle_id: Callable[[], int] = get_candle_id or (lambda: 0)
@@ -495,7 +502,20 @@ class StrategyContext:
 
     def buy(self, side: str, amount: float):
         """Place a market buy order against this strategy's paper engine."""
-        return self._paper.buy(market=self._market, side=side, amount=amount)
+        order = self._paper.buy(market=self._market, side=side, amount=amount)
+        
+        # Send Telegram notification if configured
+        if self._hub._telegram and order:
+            price = getattr(self._stream, side.lower(), None) or self.price.up if side == "UP" else self.price.down
+            self._hub._telegram.send_buy(
+                asset=self._asset,
+                side=side,
+                amount=amount,
+                price=price,
+                strategy_name=self.name
+            )
+        
+        return order
 
     def limit(self, side: str, price: float, amount: float):
         """Place a limit order against this strategy's paper engine."""
@@ -505,9 +525,23 @@ class StrategyContext:
 
     def close_position(self, side: str, amount: Optional[float] = None):
         """Close an open position for this strategy."""
-        return self._paper.sell_position(
+        order = self._paper.sell_position(
             market=self._market, side=side, amount=amount
         )
+        
+        # Send Telegram notification if configured
+        if self._hub._telegram and order:
+            price = getattr(self._stream, side.lower(), None) or self.price.up if side == "UP" else self.price.down
+            sell_amount = amount if amount else (order.amount if hasattr(order, 'amount') else 0)
+            self._hub._telegram.send_sell(
+                asset=self._asset,
+                side=side,
+                amount=sell_amount,
+                price=price,
+                strategy_name=self.name
+            )
+        
+        return order
 
     # ── Candle-aware trading guards ───────────────────────────────────────
 
@@ -759,6 +793,11 @@ class BotHub:
         # ── Event / hook system ──────────────────────────────────────────
         self._handlers: dict[str, list[Callable]] = defaultdict(list)
         self._interval_handlers: list[dict] = []
+
+        # Initialize Telegram notifier (optional)
+        self._telegram: Optional[TelegramNotifier] = None
+        if TelegramNotifier is not None:
+            self._telegram = TelegramNotifier()
 
     # ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -1148,6 +1187,7 @@ class BotHub:
                 get_seconds_in=lambda: max(0.0, time.time() - self._candle_start_time),
                 get_candle_id=lambda: self._candle_id,
                 bought_this_candle=self._bought_this_candle,
+                hub=self,
             )
             # Per-strategy rotating file logger
             if self._log_dir and s.name not in self._strategy_loggers:
@@ -1283,6 +1323,16 @@ class BotHub:
                         "Trade resolved: %s %s | pnl=$%.2f",
                         pos.side, pos.outcome, pos.pnl,
                     )
+                    
+                    # Send Telegram notification if configured
+                    if self._telegram:
+                        self._telegram.send_resolve(
+                            asset=self.asset,
+                            side=pos.side,
+                            outcome=pos.outcome,
+                            pnl=pos.pnl,
+                            strategy_name=s.name
+                        )
 
     def _rollover(self) -> None:
         """Clean up the stream and prepare for the next cycle."""

@@ -39,6 +39,11 @@ if TYPE_CHECKING:
     from .conditions import Condition
     from .trading.paper_config import PaperConfig
 
+try:
+    from .notifications.telegram import TelegramNotifier
+except ImportError:
+    TelegramNotifier = None  # type: ignore[assignment]
+
 log = logging.getLogger(__name__)
 
 # Optional indicator deps — imported once at module level, not per property call.
@@ -179,7 +184,19 @@ class TickContext:
         -------
         PaperOrder
         """
-        return self._client.paper.buy(market=self._market, side=side, amount=amount)
+        order = self._client.paper.buy(market=self._market, side=side, amount=amount)
+        
+        # Send Telegram notification if configured
+        if self._bot._telegram and order:
+            price = getattr(self._bot._stream, side.lower(), None) or self.price.up if side == "UP" else self.price.down
+            self._bot._telegram.send_buy(
+                asset=self._bot.asset,
+                side=side,
+                amount=amount,
+                price=price
+            )
+        
+        return order
 
     def limit(self, side: str, price: float, amount: float):
         """
@@ -214,9 +231,22 @@ class TickContext:
         -------
         PaperOrder
         """
-        return self._client.paper.sell_position(
+        order = self._client.paper.sell_position(
             market=self._market, side=side, amount=amount
         )
+        
+        # Send Telegram notification if configured
+        if self._bot._telegram and order:
+            price = getattr(self._bot._stream, side.lower(), None) or self.price.up if side == "UP" else self.price.down
+            sell_amount = amount if amount else (order.amount if hasattr(order, 'amount') else 0)
+            self._bot._telegram.send_sell(
+                asset=self._bot.asset,
+                side=side,
+                amount=sell_amount,
+                price=price
+            )
+        
+        return order
 
     # ── Candle-aware trading guards ───────────────────────────────────────
 
@@ -424,6 +454,11 @@ class Bot:
             )
         else:
             self._slog = self._log
+        
+        # Initialize Telegram notifier (optional)
+        self._telegram: Optional[TelegramNotifier] = None
+        if TelegramNotifier is not None:
+            self._telegram = TelegramNotifier()
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -732,6 +767,16 @@ class Bot:
                     "Trade resolved: %s %s | pnl=$%.2f",
                     pos.side, pos.outcome, pos.pnl,
                 )
+                
+                # Send Telegram notification if configured
+                if self._telegram:
+                    self._telegram.send_resolve(
+                        asset=self.asset,
+                        side=pos.side,
+                        outcome=pos.outcome,
+                        pnl=pos.pnl
+                    )
+                
                 if self._on_resolve:
                     try:
                         self._on_resolve(pos)
