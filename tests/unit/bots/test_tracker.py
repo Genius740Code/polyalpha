@@ -77,7 +77,7 @@ def _make_market(**overrides):
     from polyalpha.core.market import Market
     from datetime import datetime, timedelta, timezone
     now = datetime.now(timezone.utc)
-    future_start = now + timedelta(minutes=5)
+    past_start = now - timedelta(minutes=5)
     future_end = now + timedelta(minutes=10)
     defaults = dict(
         id="test-id",
@@ -87,7 +87,7 @@ def _make_market(**overrides):
         active=True,
         closed=False,
         archived=False,
-        start_time=future_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        start_time=past_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
         end_time=future_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
         volume=10_000.0,
         liquidity=5_000.0,

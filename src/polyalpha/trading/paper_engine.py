@@ -303,7 +303,7 @@ class PaperEngine:
                 f"Insufficient balance: need ${amount:.2f}, have ${available_balance:.2f}"
             )
 
-        if hasattr(market, 'start_time') and market.start_time:
+        if hasattr(market, 'start_time') and isinstance(market.start_time, str) and market.start_time:
             try:
                 start_time = datetime.fromisoformat(market.start_time.replace('Z', '+00:00'))
                 if start_time > datetime.now(timezone.utc):
