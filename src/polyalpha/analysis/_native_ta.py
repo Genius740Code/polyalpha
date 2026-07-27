@@ -158,3 +158,106 @@ def vwap(close: pd.Series, volume: pd.Series = None) -> pd.Series:
     cum_volume_price = (tp * volume).cumsum()
     cum_volume = volume.cumsum()
     return cum_volume_price / cum_volume
+
+
+def psar(high: pd.Series, low: pd.Series, close: pd.Series, af: float = 0.02, af_max: float = 0.2) -> pd.DataFrame:
+    """Parabolic SAR indicator.
+
+    Returns a DataFrame with columns matching pandas_ta naming convention.
+    """
+    length = len(close)
+    psar_vals = pd.Series(np.nan, index=close.index)
+    af_vals = pd.Series(0.0, index=close.index)
+    trend = pd.Series(1, index=close.index)  # 1 = uptrend, -1 = downtrend
+    ep = pd.Series(0.0, index=close.index)  # extreme point
+
+    if length < 2:
+        result = pd.DataFrame({
+            "PSARl_0.02_0.2": psar_vals,
+            "PSARs_0.02_0.2": psar_vals,
+        })
+        return result
+
+    psar_vals.iloc[0] = low.iloc[0]
+    ep.iloc[0] = high.iloc[0]
+    af_vals.iloc[0] = af
+
+    for i in range(1, length):
+        if trend.iloc[i - 1] == 1:
+            psar_vals.iloc[i] = psar_vals.iloc[i - 1] + af_vals.iloc[i - 1] * (ep.iloc[i - 1] - psar_vals.iloc[i - 1])
+            psar_vals.iloc[i] = min(psar_vals.iloc[i], low.iloc[i - 1], low.iloc[i - 2] if i >= 2 else low.iloc[i - 1])
+
+            if high.iloc[i] > ep.iloc[i - 1]:
+                ep.iloc[i] = high.iloc[i]
+                af_vals.iloc[i] = min(af_vals.iloc[i - 1] + af, af_max)
+            else:
+                ep.iloc[i] = ep.iloc[i - 1]
+                af_vals.iloc[i] = af_vals.iloc[i - 1]
+
+            if low.iloc[i] < psar_vals.iloc[i]:
+                trend.iloc[i] = -1
+                psar_vals.iloc[i] = ep.iloc[i - 1]
+                ep.iloc[i] = low.iloc[i]
+                af_vals.iloc[i] = af
+            else:
+                trend.iloc[i] = 1
+        else:
+            psar_vals.iloc[i] = psar_vals.iloc[i - 1] + af_vals.iloc[i - 1] * (ep.iloc[i - 1] - psar_vals.iloc[i - 1])
+            psar_vals.iloc[i] = max(psar_vals.iloc[i], high.iloc[i - 1], high.iloc[i - 2] if i >= 2 else high.iloc[i - 1])
+
+            if low.iloc[i] < ep.iloc[i - 1]:
+                ep.iloc[i] = low.iloc[i]
+                af_vals.iloc[i] = min(af_vals.iloc[i - 1] + af, af_max)
+            else:
+                ep.iloc[i] = ep.iloc[i - 1]
+                af_vals.iloc[i] = af_vals.iloc[i - 1]
+
+            if high.iloc[i] > psar_vals.iloc[i]:
+                trend.iloc[i] = 1
+                psar_vals.iloc[i] = ep.iloc[i - 1]
+                ep.iloc[i] = high.iloc[i]
+                af_vals.iloc[i] = af
+            else:
+                trend.iloc[i] = -1
+
+    long_col = f"PSARl_{af}_{af_max}"
+    short_col = f"PSARs_{af}_{af_max}"
+    result = pd.DataFrame({
+        long_col: psar_vals.where(trend == 1, np.nan),
+        short_col: psar_vals.where(trend == -1, np.nan),
+    })
+    return result
+
+
+def ichimoku(high: pd.Series, low: pd.Series, close: pd.Series, tenkan: int = 9, kijun: int = 26, senkou: int = 52) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Ichimoku Kinko Hyo indicator.
+
+    Returns (ichimoku_df, span_df) matching pandas_ta convention.
+    """
+    # Tenkan-sen (Conversion Line): (highest high + lowest low) / 2 over past 9 periods
+    tenkan_sen = (high.rolling(window=tenkan).max() + low.rolling(window=tenkan).min()) / 2
+
+    # Kijun-sen (Base Line): (highest high + lowest low) / 2 over past 26 periods
+    kijun_sen = (high.rolling(window=kijun).max() + low.rolling(window=kijun).min()) / 2
+
+    # Senkou Span A (Leading Span A): (tenkan + kijun) / 2, shifted forward 26 periods
+    senkou_span_a = ((tenkan_sen + kijun_sen) / 2).shift(kijun)
+
+    # Senkou Span B (Leading Span B): (highest high + lowest low) / 2 over past 52 periods, shifted forward 26
+    senkou_span_b = ((high.rolling(window=senkou).max() + low.rolling(window=senkou).min()) / 2).shift(kijun)
+
+    # Chikou Span (Lagging Span): close shifted backward 26 periods
+    chikou_span = close.shift(-kijun)
+
+    ichimoku_df = pd.DataFrame({
+        f"ITS_{tenkan}": tenkan_sen.rename(f"ITS_{tenkan}"),
+        f"IKS_{kijun}": kijun_sen.rename(f"IKS_{kijun}"),
+        f"ICS_{kijun}": chikou_span.rename(f"ICS_{kijun}"),
+    })
+
+    span_df = pd.DataFrame({
+        f"ISA_{kijun}": senkou_span_a.rename(f"ISA_{kijun}"),
+        f"ISB_{kijun}": senkou_span_b.rename(f"ISB_{kijun}"),
+    })
+
+    return ichimoku_df, span_df

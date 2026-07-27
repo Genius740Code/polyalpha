@@ -53,7 +53,7 @@ Supertrend does NOT exist in polyalpha.
 
 ---
 
-### 3. Ichimoku Breakout — ❌ IMPOSSIBLE (indicator missing)
+### 3. Ichimoku Breakout — ❌ IMPOSSIBLE (indicator missing) Implemented
 
 ```
 Ichimoku Cloud does NOT exist in polyalpha.
@@ -71,7 +71,7 @@ Ichimoku Cloud does NOT exist in polyalpha.
 
 ---
 
-### 4. Parabolic SAR Ride — ❌ IMPOSSIBLE (indicator missing)
+### 4. Parabolic SAR Ride — ❌ IMPOSSIBLE (indicator missing) Implemented
 
 ```
 Parabolic SAR does NOT exist in polyalpha.

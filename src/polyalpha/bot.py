@@ -50,11 +50,13 @@ except ImportError:
 try:
     from .analysis._native_ta import bbands as _bbands
     from .analysis._native_ta import ema as _ema
+    from .analysis._native_ta import ichimoku as _ichimoku
     from .analysis._native_ta import macd as _macd
+    from .analysis._native_ta import psar as _psar
     from .analysis._native_ta import rsi as _rsi
     from .analysis._native_ta import sma as _sma
 except ImportError:
-    _rsi = _sma = _ema = _macd = _bbands = None
+    _rsi = _sma = _ema = _macd = _bbands = _psar = _ichimoku = None
 
 try:
     from .bot_hub import IndicatorAccessor

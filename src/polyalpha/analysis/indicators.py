@@ -273,6 +273,147 @@ class IndicatorCalculator:
             "direction": st_result[dir_key].rename(f"SuperTrend_Dir_{period}_{multiplier}"),
         }
 
+    def psar(self, af: float = 0.02, af_max: float = 0.2) -> dict[str, pd.Series]:
+        """
+        Parabolic SAR (PSAR) — trend-following indicator.
+
+        Shows potential reversal points via dots that accelerate as the trend
+        develops. Use ``psar["value"]`` for the raw SAR value and
+        ``psar["trend"]`` for position relative to price (1 = above, -1 = below).
+
+        Parameters
+        ----------
+        af : float
+            Acceleration factor start value (default: 0.02).
+        af_max : float
+            Maximum acceleration factor (default: 0.2).
+
+        Returns
+        -------
+        dict[str, pd.Series]
+            Dictionary with keys: "value" (SAR level), "trend" (1 or -1).
+        """
+        if af <= 0 or af_max <= 0:
+            raise ValueError("acceleration factors must be positive")
+        if af > af_max:
+            raise ValueError("af must be <= af_max")
+
+        try:
+            psar_result = ta.psar(self.data["high"], self.data["low"], self.data["close"], af=af, af_max=af_max)
+        except Exception as exc:
+            self._log.error("pandas-ta PSAR calculation failed: %s", exc)
+            raise RuntimeError(f"PSAR calculation failed: {exc}") from exc
+
+        long_col = f"PSARl_{af}_{af_max}"
+        short_col = f"PSARs_{af}_{af_max}"
+
+        if long_col not in psar_result.columns:
+            long_col = [c for c in psar_result.columns if c.startswith("PSARl_")][0]
+            short_col = [c for c in psar_result.columns if c.startswith("PSARs_")][0]
+
+        long_series = psar_result[long_col].rename("PSAR")
+        short_series = psar_result[short_col].rename("PSAR")
+
+        # Build unified value + trend
+        value = long_series.copy()
+        trend = pd.Series(-1, index=self.data.index)
+
+        # Where long is not NaN, PSAR is below price (uptrend) -> trend = 1
+        # Where short is not NaN, PSAR is above price (downtrend) -> trend = -1
+        value = short_series.fillna(long_series)
+        trend = trend.where(short_series.notna(), 1)
+        trend[value.isna()] = 0
+
+        return {
+            "value": value.rename("PSAR_Value"),
+            "trend": trend.rename("PSAR_Trend"),
+        }
+
+    def ichimoku(
+        self,
+        tenkan: int = 9,
+        kijun: int = 26,
+        senkou: int = 52,
+    ) -> dict[str, pd.Series | dict[str, pd.Series]]:
+        """
+        Ichimoku Kinko Hyo — cloud-based trend and breakout indicator.
+
+        Components:
+        - **tenkan** (conversion line): short-term trend signal.
+        - **kijun** (base line): medium-term trend signal.
+        - **span_a / span_b**: leading spans that form the \"kumo\" (cloud).
+        - **chikou** (lagging span): price action confirmation.
+        - **cloud** (kumo): dict with ``"top"`` and ``"bottom"`` series.
+
+        Parameters
+        ----------
+        tenkan : int
+            Tenkan-sen period (default: 9).
+        kijun : int
+            Kijun-sen period (default: 26).
+        senkou : int
+            Senkou span B period (default: 52).
+
+        Returns
+        -------
+        dict[str, pd.Series | dict[str, pd.Series]]
+            Dictionary with keys: "tenkan", "kijun", "span_a", "span_b",
+            "chikou", "cloud" (nested dict with "top", "bottom").
+        """
+        if tenkan <= 0 or kijun <= 0 or senkou <= 0:
+            raise ValueError("periods must be positive")
+
+        try:
+            ichi_result = ta.ichimoku(
+                self.data["high"], self.data["low"], self.data["close"],
+                tenkan=tenkan, kijun=kijun, senkou=senkou
+            )
+        except Exception as exc:
+            self._log.error("pandas-ta Ichimoku calculation failed: %s", exc)
+            raise RuntimeError(f"Ichimoku calculation failed: {exc}") from exc
+
+        if isinstance(ichi_result, tuple):
+            ichimoku_df = ichi_result[0]
+            span_df = ichi_result[1]
+        else:
+            ichimoku_df = ichi_result
+            span_df = None
+
+        tenkan_col = f"ITS_{tenkan}"
+        kijun_col = f"IKS_{kijun}"
+        chikou_col = f"ICS_{kijun}"
+
+        if tenkan_col not in ichimoku_df.columns:
+            tenkan_col = [c for c in ichimoku_df.columns if c.startswith("ITS_")][0]
+            kijun_col = [c for c in ichimoku_df.columns if c.startswith("IKS_")][0]
+            chikou_col = [c for c in ichimoku_df.columns if c.startswith("ICS_")][0]
+
+        result: dict = {
+            "tenkan": ichimoku_df[tenkan_col].rename(f"Tenkan_{tenkan}"),
+            "kijun": ichimoku_df[kijun_col].rename(f"Kijun_{kijun}"),
+            "chikou": ichimoku_df[chikou_col].rename(f"Chikou_{kijun}"),
+        }
+
+        if span_df is not None:
+            span_a_col = f"ISA_{kijun}"
+            span_b_col = f"ISB_{kijun}"
+
+            if span_a_col not in span_df.columns:
+                span_a_col = [c for c in span_df.columns if c.startswith("ISA_")][0]
+                span_b_col = [c for c in span_df.columns if c.startswith("ISB_")][0]
+
+            span_a = span_df[span_a_col].rename(f"Span_A_{kijun}")
+            span_b = span_df[span_b_col].rename(f"Span_B_{kijun}")
+
+            result["span_a"] = span_a
+            result["span_b"] = span_b
+            result["cloud"] = {
+                "top": pd.concat([span_a, span_b], axis=1).max(axis=1).rename("Cloud_Top"),
+                "bottom": pd.concat([span_a, span_b], axis=1).min(axis=1).rename("Cloud_Bottom"),
+            }
+
+        return result
+
     # ── Momentum Indicators ───────────────────────────────────────────────────
 
     def rsi(self, period: int = 14, price: str = "close") -> pd.Series:
@@ -679,6 +820,23 @@ class IndicatorCalculator:
             results["supertrend"] = self.supertrend(
                 st_config.get("period", 7),
                 st_config.get("multiplier", 3.0)
+            )
+
+        # PSAR
+        if "psar" in config:
+            psar_config = config["psar"]
+            results["psar"] = self.psar(
+                psar_config.get("af", 0.02),
+                psar_config.get("af_max", 0.2),
+            )
+
+        # Ichimoku
+        if "ichimoku" in config:
+            ichi_config = config["ichimoku"]
+            results["ichimoku"] = self.ichimoku(
+                ichi_config.get("tenkan", 9),
+                ichi_config.get("kijun", 26),
+                ichi_config.get("senkou", 52),
             )
 
         return results

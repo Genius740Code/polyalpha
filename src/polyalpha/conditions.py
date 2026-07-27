@@ -375,6 +375,198 @@ class SuperTrendJustTurnedDown(Condition):
         return direction.iloc[-2] == 1 and direction.iloc[-1] == -1
 
 
+# ── PSAR Conditions ────────────────────────────────────────────────────────────
+
+class PSARUptrend(Condition):
+    """True when PSAR indicates an uptrend (trend == 1)."""
+
+    def __init__(self, af: float = 0.02, af_max: float = 0.2):
+        self._af = af
+        self._af_max = af_max
+
+    def __call__(self, ctx: TickContext) -> bool:
+        psar = ctx.indicators.psar(self._af, self._af_max)
+        trend = psar["trend"].dropna()
+        if trend.empty:
+            return False
+        return trend.iloc[-1] == 1
+
+
+class PSARDowntrend(Condition):
+    """True when PSAR indicates a downtrend (trend == -1)."""
+
+    def __init__(self, af: float = 0.02, af_max: float = 0.2):
+        self._af = af
+        self._af_max = af_max
+
+    def __call__(self, ctx: TickContext) -> bool:
+        psar = ctx.indicators.psar(self._af, self._af_max)
+        trend = psar["trend"].dropna()
+        if trend.empty:
+            return False
+        return trend.iloc[-1] == -1
+
+
+class PSARJustTurnedUp(Condition):
+    """True when PSAR just flipped from downtrend to uptrend."""
+
+    def __init__(self, af: float = 0.02, af_max: float = 0.2):
+        self._af = af
+        self._af_max = af_max
+
+    def __call__(self, ctx: TickContext) -> bool:
+        psar = ctx.indicators.psar(self._af, self._af_max)
+        trend = psar["trend"].dropna()
+        if len(trend) < 2:
+            return False
+        return trend.iloc[-2] == -1 and trend.iloc[-1] == 1
+
+
+class PSARJustTurnedDown(Condition):
+    """True when PSAR just flipped from uptrend to downtrend."""
+
+    def __init__(self, af: float = 0.02, af_max: float = 0.2):
+        self._af = af
+        self._af_max = af_max
+
+    def __call__(self, ctx: TickContext) -> bool:
+        psar = ctx.indicators.psar(self._af, self._af_max)
+        trend = psar["trend"].dropna()
+        if len(trend) < 2:
+            return False
+        return trend.iloc[-2] == 1 and trend.iloc[-1] == -1
+
+
+# ── Ichimoku Conditions ────────────────────────────────────────────────────────
+
+class IchimokuTenkanAboveKijun(Condition):
+    """True when Tenkan-sen is above Kijun-sen."""
+
+    def __init__(self, tenkan: int = 9, kijun: int = 26):
+        self._tenkan = tenkan
+        self._kijun = kijun
+
+    def __call__(self, ctx: TickContext) -> bool:
+        ichi = ctx.indicators.ichimoku(self._tenkan, self._kijun)
+        tenkan_val = ctx.indicators.get_latest_value(ichi["tenkan"])
+        kijun_val = ctx.indicators.get_latest_value(ichi["kijun"])
+        if tenkan_val is None or kijun_val is None:
+            return False
+        return tenkan_val > kijun_val
+
+
+class IchimokuTenkanBelowKijun(Condition):
+    """True when Tenkan-sen is below Kijun-sen."""
+
+    def __init__(self, tenkan: int = 9, kijun: int = 26):
+        self._tenkan = tenkan
+        self._kijun = kijun
+
+    def __call__(self, ctx: TickContext) -> bool:
+        ichi = ctx.indicators.ichimoku(self._tenkan, self._kijun)
+        tenkan_val = ctx.indicators.get_latest_value(ichi["tenkan"])
+        kijun_val = ctx.indicators.get_latest_value(ichi["kijun"])
+        if tenkan_val is None or kijun_val is None:
+            return False
+        return tenkan_val < kijun_val
+
+
+class IchimokuPriceAboveCloud(Condition):
+    """True when price is above the Ichimoku cloud."""
+
+    def __init__(self, side: str, tenkan: int = 9, kijun: int = 26, senkou: int = 52):
+        if side.upper() not in ("UP", "DOWN"):
+            raise ValueError(f"side must be 'UP' or 'DOWN', got {side!r}")
+        self._side = side.lower()
+        self._tenkan = tenkan
+        self._kijun = kijun
+        self._senkou = senkou
+
+    def __call__(self, ctx: TickContext) -> bool:
+        price = ctx.price.up if self._side == "up" else ctx.price.down
+        ichi = ctx.indicators.ichimoku(self._tenkan, self._kijun, self._senkou)
+        cloud = ichi.get("cloud")
+        if cloud is None:
+            return False
+        top = ctx.indicators.get_latest_value(cloud["top"])
+        if top is None:
+            return False
+        return price > top
+
+
+class IchimokuPriceBelowCloud(Condition):
+    """True when price is below the Ichimoku cloud."""
+
+    def __init__(self, side: str, tenkan: int = 9, kijun: int = 26, senkou: int = 52):
+        if side.upper() not in ("UP", "DOWN"):
+            raise ValueError(f"side must be 'UP' or 'DOWN', got {side!r}")
+        self._side = side.lower()
+        self._tenkan = tenkan
+        self._kijun = kijun
+        self._senkou = senkou
+
+    def __call__(self, ctx: TickContext) -> bool:
+        price = ctx.price.up if self._side == "up" else ctx.price.down
+        ichi = ctx.indicators.ichimoku(self._tenkan, self._kijun, self._senkou)
+        cloud = ichi.get("cloud")
+        if cloud is None:
+            return False
+        bottom = ctx.indicators.get_latest_value(cloud["bottom"])
+        if bottom is None:
+            return False
+        return price < bottom
+
+
+class IchimokuBullishBreakout(Condition):
+    """True for combined bullish Ichimoku breakout: price above cloud + TK bullish."""
+
+    def __init__(self, side: str, tenkan: int = 9, kijun: int = 26, senkou: int = 52):
+        if side.upper() not in ("UP", "DOWN"):
+            raise ValueError(f"side must be 'UP' or 'DOWN', got {side!r}")
+        self._side = side.lower()
+        self._tenkan = tenkan
+        self._kijun = kijun
+        self._senkou = senkou
+
+    def __call__(self, ctx: TickContext) -> bool:
+        ichi = ctx.indicators.ichimoku(self._tenkan, self._kijun, self._senkou)
+        cloud = ichi.get("cloud")
+        if cloud is None:
+            return False
+        tenkan_val = ctx.indicators.get_latest_value(ichi["tenkan"])
+        kijun_val = ctx.indicators.get_latest_value(ichi["kijun"])
+        top = ctx.indicators.get_latest_value(cloud["top"])
+        price = ctx.price.up if self._side == "up" else ctx.price.down
+        if tenkan_val is None or kijun_val is None or top is None:
+            return False
+        return price > top and tenkan_val > kijun_val
+
+
+class IchimokuBearishBreakout(Condition):
+    """True for combined bearish Ichimoku breakout: price below cloud + TK bearish."""
+
+    def __init__(self, side: str, tenkan: int = 9, kijun: int = 26, senkou: int = 52):
+        if side.upper() not in ("UP", "DOWN"):
+            raise ValueError(f"side must be 'UP' or 'DOWN', got {side!r}")
+        self._side = side.lower()
+        self._tenkan = tenkan
+        self._kijun = kijun
+        self._senkou = senkou
+
+    def __call__(self, ctx: TickContext) -> bool:
+        ichi = ctx.indicators.ichimoku(self._tenkan, self._kijun, self._senkou)
+        cloud = ichi.get("cloud")
+        if cloud is None:
+            return False
+        tenkan_val = ctx.indicators.get_latest_value(ichi["tenkan"])
+        kijun_val = ctx.indicators.get_latest_value(ichi["kijun"])
+        bottom = ctx.indicators.get_latest_value(cloud["bottom"])
+        price = ctx.price.up if self._side == "up" else ctx.price.down
+        if tenkan_val is None or kijun_val is None or bottom is None:
+            return False
+        return price < bottom and tenkan_val < kijun_val
+
+
 class Always(Condition):
     """Always true — useful as a default / fallthrough."""
 
@@ -471,6 +663,56 @@ def supertrend_just_turned_down(period: int = 7, multiplier: float = 3.0) -> Con
     return SuperTrendJustTurnedDown(period, multiplier)
 
 
+def psar_uptrend(af: float = 0.02, af_max: float = 0.2) -> Condition:
+    """PSAR indicates an uptrend."""
+    return PSARUptrend(af, af_max)
+
+
+def psar_downtrend(af: float = 0.02, af_max: float = 0.2) -> Condition:
+    """PSAR indicates a downtrend."""
+    return PSARDowntrend(af, af_max)
+
+
+def psar_just_turned_up(af: float = 0.02, af_max: float = 0.2) -> Condition:
+    """PSAR just flipped from downtrend to uptrend."""
+    return PSARJustTurnedUp(af, af_max)
+
+
+def psar_just_turned_down(af: float = 0.02, af_max: float = 0.2) -> Condition:
+    """PSAR just flipped from uptrend to downtrend."""
+    return PSARJustTurnedDown(af, af_max)
+
+
+def ichimoku_tenkan_above_kijun(tenkan: int = 9, kijun: int = 26) -> Condition:
+    """Tenkan-sen is above Kijun-sen."""
+    return IchimokuTenkanAboveKijun(tenkan, kijun)
+
+
+def ichimoku_tenkan_below_kijun(tenkan: int = 9, kijun: int = 26) -> Condition:
+    """Tenkan-sen is below Kijun-sen."""
+    return IchimokuTenkanBelowKijun(tenkan, kijun)
+
+
+def ichimoku_price_above_cloud(side: str, tenkan: int = 9, kijun: int = 26, senkou: int = 52) -> Condition:
+    """Price is above the Ichimoku cloud."""
+    return IchimokuPriceAboveCloud(side, tenkan, kijun, senkou)
+
+
+def ichimoku_price_below_cloud(side: str, tenkan: int = 9, kijun: int = 26, senkou: int = 52) -> Condition:
+    """Price is below the Ichimoku cloud."""
+    return IchimokuPriceBelowCloud(side, tenkan, kijun, senkou)
+
+
+def ichimoku_bullish_breakout(side: str, tenkan: int = 9, kijun: int = 26, senkou: int = 52) -> Condition:
+    """Combined bullish Ichimoku breakout."""
+    return IchimokuBullishBreakout(side, tenkan, kijun, senkou)
+
+
+def ichimoku_bearish_breakout(side: str, tenkan: int = 9, kijun: int = 26, senkou: int = 52) -> Condition:
+    """Combined bearish Ichimoku breakout."""
+    return IchimokuBearishBreakout(side, tenkan, kijun, senkou)
+
+
 def when(fn: Callable[[TickContext], bool]) -> Condition:
     """Wrap a lambda as a Condition."""
     return LambdaCondition(fn)
@@ -495,6 +737,16 @@ __all__ = [
     "supertrend_down",
     "supertrend_just_turned_up",
     "supertrend_just_turned_down",
+    "psar_uptrend",
+    "psar_downtrend",
+    "psar_just_turned_up",
+    "psar_just_turned_down",
+    "ichimoku_tenkan_above_kijun",
+    "ichimoku_tenkan_below_kijun",
+    "ichimoku_price_above_cloud",
+    "ichimoku_price_below_cloud",
+    "ichimoku_bullish_breakout",
+    "ichimoku_bearish_breakout",
     "always",
     "never",
     "when",
