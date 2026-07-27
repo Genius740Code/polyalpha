@@ -79,6 +79,7 @@ except ImportError:
 
 try:
     from .analysis._native_ta import bbands as _bbands
+    from .analysis._native_ta import donchian as _donchian
     from .analysis._native_ta import ema as _ema
     from .analysis._native_ta import macd as _macd
     from .analysis._native_ta import rsi as _rsi
@@ -87,11 +88,12 @@ try:
     from .analysis._native_ta import vwap as _vwap
     _NATIVE_TA_AVAILABLE = True
 except ImportError:
-    _rsi = _sma = _ema = _macd = _bbands = _roc = _vwap = None
+    _rsi = _sma = _ema = _macd = _bbands = _roc = _vwap = _donchian = None
     _NATIVE_TA_AVAILABLE = False
 
 MACDResult = namedtuple("MACDResult", ["macd", "signal", "histogram"])
 BBResult = namedtuple("BBResult", ["upper", "mid", "lower"])
+DonchianResult = namedtuple("DonchianResult", ["upper", "mid", "lower"])
 
 from .client import Client
 from .core import (
@@ -119,6 +121,7 @@ def _log_indicators() -> None:
     if _ema is not None: names.append("ema")
     if _macd is not None: names.append("macd")
     if _bbands is not None: names.append("bollinger_bands")
+    if _donchian is not None: names.append("donchian")
     if _roc is not None: names.append("roc")
     if _vwap is not None: names.append("vwap")
     log.info("TA indicators available: %s", ", ".join(names))
@@ -192,6 +195,8 @@ class IndicatorAccessor:
             names.append("macd")
         if _bbands is not None:
             names.append("bollinger_bands")
+        if _donchian is not None:
+            names.append("donchian")
         if _roc is not None:
             names.append("roc")
         if _vwap is not None:
@@ -255,6 +260,20 @@ class IndicatorAccessor:
         if _vwap is None:
             return None
         return self._get(("vwap",), lambda s: self._resolve(_vwap(s).iloc[-1]))
+
+    def donchian(self, length: int = 20) -> Optional[DonchianResult]:
+        """Donchian Channels returning ``DonchianResult(upper, mid, lower)``."""
+        if _donchian is None:
+            return None
+        def _compute(s):
+            df = _donchian(s, s, length)
+            upper_v = float(df.iloc[-1, 2])
+            mid_v = float(df.iloc[-1, 1])
+            lower_v = float(df.iloc[-1, 0])
+            if pd.isna(upper_v) or pd.isna(mid_v) or pd.isna(lower_v):
+                return None
+            return DonchianResult(upper=upper_v, mid=mid_v, lower=lower_v)
+        return self._get(("donchian", length), _compute)
 
 
 # ── Order Book Accessor ────────────────────────────────────────────────────────

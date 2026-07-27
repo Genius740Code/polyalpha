@@ -830,6 +830,8 @@ class TestExports:
             "psar_downtrend",
             "psar_just_turned_up",
             "psar_just_turned_down",
+            "price_above_dc_upper",
+            "price_below_dc_lower",
             "ichimoku_tenkan_above_kijun",
             "ichimoku_tenkan_below_kijun",
             "ichimoku_price_above_cloud",

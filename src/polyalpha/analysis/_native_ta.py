@@ -261,3 +261,20 @@ def ichimoku(high: pd.Series, low: pd.Series, close: pd.Series, tenkan: int = 9,
     })
 
     return ichimoku_df, span_df
+
+
+def donchian(high: pd.Series, low: pd.Series, length: int = 20) -> pd.DataFrame:
+    """Donchian Channels.
+
+    Returns a DataFrame with upper, middle, lower channel lines.
+    """
+    upper = high.rolling(window=length).max()
+    lower = low.rolling(window=length).min()
+    middle = (upper + lower) / 2
+
+    result = pd.DataFrame({
+        f"DCL_{length}": lower.rename(f"DCL_{length}"),
+        f"DCM_{length}": middle.rename(f"DCM_{length}"),
+        f"DCU_{length}": upper.rename(f"DCU_{length}"),
+    })
+    return result

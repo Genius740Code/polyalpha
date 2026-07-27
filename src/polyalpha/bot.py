@@ -49,6 +49,7 @@ except ImportError:
 
 try:
     from .analysis._native_ta import bbands as _bbands
+    from .analysis._native_ta import donchian as _donchian
     from .analysis._native_ta import ema as _ema
     from .analysis._native_ta import ichimoku as _ichimoku
     from .analysis._native_ta import macd as _macd
@@ -56,7 +57,7 @@ try:
     from .analysis._native_ta import rsi as _rsi
     from .analysis._native_ta import sma as _sma
 except ImportError:
-    _rsi = _sma = _ema = _macd = _bbands = _psar = _ichimoku = None
+    _rsi = _sma = _ema = _macd = _bbands = _psar = _ichimoku = _donchian = None
 
 try:
     from .bot_hub import IndicatorAccessor

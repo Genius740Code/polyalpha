@@ -665,6 +665,47 @@ class IndicatorCalculator:
             "lower": ema - (atr * atr_mult),
         }
 
+    def donchian(
+        self,
+        length: int = 20,
+    ) -> dict[str, pd.Series]:
+        """
+        Donchian Channels — breakout indicator using rolling high/low.
+
+        Parameters
+        ----------
+        length : int
+            Donchian channel period (default: 20).
+
+        Returns
+        -------
+        dict[str, pd.Series]
+            Dictionary with keys: "upper", "middle", "lower".
+        """
+        if length <= 0:
+            raise ValueError("length must be positive")
+
+        try:
+            dc_result = ta.donchian(self.data["high"], self.data["low"], length=length)
+        except Exception as exc:
+            self._log.error("Donchian Channels calculation failed: %s", exc)
+            raise RuntimeError(f"Donchian Channels calculation failed: {exc}") from exc
+
+        upper_key = f"DCU_{length}"
+        middle_key = f"DCM_{length}"
+        lower_key = f"DCL_{length}"
+
+        if upper_key not in dc_result.columns:
+            upper_key = [c for c in dc_result.columns if c.startswith("DCU_")][0]
+            middle_key = [c for c in dc_result.columns if c.startswith("DCM_")][0]
+            lower_key = [c for c in dc_result.columns if c.startswith("DCL_")][0]
+
+        return {
+            "upper": dc_result[upper_key].rename("DC_Upper"),
+            "middle": dc_result[middle_key].rename("DC_Middle"),
+            "lower": dc_result[lower_key].rename("DC_Lower"),
+        }
+
     # ── Volume Indicators ────────────────────────────────────────────────────
 
     def obv(self) -> pd.Series:
@@ -828,6 +869,13 @@ class IndicatorCalculator:
             results["psar"] = self.psar(
                 psar_config.get("af", 0.02),
                 psar_config.get("af_max", 0.2),
+            )
+
+        # Donchian Channels
+        if "donchian" in config:
+            dc_config = config["donchian"]
+            results["donchian"] = self.donchian(
+                dc_config.get("length", 20)
             )
 
         # Ichimoku

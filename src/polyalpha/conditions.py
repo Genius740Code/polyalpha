@@ -375,6 +375,42 @@ class SuperTrendJustTurnedDown(Condition):
         return direction.iloc[-2] == 1 and direction.iloc[-1] == -1
 
 
+# ── Donchian Channel Conditions ────────────────────────────────────────────────
+
+class PriceAboveDCUpper(Condition):
+    """True when price is above the upper Donchian Channel."""
+
+    def __init__(self, side: str, length: int = 20):
+        if side.upper() not in ("UP", "DOWN"):
+            raise ValueError(f"side must be 'UP' or 'DOWN', got {side!r}")
+        self._side = side.lower()
+        self._length = length
+
+    def __call__(self, ctx: TickContext) -> bool:
+        price = ctx.price.up if self._side == "up" else ctx.price.down
+        dc = ctx.indicators.donchian(self._length)
+        if dc is None:
+            return False
+        return price > dc.upper
+
+
+class PriceBelowDCLower(Condition):
+    """True when price is below the lower Donchian Channel."""
+
+    def __init__(self, side: str, length: int = 20):
+        if side.upper() not in ("UP", "DOWN"):
+            raise ValueError(f"side must be 'UP' or 'DOWN', got {side!r}")
+        self._side = side.lower()
+        self._length = length
+
+    def __call__(self, ctx: TickContext) -> bool:
+        price = ctx.price.up if self._side == "up" else ctx.price.down
+        dc = ctx.indicators.donchian(self._length)
+        if dc is None:
+            return False
+        return price < dc.lower
+
+
 # ── PSAR Conditions ────────────────────────────────────────────────────────────
 
 class PSARUptrend(Condition):
@@ -663,6 +699,16 @@ def supertrend_just_turned_down(period: int = 7, multiplier: float = 3.0) -> Con
     return SuperTrendJustTurnedDown(period, multiplier)
 
 
+def price_above_dc_upper(side: str, length: int = 20) -> Condition:
+    """Price is above upper Donchian Channel."""
+    return PriceAboveDCUpper(side, length)
+
+
+def price_below_dc_lower(side: str, length: int = 20) -> Condition:
+    """Price is below lower Donchian Channel."""
+    return PriceBelowDCLower(side, length)
+
+
 def psar_uptrend(af: float = 0.02, af_max: float = 0.2) -> Condition:
     """PSAR indicates an uptrend."""
     return PSARUptrend(af, af_max)
@@ -741,6 +787,8 @@ __all__ = [
     "psar_downtrend",
     "psar_just_turned_up",
     "psar_just_turned_down",
+    "price_above_dc_upper",
+    "price_below_dc_lower",
     "ichimoku_tenkan_above_kijun",
     "ichimoku_tenkan_below_kijun",
     "ichimoku_price_above_cloud",

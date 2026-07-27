@@ -88,45 +88,54 @@ Parabolic SAR does NOT exist in polyalpha.
 
 ---
 
-### 5. Donchian Channel Breakout — ❌ IMPOSSIBLE (indicator missing)
+### 5. Donchian Channel Breakout — ✅ DOABLE IMPLEMENTED
 
 ```
-Donchian Channels do NOT exist in polyalpha.
-```
-
-**Code:**
-```python
-# Missing. Would need to track rolling 20-period high/low manually.
-```
-
-**Issues:**
-- Simple rolling max/min — trivial to add to `_native_ta.py`.
-- Workaround: store rolling high/low in strategy state dict.
-
----
-
-### 6. Bollinger Squeeze — ⚠️ PARTIAL
-
-```
-BB(20,2) exists. BB width as % of 50-period average does not.
+Donchian Channels now exist in polyalpha.
 ```
 
 **Code:**
 ```python
 @bot.on_tick
 def strat(ctx):
-    bb = ctx.indicators.bollinger_bands(20, 2)
-    if bb is None:
+    dc = ctx.indicators.donchian(20)
+    if dc is None:
         return
-    width = bb["upper"] - bb["lower"]
-    # PROBLEM: can't compute % of 50-period avg width without manual rolling calc
-    # PROBLEM: ctx.price.up/down != BB band values - need to compare manually
+    if ctx.price.up > dc.upper:
+        ctx.buy("UP", 20)
+    elif ctx.price.down < dc.lower:
+        ctx.buy("DOWN", 20)
 ```
 
 **Issues:**
-- `bollinger_bands()` returns DataFrame with `upper/middle/lower` columns. No helper to compute BB width as % of historical mean.
-- No built-in squeeze detection.
-- The R:moment `target = middle band` is impossible with binary options (no partial fills, all-or-nothing expiration).
+- Single-price-series approximation (passes same series for high/low) — fine for Bot context.
+- BotHub IndicatorCalculator has full OHLC access so uses real high/low.
+- Condition DSL: `price_above_dc_upper("UP", 20)` and `price_below_dc_lower("DOWN", 20)`.
+
+---
+
+### 6. Bollinger Squeeze — ⚠️ PARTIAL
+
+```
+BB(20,2) exists. BB squeeze signals added.
+```
+
+**Code:**
+```python
+@bot.on_tick
+def strat(ctx):
+    signals = SignalGenerator(indicators)
+    if signals.bb_squeeze():
+        print("squeeze detected — prepare for breakout")
+    width_pct = signals.bb_width_pct()
+    if width_pct is not None and width_pct < 0.8:
+        print("tight squeeze")
+```
+
+**Issues:**
+- `bb_squeeze()` and `bb_width_pct()` added to SignalGenerator for DataFrame-backed analysis.
+- No condition DSL equivalent (requires rolling window, not available from scalar IndicatorAccessor).
+- The R:moment `target = middle band` is impossible with binary options (no partial fills, all-or-nothing payout).
 - **Binary options fundamentally break mean-reversion** — you can't "target middle band" because payout is binary.
 
 ---
@@ -645,9 +654,9 @@ No exchange flow data. Polymarket is a single exchange/protocol.
 
 | Status | Count | Strategies |
 |--------|-------|------------|
-| **✅ Doable** | 3 | #1 EMA, #10 Keltner Fade, #16 MACD Hist |
+| **✅ Doable** | 4 | #1 EMA, #5 Donchian, #10 Keltner Fade, #16 MACD Hist |
 | **⚠️ Partial** | 8 | #6 BB Squeeze, #7 RSI 2, #8 Stoch, #9 VWAP, #11 ATR, #17 OBV, #20 Chandelier, #21 Z-Score, #24 Order Flow |
-| **❌ Impossible (missing indicator)** | 4 | #2 Supertrend, #3 Ichimoku, #4 ParSAR, #5 Donchian |
+| **❌ Impossible (missing indicator)** | 1 | (all 4 now implemented) |
 | **❌ Impossible (missing volume/OHLC data)** | 3 | #12 RVOL, #13 Opening Range, #18 Volume Mom |
 | **❌ Not applicable (Polymarket architecture)** | 7 | #14 IV/RV, #15 Gap, #22 Pairs, #23 HMM, #26 Funding, #27 OI, #30 Exchange Flow |
 | **❌ Impossible (missing advanced calc)** | 5 | #19 RSI Div, #24 Order Flow, #25 Entropy, #28 CVD, #29 Whale |
@@ -656,7 +665,7 @@ No exchange flow data. Polymarket is a single exchange/protocol.
 
 | Gap | Severity | Affected Strategies |
 |-----|----------|-------------------|
-| **No Supertrend, Ichimoku, ParSAR, Donchian** | HIGH | #2, #3, #4, #5 |
+| ~~**No Supertrend, Ichimoku, ParSAR, Donchian**~~ | ~~HIGH~~ | ~~#2, #3, #4, #5~~ — All 4 implemented in this round |
 | **No OHLC candle access in strategy context** | HIGH | #11, #13, #19, all divergence |
 | **No volume in tick context** | HIGH | #12, #18 |
 | **No divergence detection** | HIGH | #8, #17, #19, #28 |
