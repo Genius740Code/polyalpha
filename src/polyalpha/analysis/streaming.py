@@ -125,6 +125,11 @@ class ChainlinkStreamer:
         self._stale_warned: bool = False
         self._last_pong_time: float = 0.0
 
+        # Latest price accessible without callbacks
+        self.last_price: Optional[float] = None
+        self.last_update: Optional[datetime] = None
+        self.last_symbol: Optional[str] = None
+
     def on(self, event: str) -> Callable:
         """
         Register a callback for an event.
@@ -347,6 +352,9 @@ class ChainlinkStreamer:
                             tz=timezone.utc
                         )
                         price = float(payload["value"])
+                        self.last_price = price
+                        self.last_update = timestamp
+                        self.last_symbol = symbol
                         self._emit("price", symbol, price, timestamp)
 
                     # 1.5: check stale data on every message

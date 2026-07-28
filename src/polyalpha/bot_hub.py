@@ -281,6 +281,168 @@ class IndicatorAccessor:
         return self._get(("donchian", length), _compute)
 
 
+# ── Binance Accessor ────────────────────────────────────────────────────────────
+
+class BinanceAccessor:
+    """
+    Binance BTC market data for use inside bot strategies.
+
+    Fetches Binance klines once per candle (auto-refreshed on each tick).
+    Provides indicators computed on Binance spot price data (not Polymarket).
+
+    Usage
+    -----
+        >>> ctx.binance.close               # latest Binance close price
+        >>> ctx.binance.macd(12, 26, 9)     # MACD on Binance BTC data
+        >>> ctx.binance.price_change(3)     # BTC spot change over N candles
+        >>> ctx.binance.price_up(2)         # BTC spot went up over N candles
+    """
+
+    def __init__(self, asset: str = "BTC", timeframe: str = "5m"):
+        self._asset = asset.upper()
+        self._timeframe = timeframe
+        self._data: Optional[pd.DataFrame] = None
+        self._last_candle_key: Optional[str] = None
+        self._feed: Optional[object] = None
+
+    def _lazy_init(self) -> None:
+        if self._feed is not None:
+            return
+        from .analysis import DataFeed, DataFeedConfig
+        config = DataFeedConfig(source="binance", timeframe=self._timeframe, lookback_periods=100)
+        self._feed = DataFeed(config)
+
+    def _refresh(self) -> None:
+        """Refresh Binance data once per candle."""
+        if self._feed is None:
+            self._lazy_init()
+        now = time.time()
+        from ..core.constants import TIMEFRAME_SECONDS
+        tf_secs = TIMEFRAME_SECONDS.get(self._timeframe, 300)
+        candle_key = str(int(now // tf_secs))
+        if self._last_candle_key == candle_key and self._data is not None:
+            return
+        try:
+            self._data = self._feed.fetch(self._asset)
+            self._last_candle_key = candle_key
+        except Exception as exc:
+            log.warning("BinanceAccessor: refresh failed for %s: %s", self._asset, exc)
+
+    @property
+    def close(self) -> Optional[float]:
+        """Latest Binance close price."""
+        self._refresh()
+        if self._data is None or self._data.empty:
+            return None
+        return float(self._data["close"].iloc[-1])
+
+    @property
+    def high(self) -> Optional[float]:
+        self._refresh()
+        if self._data is None or self._data.empty:
+            return None
+        return float(self._data["high"].iloc[-1])
+
+    @property
+    def low(self) -> Optional[float]:
+        self._refresh()
+        if self._data is None or self._data.empty:
+            return None
+        return float(self._data["low"].iloc[-1])
+
+    @property
+    def volume(self) -> Optional[float]:
+        self._refresh()
+        if self._data is None or self._data.empty:
+            return None
+        return float(self._data["volume"].iloc[-1])
+
+    def price_change(self, candles_back: int = 1) -> Optional[float]:
+        """Absolute BTC price change over N candles (current - previous)."""
+        self._refresh()
+        if self._data is None or len(self._data) <= candles_back:
+            return None
+        curr = float(self._data["close"].iloc[-1])
+        prev = float(self._data["close"].iloc[-candles_back - 1])
+        return curr - prev
+
+    def price_change_percent(self, candles_back: int = 1) -> Optional[float]:
+        """Percentage BTC price change over N candles."""
+        self._refresh()
+        if self._data is None or len(self._data) <= candles_back:
+            return None
+        curr = float(self._data["close"].iloc[-1])
+        prev = float(self._data["close"].iloc[-candles_back - 1])
+        if prev == 0:
+            return None
+        return ((curr - prev) / prev) * 100.0
+
+    def price_up(self, candles_back: int = 1) -> Optional[bool]:
+        """True if BTC close price is higher than N candles ago."""
+        chg = self.price_change(candles_back)
+        if chg is None:
+            return None
+        return chg > 0
+
+    def price_above_by(self, min_change: float, candles_back: int = 1) -> Optional[bool]:
+        """True if BTC price increased by at least min_change USD."""
+        chg = self.price_change(candles_back)
+        if chg is None:
+            return None
+        return chg >= min_change
+
+    def macd(self, fast: int = 12, slow: int = 26, signal: int = 9) -> Optional[MACDResult]:
+        """MACD computed on Binance BTC close prices."""
+        self._refresh()
+        if self._data is None or _macd is None:
+            return None
+        try:
+            series = self._data["close"]
+            df = _macd(series, fast, slow, signal)
+            macd_v = float(df.iloc[-1, 0])
+            sig_v = float(df.iloc[-1, 1])
+            hist_v = float(df.iloc[-1, 2])
+            if pd is not None and (pd.isna(macd_v) or pd.isna(sig_v) or pd.isna(hist_v)):
+                return None
+            return MACDResult(macd=macd_v, signal=sig_v, histogram=hist_v)
+        except Exception:
+            return None
+
+    def rsi(self, period: int = 14) -> Optional[float]:
+        """RSI computed on Binance BTC close prices."""
+        self._refresh()
+        if self._data is None or _rsi is None:
+            return None
+        try:
+            series = self._data["close"]
+            val = _rsi(series, period).iloc[-1]
+            return None if (pd is not None and pd.isna(val)) else float(val)
+        except Exception:
+            return None
+
+    def sma(self, period: int = 20) -> Optional[float]:
+        self._refresh()
+        if self._data is None or _sma is None:
+            return None
+        try:
+            series = self._data["close"]
+            val = _sma(series, period).iloc[-1]
+            return None if (pd is not None and pd.isna(val)) else float(val)
+        except Exception:
+            return None
+
+    def ema(self, period: int = 12) -> Optional[float]:
+        self._refresh()
+        if self._data is None or _ema is None:
+            return None
+        try:
+            series = self._data["close"]
+            val = _ema(series, period).iloc[-1]
+            return None if (pd is not None and pd.isna(val)) else float(val)
+        except Exception:
+            return None
+
+
 # ── Order Book Accessor ────────────────────────────────────────────────────────
 
 class OrderBookAccessor:
@@ -402,6 +564,8 @@ class StrategyContext:
         asset: str = "BTC",
         clob: Optional[ClobBookClient] = None,
         chainlink_cache: Optional[object] = None,
+        chainlink: Optional[object] = None,
+        binance: Optional[BinanceAccessor] = None,
         get_candle_open=None,
         get_seconds_in=None,
         get_candle_id=None,
@@ -416,6 +580,8 @@ class StrategyContext:
         self._price_history = price_history  # shared across strategies
         self._clob = clob
         self._chainlink_cache = chainlink_cache
+        self._chainlink = chainlink
+        self._binance = binance
         self._hub = hub  # Reference to BotHub for Telegram notifications
         self._get_candle_open = get_candle_open or (lambda: None)
         self._get_seconds_in = get_seconds_in or (lambda: 0.0)
@@ -443,6 +609,24 @@ class StrategyContext:
             except Exception:
                 pass
         return None
+
+    @property
+    def chainlink(self):
+        """Live BTC spot price from Polymarket Chainlink WebSocket.
+
+        ``ctx.chainlink.last_price`` for the latest BTC/USD price.
+        Returns ``None`` if not available in this context.
+        """
+        return self._chainlink
+
+    @property
+    def binance(self):
+        """Binance BTC market data for external TA.
+
+        ``ctx.binance.close``, ``ctx.binance.macd()``, ``ctx.binance.price_change(30)``.
+        Returns ``None`` if not available in this context.
+        """
+        return self._binance
 
     @property
     def candle_open(self) -> Optional[float]:
@@ -798,6 +982,23 @@ class BotHub:
         self._telegram: Optional[TelegramNotifier] = None
         if TelegramNotifier is not None:
             self._telegram = TelegramNotifier()
+
+        # Initialize Chainlink streamer (live BTC spot from Polymarket)
+        self._chainlink: Optional[object] = None
+        try:
+            from .analysis.streaming import ChainlinkStreamer
+            cl = ChainlinkStreamer()
+            cl.start(asset, background=True)
+            self._chainlink = cl
+        except Exception as exc:
+            self._log.debug("Chainlink streamer not available: %s", exc)
+
+        # Initialize Binance accessor (TA on Binance data)
+        self._binance: Optional[BinanceAccessor] = None
+        try:
+            self._binance = BinanceAccessor(asset=asset, timeframe=timeframe)
+        except Exception as exc:
+            self._log.debug("BinanceAccessor not available: %s", exc)
 
     # ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -1183,6 +1384,8 @@ class BotHub:
                 asset=self.asset,
                 clob=self._shared_client._clob,
                 chainlink_cache=self._chainlink_cache,
+                chainlink=self._chainlink,
+                binance=self._binance,
                 get_candle_open=lambda: self._candle_open_price,
                 get_seconds_in=lambda: max(0.0, time.time() - self._candle_start_time),
                 get_candle_id=lambda: self._candle_id,
@@ -1215,6 +1418,12 @@ class BotHub:
                 return
             self._tick_count += 1
             self._price_history.append(up)
+            # Refresh Binance data on each tick (candle-gated internally)
+            if self._binance is not None:
+                try:
+                    self._binance._refresh()
+                except Exception:
+                    pass
             # ── Candle tracking ──────────────────────────────────────────
             now = time.time()
             tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
@@ -1272,6 +1481,12 @@ class BotHub:
                 return
             self._tick_count += 1
             self._price_history.append(up)
+            # Refresh Binance data on each tick (candle-gated internally)
+            if self._binance is not None:
+                try:
+                    self._binance._refresh()
+                except Exception:
+                    pass
             # ── Candle tracking ──────────────────────────────────────────
             now = time.time()
             tf_seconds = TIMEFRAME_SECONDS[self.timeframe]

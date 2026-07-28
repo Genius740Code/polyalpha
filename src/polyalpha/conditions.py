@@ -821,6 +821,214 @@ def when(fn: Callable[[TickContext], bool]) -> Condition:
     return LambdaCondition(fn)
 
 
+# ── MACD Conditions (from Binance data via ctx.binance) ─────────────────────────
+
+class MACDBullishCrossover(Condition):
+    """True when MACD line crossed above signal line on Binance BTC data."""
+
+    def __init__(self, fast: int = 12, slow: int = 26, signal: int = 9):
+        if fast >= slow:
+            raise ValueError("fast period must be less than slow period")
+        self._fast = fast
+        self._slow = slow
+        self._signal = signal
+        self._prev_macd: float | None = None
+        self._prev_signal: float | None = None
+
+    def __call__(self, ctx: TickContext) -> bool:
+        binance = ctx.binance
+        if binance is None:
+            return False
+        result = binance.macd(self._fast, self._slow, self._signal)
+        if result is None:
+            return False
+        macd_v, sig_v = result.macd, result.signal
+        if self._prev_macd is None or self._prev_signal is None:
+            self._prev_macd = macd_v
+            self._prev_signal = sig_v
+            return False
+        crossed = self._prev_macd <= self._prev_signal and macd_v > sig_v
+        self._prev_macd = macd_v
+        self._prev_signal = sig_v
+        return crossed
+
+
+class MACDBearishCrossover(Condition):
+    """True when MACD line crossed below signal line on Binance BTC data."""
+
+    def __init__(self, fast: int = 12, slow: int = 26, signal: int = 9):
+        if fast >= slow:
+            raise ValueError("fast period must be less than slow period")
+        self._fast = fast
+        self._slow = slow
+        self._signal = signal
+        self._prev_macd: float | None = None
+        self._prev_signal: float | None = None
+
+    def __call__(self, ctx: TickContext) -> bool:
+        binance = ctx.binance
+        if binance is None:
+            return False
+        result = binance.macd(self._fast, self._slow, self._signal)
+        if result is None:
+            return False
+        macd_v, sig_v = result.macd, result.signal
+        if self._prev_macd is None or self._prev_signal is None:
+            self._prev_macd = macd_v
+            self._prev_signal = sig_v
+            return False
+        crossed = self._prev_macd >= self._prev_signal and macd_v < sig_v
+        self._prev_macd = macd_v
+        self._prev_signal = sig_v
+        return crossed
+
+
+class MACDAboveZero(Condition):
+    """True when MACD histogram is positive on Binance BTC data."""
+
+    def __init__(self, fast: int = 12, slow: int = 26, signal: int = 9):
+        self._fast = fast
+        self._slow = slow
+        self._signal = signal
+
+    def __call__(self, ctx: TickContext) -> bool:
+        binance = ctx.binance
+        if binance is None:
+            return False
+        result = binance.macd(self._fast, self._slow, self._signal)
+        if result is None:
+            return False
+        return result.histogram > 0
+
+
+class MACDBelowZero(Condition):
+    """True when MACD histogram is negative on Binance BTC data."""
+
+    def __init__(self, fast: int = 12, slow: int = 26, signal: int = 9):
+        self._fast = fast
+        self._slow = slow
+        self._signal = signal
+
+    def __call__(self, ctx: TickContext) -> bool:
+        binance = ctx.binance
+        if binance is None:
+            return False
+        result = binance.macd(self._fast, self._slow, self._signal)
+        if result is None:
+            return False
+        return result.histogram < 0
+
+
+# ── Price Change Conditions (from Binance data via ctx.binance) ─────────────────
+
+class PriceChangeAbove(Condition):
+    """True when BTC spot price changed by at least min_change USD."""
+
+    def __init__(self, min_change: float, candles_back: int = 1):
+        if min_change <= 0:
+            raise ValueError("min_change must be positive")
+        self._min_change = min_change
+        self._candles_back = candles_back
+
+    def __call__(self, ctx: TickContext) -> bool:
+        binance = ctx.binance
+        if binance is None:
+            return False
+        result = binance.price_above_by(self._min_change, self._candles_back)
+        return bool(result)
+
+
+class PriceChangeBelow(Condition):
+    """True when BTC spot price dropped by at least min_change USD."""
+
+    def __init__(self, min_change: float, candles_back: int = 1):
+        if min_change <= 0:
+            raise ValueError("min_change must be positive")
+        self._min_change = min_change
+        self._candles_back = candles_back
+
+    def __call__(self, ctx: TickContext) -> bool:
+        binance = ctx.binance
+        if binance is None:
+            return False
+        chg = binance.price_change(self._candles_back)
+        if chg is None:
+            return False
+        return chg <= -self._min_change
+
+
+class PriceUp(Condition):
+    """True when BTC close price is higher than N candles ago."""
+
+    def __init__(self, candles_back: int = 1):
+        self._candles_back = candles_back
+
+    def __call__(self, ctx: TickContext) -> bool:
+        binance = ctx.binance
+        if binance is None:
+            return False
+        result = binance.price_up(self._candles_back)
+        return bool(result)
+
+
+class PriceDown(Condition):
+    """True when BTC close price is lower than N candles ago."""
+
+    def __init__(self, candles_back: int = 1):
+        self._candles_back = candles_back
+
+    def __call__(self, ctx: TickContext) -> bool:
+        binance = ctx.binance
+        if binance is None:
+            return False
+        up = binance.price_up(self._candles_back)
+        if up is None:
+            return False
+        return not up
+
+
+# ── Factory functions ───────────────────────────────────────────────────────────
+
+def macd_bullish_crossover(fast: int = 12, slow: int = 26, signal: int = 9) -> Condition:
+    """MACD line crossed above signal line (from Binance BTC data)."""
+    return MACDBullishCrossover(fast, slow, signal)
+
+
+def macd_bearish_crossover(fast: int = 12, slow: int = 26, signal: int = 9) -> Condition:
+    """MACD line crossed below signal line (from Binance BTC data)."""
+    return MACDBearishCrossover(fast, slow, signal)
+
+
+def macd_above_zero(fast: int = 12, slow: int = 26, signal: int = 9) -> Condition:
+    """MACD histogram is positive (from Binance BTC data)."""
+    return MACDAboveZero(fast, slow, signal)
+
+
+def macd_below_zero(fast: int = 12, slow: int = 26, signal: int = 9) -> Condition:
+    """MACD histogram is negative (from Binance BTC data)."""
+    return MACDBelowZero(fast, slow, signal)
+
+
+def price_change_above(min_change: float, candles_back: int = 1) -> Condition:
+    """BTC spot price changed by at least min_change USD (from Binance BTC data)."""
+    return PriceChangeAbove(min_change, candles_back)
+
+
+def price_change_below(min_change: float, candles_back: int = 1) -> Condition:
+    """BTC spot price dropped by at least min_change USD (from Binance BTC data)."""
+    return PriceChangeBelow(min_change, candles_back)
+
+
+def price_up(candles_back: int = 1) -> Condition:
+    """BTC close price is higher than N candles ago (from Binance BTC data)."""
+    return PriceUp(candles_back)
+
+
+def price_down(candles_back: int = 1) -> Condition:
+    """BTC close price is lower than N candles ago (from Binance BTC data)."""
+    return PriceDown(candles_back)
+
+
 __all__ = [
     "Condition",
     "and_",
@@ -857,4 +1065,14 @@ __all__ = [
     "always",
     "never",
     "when",
+    # MACD conditions (from Binance)
+    "macd_bullish_crossover",
+    "macd_bearish_crossover",
+    "macd_above_zero",
+    "macd_below_zero",
+    # Price change conditions (from Binance)
+    "price_change_above",
+    "price_change_below",
+    "price_up",
+    "price_down",
 ]

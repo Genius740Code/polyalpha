@@ -816,6 +816,8 @@ class TestExports:
             "rsi_below",
             "price_above",
             "price_below",
+            "price_in_range",
+            "price_not_in_ranges",
             "crossed_above",
             "crossed_below",
             "ema_above",
@@ -841,6 +843,16 @@ class TestExports:
             "always",
             "never",
             "when",
+            # MACD conditions
+            "macd_bullish_crossover",
+            "macd_bearish_crossover",
+            "macd_above_zero",
+            "macd_below_zero",
+            # Price change conditions
+            "price_change_above",
+            "price_change_below",
+            "price_up",
+            "price_down",
         }
         assert set(polyalpha.conditions.__all__) == expected
 

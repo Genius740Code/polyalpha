@@ -65,9 +65,15 @@ except ImportError:
     _rsi = _sma = _ema = _macd = _bbands = _psar = _ichimoku = _donchian = None
 
 try:
-    from .bot_hub import IndicatorAccessor
+    from .bot_hub import IndicatorAccessor, BinanceAccessor
 except ImportError:
     IndicatorAccessor = None  # type: ignore[assignment, misc]
+    BinanceAccessor = None
+
+try:
+    from .analysis import ChainlinkStreamer
+except ImportError:
+    ChainlinkStreamer = None
 
 
 # ── Price Snapshot ─────────────────────────────────────────────────────────────
@@ -101,6 +107,12 @@ class TickContext:
         First-class indicator access: ``.indicators.rsi(14)``,
         ``.indicators.macd(12, 26, 9)``,
         ``.indicators.bollinger_bands(20, 2)``, etc.
+    chainlink : ChainlinkStreamer | None
+        Live BTC spot price from Polymarket Chainlink WebSocket.
+        ``ctx.chainlink.last_price`` for the latest BTC/USD price.
+    binance : BinanceAccessor | None
+        Binance BTC market data: ``ctx.binance.close``, ``ctx.binance.macd()``,
+        ``ctx.binance.price_change(30)``, ``ctx.binance.price_up()``.
     rsi : float | None
         RSI indicator (legacy — prefer ``.indicators.rsi(14)``).
     sma : float | None
@@ -294,6 +306,42 @@ class TickContext:
         """
         return self._indicators
 
+    # ── External data sources ──────────────────────────────────────────────
+
+    @property
+    def chainlink(self):
+        """Live BTC spot price from Polymarket Chainlink WebSocket.
+
+        Returns ``None`` if the Chainlink streamer is not available.
+
+        Examples
+        --------
+        >>> ctx.chainlink.last_price
+        67850.23
+        >>> ctx.chainlink.last_update
+        datetime(...)
+        """
+        return self._bot._chainlink
+
+    @property
+    def binance(self):
+        """Binance BTC market data for external TA.
+
+        Returns ``None`` if BinanceAccessor is not available.
+
+        Examples
+        --------
+        >>> ctx.binance.close
+        67850.23
+        >>> ctx.binance.macd(12, 26, 9)
+        MACDResult(macd=..., signal=..., histogram=...)
+        >>> ctx.binance.price_change(3)
+        150.50
+        >>> ctx.binance.price_up(2)
+        True
+        """
+        return self._bot._binance
+
     # ── Indicators (optional — requires analysis deps) ──────────────────────
 
     def _get_price_series(self):
@@ -460,6 +508,24 @@ class Bot:
         if TelegramNotifier is not None:
             self._telegram = TelegramNotifier()
 
+        # Initialize Chainlink (live BTC spot price from Polymarket)
+        self._chainlink: Optional["ChainlinkStreamer"] = None
+        if ChainlinkStreamer is not None:
+            try:
+                cl = ChainlinkStreamer()
+                cl.start(asset, background=True)
+                self._chainlink = cl
+            except Exception as exc:
+                self._log.warning("Chainlink streamer init failed: %s", exc)
+
+        # Initialize BinanceAccessor (TA on Binance data)
+        self._binance: Optional["BinanceAccessor"] = None
+        if BinanceAccessor is not None:
+            try:
+                self._binance = BinanceAccessor(asset=asset, timeframe=timeframe)
+            except Exception as exc:
+                self._log.warning("BinanceAccessor init failed: %s", exc)
+
     # ── Public API ──────────────────────────────────────────────────────────
 
     def on_tick(self, fn: Callable) -> Callable:
@@ -616,6 +682,11 @@ class Bot:
                 self._stream.stop()
             except Exception:
                 pass
+        if self._chainlink:
+            try:
+                self._chainlink.stop()
+            except Exception:
+                pass
 
     @property
     def stats(self) -> dict:
@@ -682,6 +753,12 @@ class Bot:
             if self._ctx:
                 self._ctx.record_price(up)
                 self._ctx._invalidate_series_cache()
+            # Refresh Binance data on each tick (candle-gated internally)
+            if self._binance:
+                try:
+                    self._binance._refresh()
+                except Exception:
+                    pass
             # ── Candle tracking ──────────────────────────────────────────
             now = time.time()
             tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
@@ -719,6 +796,12 @@ class Bot:
             if self._ctx:
                 self._ctx.record_price(up)
                 self._ctx._invalidate_series_cache()
+            # Refresh Binance data on each tick (candle-gated internally)
+            if self._binance:
+                try:
+                    self._binance._refresh()
+                except Exception:
+                    pass
             # ── Candle tracking ──────────────────────────────────────────
             now = time.time()
             tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
@@ -819,6 +902,11 @@ class Bot:
         if self._stream:
             try:
                 self._stream.stop()
+            except Exception:
+                pass
+        if self._chainlink:
+            try:
+                self._chainlink.stop()
             except Exception:
                 pass
         self._client.close()
