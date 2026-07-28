@@ -882,51 +882,51 @@ class Sniper:
             if self._state != self.STATE_ARMED:
                 return
 
-        current_price = up if self.config.side == "UP" else down
+            current_price = up if self.config.side == "UP" else down
 
-        if self.config.log_prices:
-            self._log.debug("Price: %s=%.4f", self.config.side, current_price)
+            if self.config.log_prices:
+                self._log.debug("Price: %s=%.4f", self.config.side, current_price)
 
-        # Check exit threshold
-        if (self.config.exit_price is not None and
-            self._pending_order and
-            current_price <= self.config.exit_price):
-            self._log.info("Exit threshold triggered: %.4f <= %.4f",
-                          current_price, self.config.exit_price)
-            self._cancel_order("exit_threshold")
-            return
-
-        # Check entry threshold with price range support
-        price_in_range = current_price >= self.config.entry_price
-        if self.config.entry_price_max is not None:
-            price_in_range = price_in_range and current_price <= self.config.entry_price_max
-
-        # Check if price is in excluded ranges
-        price_excluded = False
-        if self.config.excluded_price_ranges:
-            for min_price, max_price in self.config.excluded_price_ranges:
-                if min_price <= current_price <= max_price:
-                    price_excluded = True
-                    if self.config.log_prices:
-                        self._log.debug("Price %.4f in excluded range [%.4f, %.4f]",
-                                      current_price, min_price, max_price)
-                    break
-
-        if price_in_range and not price_excluded and not self._pending_order and not self._filled_order:
-            max_str = f"-{self.config.entry_price_max:.4f}" if self.config.entry_price_max else ""
-            self._log.info("Entry threshold triggered: %.4f >= %.4f%s",
-                          current_price, self.config.entry_price, max_str)
-
-            # Check technical analysis conditions
-            if not self._check_ta_conditions():
-                self._log.debug("Technical analysis conditions not met, skipping entry")
+            # Check exit threshold
+            if (self.config.exit_price is not None and
+                self._pending_order and
+                current_price <= self.config.exit_price):
+                self._log.info("Exit threshold triggered: %.4f <= %.4f",
+                              current_price, self.config.exit_price)
+                self._cancel_order("exit_threshold")
                 return
 
-            # Check BTC price change filter
-            if not self._check_btc_change():
-                return
+            # Check entry threshold with price range support
+            price_in_range = current_price >= self.config.entry_price
+            if self.config.entry_price_max is not None:
+                price_in_range = price_in_range and current_price <= self.config.entry_price_max
 
-            self._place_order()
+            # Check if price is in excluded ranges
+            price_excluded = False
+            if self.config.excluded_price_ranges:
+                for min_price, max_price in self.config.excluded_price_ranges:
+                    if min_price <= current_price <= max_price:
+                        price_excluded = True
+                        if self.config.log_prices:
+                            self._log.debug("Price %.4f in excluded range [%.4f, %.4f]",
+                                          current_price, min_price, max_price)
+                        break
+
+            if price_in_range and not price_excluded and not self._pending_order and not self._filled_order:
+                max_str = f"-{self.config.entry_price_max:.4f}" if self.config.entry_price_max else ""
+                self._log.info("Entry threshold triggered: %.4f >= %.4f%s",
+                              current_price, self.config.entry_price, max_str)
+
+                # Check technical analysis conditions
+                if not self._check_ta_conditions():
+                    self._log.debug("Technical analysis conditions not met, skipping entry")
+                    return
+
+                # Check BTC price change filter
+                if not self._check_btc_change():
+                    return
+
+                self._place_order()
 
     # ── Window Management ─────────────────────────────────────────────────────
 
