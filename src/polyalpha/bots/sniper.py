@@ -69,7 +69,9 @@ Usage
 
 from __future__ import annotations
 
+import json as _json
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -94,6 +96,18 @@ from ..core.constants import (
 )
 
 log = logging.getLogger(__name__)
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _jloads(value, default):
+    """JSON-decode *value* if it is a string, otherwise return it as-is."""
+    if isinstance(value, str):
+        try:
+            return _json.loads(value)
+        except Exception:
+            return default
+    return value if value is not None else default
 
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -696,11 +710,16 @@ class Sniper:
     def _discover_market(self) -> bool:
         """Discover a market. Returns True if successful."""
         self._set_state(self.STATE_DISCOVERING)
+        # Reset order tracking for new market cycle
+        self._pending_order = None
+        self._filled_order = None
         try:
             self._market = self.client.markets.latest(
                 self.config.asset,
                 self.config.timeframe
             )
+            # Fix orientation BEFORE stream creation to ensure correct initial prices
+            self._fix_market_orientation(self._market)
             self._log.info("Market found: %s", self._market.slug)
             self._emit("market_found", self._market)
             return True
@@ -709,6 +728,48 @@ class Sniper:
             self._emit("error", exc)
             time.sleep(MARKET_DISCOVERY_BACKOFF)
             return False
+
+    def _fix_market_orientation(self, market: Market) -> None:
+        """
+        Fix UP/DOWN token and price orientation if API returns them swapped.
+        
+        Uses the raw Gamma event data to independently verify which token
+        corresponds to UP, and swaps tokens/prices if needed.
+        """
+        if len(market.tokens) < 2 or len(market.prices) < 2:
+            return
+        
+        try:
+            raw = market.raw or {}
+            sub = (raw.get("markets") or [{}])[0]
+            outcomes = _jloads(sub.get("outcomes", "[]"))
+            token_ids = _jloads(sub.get("clobTokenIds", "[]"))
+            question = str(market.question or "").lower()
+            
+            q_higher = any(w in question for w in ("higher", "greater", "above"))
+            q_lower = any(w in question for w in ("lower", "below"))
+            
+            def is_up(label: str) -> bool:
+                label = str(label).lower()
+                if any(w in label for w in ("up", "higher", "greater")):
+                    return True
+                return ("yes" in label and q_higher) or ("no" in label and q_lower)
+            
+            idx = next((i for i, lbl in enumerate(outcomes) if is_up(lbl)), None)
+            if idx is None or idx >= len(token_ids):
+                return
+            
+            true_up = str(token_ids[idx])
+            if true_up and true_up == market.tokens[1]:
+                # Swap tokens and prices
+                market.tokens[0], market.tokens[1] = market.tokens[1], market.tokens[0]
+                market.prices[0], market.prices[1] = market.prices[1], market.prices[0]
+                self._log.warning(
+                    "UP/DOWN orientation swapped for %s (%r) — corrected",
+                    market.slug, market.question
+                )
+        except Exception as exc:
+            self._log.debug("Orientation check failed: %s", exc)
 
     def _check_market_session(self) -> bool:
         """
@@ -851,7 +912,7 @@ class Sniper:
                                       current_price, min_price, max_price)
                     break
 
-        if price_in_range and not price_excluded and not self._pending_order:
+        if price_in_range and not price_excluded and not self._pending_order and not self._filled_order:
             max_str = f"-{self.config.entry_price_max:.4f}" if self.config.entry_price_max else ""
             self._log.info("Entry threshold triggered: %.4f >= %.4f%s",
                           current_price, self.config.entry_price, max_str)
@@ -904,12 +965,19 @@ class Sniper:
     # ── Order Execution ───────────────────────────────────────────────────────
 
     def _place_order(self) -> None:
-        """Place a limit order at the entry price."""
+        """Place a limit order at the current price (not entry_price)."""
         try:
+            # Get current price from stream
+            current_price = getattr(self._stream, self.config.side.lower(), None)
+            if current_price is None:
+                self._log.error("Cannot get current price from stream for order placement")
+                return
+            
+            # Place limit order at current price (will fill immediately since current >= current)
             order = self.client.paper.limit(
                 self._market,
                 side=self.config.side,
-                price=self.config.entry_price,
+                price=current_price,
                 amount=self.config.amount,
             )
             self._pending_order = order
@@ -986,8 +1054,6 @@ class Sniper:
         while not self._stop_event.is_set():
             if time.time() - start >= RESOLUTION_TIMEOUT:
                 self._log.warning("Resolution timeout, forcing manual resolve")
-                # In production, this would query the API for outcome
-                # For paper, we'll mark as unresolved
                 break
 
             # Check if stream has closed
@@ -996,12 +1062,30 @@ class Sniper:
 
             time.sleep(RESOLUTION_CHECK_INTERVAL)
 
-        # Determine outcome from positions
-        positions = self.client.paper.positions()
-        for pos in positions:
-            if pos.market_id == self._market.id and pos.resolved:
-                self._record_trade(pos)
-                return
+        # For paper trading, we need to manually resolve positions
+        # Determine outcome based on final price
+        if self._stream:
+            final_up = getattr(self._stream, 'up', None)
+            final_down = getattr(self._stream, 'down', None)
+            
+            if final_up is not None and final_down is not None:
+                # Determine outcome: higher price wins
+                outcome = "UP" if final_up > final_down else "DOWN"
+                self._log.info("Paper resolution: %s (final prices: UP=%.4f, DOWN=%.4f)", 
+                              outcome, final_up, final_down)
+                
+                # Resolve the position (this saves to database)
+                try:
+                    self.client.paper.resolve(self._market, outcome)
+                except Exception as exc:
+                    self._log.error("Failed to resolve position: %s", exc)
+                
+                # Now record the trade
+                positions = self.client.paper.positions()
+                for pos in positions:
+                    if pos.market_id == self._market.id and pos.resolved:
+                        self._record_trade(pos)
+                        return
 
         self._log.warning("No resolved position found for %s", self._market.slug)
 
