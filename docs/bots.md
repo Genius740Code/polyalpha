@@ -133,6 +133,8 @@ config = SniperConfig(
 | `ta_rsi_threshold` | `None` | Minimum RSI for entry |
 | `ta_sma_period` | `None` | Minimum SMA period for entry |
 | `ta_rules` | `None` | Custom TA evaluation rules |
+| `max_btc_change_pct` | `None` | Max BTC spot price change % to allow entry (e.g., `2.0` = 2%) |
+| `btc_change_periods` | `5` | Lookback periods for BTC change calculation |
 
 All parameters are validated on initialization. Invalid values raise `ValueError` with descriptive messages.
 
@@ -186,6 +188,28 @@ config = SniperConfig(
     amount=20.0,
 )
 ```
+
+### BTC Price Change Filter
+
+Skip entry when BTC spot price moves too much (high volatility guard):
+
+```python
+# Skip entry if BTC moved more than 2% in the last 5 candles
+config = SniperConfig(
+    asset="BTC",
+    timeframe="5m",
+    side="UP",
+    entry_price=0.92,
+    window_seconds=35,
+    amount=20.0,
+    max_btc_change_pct=2.0,     # skip if BTC changed > 2%
+    btc_change_periods=5,       # lookback over 5 candles
+)
+```
+
+Uses Binance spot price data to calculate the absolute percentage change. If the
+change exceeds `max_btc_change_pct`, the entry is skipped. Errors gracefully —
+if the data feed fails, entry is allowed to proceed.
 
 ### Excluded Price Ranges
 

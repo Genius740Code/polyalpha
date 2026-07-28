@@ -144,6 +144,10 @@ class SniperConfig:
     ta_sma_period: Optional[int] = None
     ta_rules: Optional[list] = None  # Custom TA rules
 
+    # BTC price change filter (optional)
+    max_btc_change_pct: Optional[float] = None
+    btc_change_periods: int = 5
+
     def __post_init__(self):
         """Validate configuration parameters."""
         # Validate asset
@@ -251,6 +255,19 @@ class SniperConfig:
         # Validate allowed_market_sessions
         if self.allowed_market_sessions is not None:
             self.allowed_market_sessions = validate_session_list(self.allowed_market_sessions)
+
+        # Validate max_btc_change_pct
+        if self.max_btc_change_pct is not None:
+            if self.max_btc_change_pct <= 0:
+                raise ValueError(
+                    f"max_btc_change_pct must be positive, got {self.max_btc_change_pct}"
+                )
+
+        # Validate btc_change_periods
+        if self.btc_change_periods <= 0:
+            raise ValueError(
+                f"btc_change_periods must be positive, got {self.btc_change_periods}"
+            )
 
 
 # ── Statistics ─────────────────────────────────────────────────────────────────
@@ -474,6 +491,68 @@ class Sniper:
         except Exception as exc:
             self._log.error("Technical analysis check failed: %s", exc)
             return True  # Allow entry on error
+
+    def _check_btc_change(self) -> bool:
+        """
+        Check if BTC spot price change is within the configured limit.
+
+        Fetches BTC spot price data and calculates the percentage change
+        over the configured lookback periods. Returns True if the change
+        is within the limit (or filtering is disabled), False if BTC
+        volatility is too high.
+
+        Returns
+        -------
+        bool
+            True if trading should proceed, False if BTC change is too high.
+        """
+        if self.config.max_btc_change_pct is None:
+            return True  # No filtering
+
+        try:
+            from ..analysis import DataFeed, DataFeedConfig
+
+            # Use Binance as the default source for BTC spot price data
+            feed_config = DataFeedConfig(
+                source="binance",
+                timeframe=self.config.timeframe,
+                lookback_periods=self.config.btc_change_periods + 5,
+            )
+            feed = DataFeed(feed_config)
+            data = feed.fetch("BTC")
+
+            if data is None or len(data) < 2:
+                self._log.warning("Not enough BTC data for change calculation, allowing entry")
+                return True
+
+            # Get the close prices for the lookback period
+            latest = data["close"].iloc[-1]
+            if len(data) > self.config.btc_change_periods:
+                prev = data["close"].iloc[-self.config.btc_change_periods]
+            else:
+                prev = data["close"].iloc[0]
+
+            change_pct = abs((latest - prev) / prev) * 100
+            self._log.debug(
+                "BTC change: %.2f%% (limit: %.2f%%, periods: %d)",
+                change_pct, self.config.max_btc_change_pct, self.config.btc_change_periods
+            )
+
+            if change_pct > self.config.max_btc_change_pct:
+                self._log.info(
+                    "BTC change %.2f%% exceeds max %.2f%%, skipping entry",
+                    change_pct, self.config.max_btc_change_pct
+                )
+                return False
+
+            return True
+
+        except ImportError:
+            self._log.warning("BTC change check dependencies not available, allowing entry")
+            return True
+        except Exception as exc:
+            self._log.warning("BTC change check failed: %s, allowing entry", exc)
+            return True
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -778,10 +857,15 @@ class Sniper:
                           current_price, self.config.entry_price, max_str)
 
             # Check technical analysis conditions
-            if self._check_ta_conditions():
-                self._place_order()
-            else:
+            if not self._check_ta_conditions():
                 self._log.debug("Technical analysis conditions not met, skipping entry")
+                return
+
+            # Check BTC price change filter
+            if not self._check_btc_change():
+                return
+
+            self._place_order()
 
     # ── Window Management ─────────────────────────────────────────────────────
 
