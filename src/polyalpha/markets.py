@@ -381,6 +381,23 @@ class MarketClient:
         if down_idx is None:
             down_idx = 1 if len(token_ids) > 1 else 0
 
+        # Validate and correct mapping using price information
+        # If both prices are available and differ significantly, ensure UP has the higher price
+        # (since UP typically has higher implied probability in bullish markets)
+        if len(prices_raw) >= 2 and up_idx != down_idx:
+            try:
+                price_up = float(prices_raw[up_idx])
+                price_down = float(prices_raw[down_idx])
+                # If DOWN price is significantly higher than UP, swap the indices
+                if price_down > price_up + 0.1:  # 10% threshold to avoid swapping on small differences
+                    log.warning(
+                        "Price mismatch detected: DOWN price (%.4f) > UP price (%.4f). Swapping token mapping.",
+                        price_down, price_up
+                    )
+                    up_idx, down_idx = down_idx, up_idx
+            except (TypeError, ValueError):
+                pass  # If prices can't be parsed, keep the string-based mapping
+
         def _token(idx: int) -> str:
             return str(token_ids[idx]) if idx < len(token_ids) else ""
 
