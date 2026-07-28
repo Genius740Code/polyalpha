@@ -28,6 +28,7 @@ Usage
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
@@ -88,6 +89,9 @@ class PaperEngine:
         self._balance: float = float(balance)
         self._orders: dict[str, PaperOrder] = {}
         self._positions: dict[str, PaperPosition] = {}
+
+        # Balance lock for thread-safe balance updates
+        self._balance_lock: threading.Lock = threading.Lock()
 
         # Risk management
         self._risk_manager: RiskManager = RiskManager(self._config, self._balance)
@@ -516,10 +520,11 @@ class PaperEngine:
 
         wallet = self._get_active_wallet()
 
-        if amount > wallet.balance:
-            raise InsufficientBalance(
-                f"Order amount ${amount:.2f} exceeds balance ${wallet.balance:.2f}"
-            )
+        with self._balance_lock:
+            if amount > wallet.balance:
+                raise InsufficientBalance(
+                    f"Order amount ${amount:.2f} exceeds balance ${wallet.balance:.2f}"
+                )
 
         checks = self.pre_trade_checks(market, side, amount, balance=wallet.balance)
         if not checks["can_proceed"]:
@@ -535,9 +540,10 @@ class PaperEngine:
             time_window_start=time_window_start, time_window_end=time_window_end,
         )
         wallet._orders[order_id] = order
-        wallet.balance -= amount
-        if not self._use_multi_wallet:
-            self._balance = wallet.balance
+        with self._balance_lock:
+            wallet.balance -= amount
+            if not self._use_multi_wallet:
+                self._balance = wallet.balance
         log.debug("Paper: limit %s @ %.3f $%.2f reserved — balance $%.2f", side, price, amount, wallet.balance)
         return order
 
@@ -550,7 +556,8 @@ class PaperEngine:
                     if order.status != "open":
                         raise ValueError(f"Cannot cancel order with status='{order.status}' (must be 'open')")
                     order.status = "cancelled"
-                    wallet.balance += order.amount
+                    with self._balance_lock:
+                        wallet.balance += order.amount
                     log.info("Paper: cancelled order %s in wallet %s — $%.2f refunded, balance $%.2f",
                              order_id[:8], wallet.wallet_id, order.amount, wallet.balance)
                     return order
@@ -563,7 +570,8 @@ class PaperEngine:
             raise ValueError(f"Cannot cancel order with status='{order.status}' (must be 'open')")
 
         order.status = "cancelled"
-        self._balance += order.amount
+        with self._balance_lock:
+            self._balance += order.amount
         log.info("Paper: cancelled order %s — $%.2f refunded, balance $%.2f", order_id[:8], order.amount, self._balance)
         return order
 
@@ -713,9 +721,10 @@ class PaperEngine:
             )
             net_amount = sell_amount - fee
 
-        wallet.balance += net_amount
-        if not self._use_multi_wallet:
-            self._balance = wallet.balance
+        with self._balance_lock:
+            wallet.balance += net_amount
+            if not self._use_multi_wallet:
+                self._balance = wallet.balance
 
         order_id = new_id()
         order = PaperOrder(
@@ -948,7 +957,8 @@ class PaperEngine:
                         pos.resolved = True
                         pos.outcome = "WON" if pos.side == outcome else "LOST"
                         payout = pos.shares if pos.outcome == "WON" else 0.0
-                        wallet.balance += payout
+                        with self._balance_lock:
+                            wallet.balance += payout
                         wallet.risk_manager.record_trade(pos.pnl)
                         log.info("Paper: resolved %s in wallet %s  -> %s  payout=$%.2f  balance=$%.2f",
                                  pos.slug, wallet.wallet_id, pos.outcome, payout, wallet.balance)
@@ -1165,10 +1175,11 @@ class PaperEngine:
         if wallet is None:
             wallet = self._get_active_wallet()
 
-        if amount > wallet.balance:
-            raise InsufficientBalance(
-                f"Order amount ${amount:.2f} exceeds balance ${wallet.balance:.2f}"
-            )
+        with self._balance_lock:
+            if amount > wallet.balance:
+                raise InsufficientBalance(
+                    f"Order amount ${amount:.2f} exceeds balance ${wallet.balance:.2f}"
+                )
 
         if price <= 0:
             raise ValueError(f"Price must be positive, got {price}")
@@ -1190,9 +1201,10 @@ class PaperEngine:
                 net, price, shares, is_maker=is_limit,
             )
 
-        wallet.balance -= amount
-        if not self._use_multi_wallet:
-            self._balance = wallet.balance
+        with self._balance_lock:
+            wallet.balance -= amount
+            if not self._use_multi_wallet:
+                self._balance = wallet.balance
 
         self._fee_manager.track_fee_and_rebate(fee, rebate_amount, fee_type, amount)
 
@@ -1220,9 +1232,10 @@ class PaperEngine:
                 return
 
         def _refund(w, order):
-            w.balance += order.amount
-            if not self._use_multi_wallet:
-                self._balance = w.balance
+            with self._balance_lock:
+                w.balance += order.amount
+                if not self._use_multi_wallet:
+                    self._balance = w.balance
 
         if current_price <= 0:
             log.warning("Paper: invalid current price %.4f for limit order %s, cancelling", current_price, order.id[:8])

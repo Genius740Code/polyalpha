@@ -8,7 +8,7 @@
 - **Why it matters**: Could place orders when bot should be disarmed, causing unintended trades during state transitions.
 - **Suggested fix**: Extend the state lock to cover the entire price check and order placement logic, or use a reentrant lock pattern.
 
-### 2. Balance updates not atomic in paper engine
+### 2. Balance updates not atomic in paper engine IMPLEMENTED
 - **File**: `src/polyalpha/trading/paper_engine.py:1193,1223,716,951,538,553`
 - **What's wrong**: Balance modifications (`wallet.balance -= amount`, `wallet.balance += amount`) have no locking. In BotHub with multiple strategies sharing data, concurrent balance checks/updates could race.
 - **Why it matters**: Could cause overspending, negative balances, or lost funds in paper trading simulation.
