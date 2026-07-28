@@ -688,12 +688,11 @@ class Stream:
 
     def _publish_prices(self) -> None:
         """Map per-token prices → (up, down) and emit a 'price' event."""
-        tokens = self.market.tokens
-        if not tokens:
+        # Use market properties to get correct token IDs (handles API ordering variations)
+        up_id   = self.market.up_token
+        down_id = self.market.down_token
+        if not up_id and not down_id:
             return
-
-        up_id   = tokens[0] if tokens else None
-        down_id = tokens[1] if len(tokens) > 1 else None
         changed = False
 
         # Degenerate case: both tokens share the same ID — derive complement
