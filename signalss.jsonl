@@ -1,0 +1,3 @@
+{"timestamp": "2026-07-28T19:05:22.828957+00:00", "market_slug": "btc-updown-5m-1785265500", "up_price": 0.473, "btc_spot": 63828.78, "btc_delta": 4.769999999996799, "macd_bullish": true}
+{"timestamp": "2026-07-28T19:30:33.841514+00:00", "market_slug": "btc-updown-5m-1785267000", "up_price": 0.99, "btc_spot": 63861.48, "btc_delta": 107.4800000000032, "macd_bullish": true}
+{"timestamp": "2026-07-28T19:33:08.136116+00:00", "market_slug": "btc-updown-5m-1785267000", "up_price": 1.0285, "btc_spot": 63819.72, "btc_delta": 65.72000000000116, "macd_bullish": true}

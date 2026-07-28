@@ -63,13 +63,6 @@ class RiskManager:
                 f"Daily loss ${abs(self.daily_pnl):.2f} exceeds limit ${self.config.max_daily_loss:.2f}"
             )
 
-        max_risk = balance * self.config.max_risk_per_trade
-        if amount > max_risk:
-            raise RiskLimitExceeded(
-                f"Order amount ${amount:.2f} exceeds max risk ${max_risk:.2f} "
-                f"({self.config.max_risk_per_trade:.1%})"
-            )
-
     def check_stop_loss(self, position: RealPosition, current_price: float) -> bool:
         """Check if stop loss should be triggered."""
         if position.stop_loss is None:

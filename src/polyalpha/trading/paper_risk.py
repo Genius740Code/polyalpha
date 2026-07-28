@@ -78,13 +78,6 @@ class RiskManager:
                 f"Maximum daily trades ({self.config.max_trades_per_day}) reached"
             )
 
-        max_risk = balance * self.config.max_risk_per_trade
-        if amount > max_risk:
-            raise ValueError(
-                f"Order amount ${amount:.2f} exceeds max risk ${max_risk:.2f} "
-                f"({self.config.max_risk_per_trade:.1%} of balance)"
-            )
-
         self.daily_trades += 1
 
     def _get_market_exposure(self, market_id: str, positions: dict) -> float:

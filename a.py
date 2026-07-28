@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 import requests
 from dotenv import load_dotenv
 
+# Use local src library instead of published package
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 import polyalpha
 from polyalpha.bots import Sniper
 from polyalpha.bots.sniper import SniperConfig
@@ -189,9 +191,9 @@ def send_telegram(msg: str) -> bool:
 def _log_signal(slug, up_price, btc_spot, btc_delta, macd_bullish):
     row = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "market_slug": slug, "up_price": up_price,
-        "btc_spot": btc_spot, "btc_delta": btc_delta,
-        "macd_bullish": macd_bullish,
+        "market_slug": slug, "up_price": float(up_price),
+        "btc_spot": float(btc_spot), "btc_delta": float(btc_delta),
+        "macd_bullish": bool(macd_bullish),
     }
     with open(SIGNAL_LOG, "a") as f:
         f.write(json.dumps(row) + "\n")

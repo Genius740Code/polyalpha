@@ -3,19 +3,10 @@ MULTI WALLET SUPPORT FOR REAL TRADING
 WALLET TRACKER
 
 
-
-
 big giles into saml lfiles
 
 
-
-on defauly include no fees, no things
-
-
-
-realsitc prests and otehr force x% amount epr trade remvoe that
-
-mayeb since time so it doesnt get wrong time for polymarket markets
+mayeb since time so it doesnt get wrong time for polymarket markets as in the slug code
 
 
 binacne data such as volume ect
@@ -28,4 +19,20 @@ better WINDOW_SECONDS so you can choose x multipe ect
 
 verify max btc change feature
 
-check if btc chace data has error
+check if btc chace data has error'
+
+
+when using poylmakret stem adatqa, add option to choose to use clonb api, ws or both
+default websocket idk
+
+do some checks before connecting to ws, or findig market to reduce chance of errors
+
+redo or remvoe stale checking
+
+
+make sure frotnend terminal has same data as the backend    
+
+risk managment kidna sucks overcompliacted ect
+
+
+fidn and look for errors in buying, makking srue it buys t correct price, with the delay and spilalge and fee aswell ect

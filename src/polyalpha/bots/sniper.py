@@ -973,6 +973,14 @@ class Sniper:
                 self._log.error("Cannot get current price from stream for order placement")
                 return
             
+            # Validate price is within valid range (0, 1]
+            if not (0 < current_price <= 1.0):
+                self._log.warning(
+                    "Invalid price %.4f from stream (must be 0 < price <= 1.0), skipping order",
+                    current_price
+                )
+                return
+            
             # Place limit order at current price (will fill immediately since current >= current)
             order = self.client.paper.limit(
                 self._market,
