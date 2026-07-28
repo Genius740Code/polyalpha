@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import re
 import time
 from threading import Lock
 from typing import Any
@@ -371,8 +372,9 @@ class MarketClient:
 
         # Locate UP / DOWN positions within the outcomes array
         def _find_index(variants: list[str]) -> int | None:
+            pattern = r'\b(?:' + '|'.join(re.escape(v) for v in variants) + r')\b'
             for i, label in enumerate(outcomes):
-                if any(v.lower() in str(label).lower() for v in variants):
+                if re.search(pattern, str(label), re.IGNORECASE):
                     return i
             return None
 
@@ -433,7 +435,34 @@ class MarketClient:
         outcomes   = _jloads(data.get("outcomes"),                    ["YES", "NO"])
         token_ids  = _jloads(data.get("clobTokenIds") or data.get("tokens"), [])
         prices_raw = _jloads(data.get("outcomePrices"), [])
-        prices     = [float(p) for p in prices_raw] if prices_raw else []
+
+        # Locate UP / DOWN positions within the outcomes array
+        def _find_index(variants: list[str]) -> int | None:
+            pattern = r'\b(?:' + '|'.join(re.escape(v) for v in variants) + r')\b'
+            for i, label in enumerate(outcomes):
+                if re.search(pattern, str(label), re.IGNORECASE):
+                    return i
+            return None
+
+        up_idx   = _find_index(["up", "higher", "greater"]) or 0
+        down_idx = _find_index(["down", "lower"])
+        if down_idx is None:
+            down_idx = 1 if len(token_ids) > 1 else 0
+
+        def _token(idx: int) -> str:
+            return str(token_ids[idx]) if idx < len(token_ids) else ""
+
+        def _price(idx: int) -> float:
+            try:
+                if idx < len(prices_raw):
+                    return float(prices_raw[idx])
+            except (TypeError, ValueError):
+                pass
+            bid = data.get("bestBid")
+            ask = data.get("bestAsk")
+            if bid and ask:
+                return round((float(bid) + float(ask)) / 2, PRICE_ROUNDING)
+            return FALLBACK_PRICE
 
         return Market(
             id          = data.get("conditionId") or data.get("id", ""),
@@ -447,9 +476,9 @@ class MarketClient:
             end_time    = data.get("endDate")   or data.get("end_date", ""),
             volume      = float(data.get("volume",    0) or 0),
             liquidity   = float(data.get("liquidity", 0) or 0),
-            outcomes    = outcomes,
-            prices      = prices,
-            tokens      = token_ids,
+            outcomes    = ["UP", "DOWN"],
+            prices      = [_price(up_idx), _price(down_idx)],
+            tokens      = [_token(up_idx), _token(down_idx)],
             raw         = data,
         )
 
