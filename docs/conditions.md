@@ -292,6 +292,93 @@ True when price above cloud top AND tenkan > kijun — strong bullish signal.
 
 True when price below cloud bottom AND tenkan < kijun — strong bearish signal.
 
+### `price_change_above(min_change, candles=1)`
+
+True when BTC price from Binance increased by at least `min_change` USD over the last N candles. Requires `ctx.binance` (auto-available via `Bot`).
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `min_change` | `float` | — | Minimum USD price increase |
+| `candles` | `int` | `1` | Lookback candles |
+
+```python
+from polyalpha.conditions import price_change_above
+
+condition = price_change_above(30)      # BTC moved up $30+
+condition = price_change_above(100, 3)  # BTC moved up $100+ in 3 candles
+```
+
+### `price_change_below(min_change, candles=1)`
+
+True when BTC price dropped by at least `min_change` USD over the last N candles.
+
+```python
+from polyalpha.conditions import price_change_below
+
+condition = price_change_below(30)  # BTC dropped $30+
+```
+
+### `price_up(candles=1)`
+
+True when BTC close price is higher than N candles ago.
+
+```python
+from polyalpha.conditions import price_up
+
+condition = price_up(2)  # BTC up over last 2 candles
+```
+
+### `price_down(candles=1)`
+
+True when BTC close price is lower than N candles ago.
+
+```python
+from polyalpha.conditions import price_down
+
+condition = price_down(3)  # BTC down over last 3 candles
+```
+
+### `macd_bullish_crossover(fast=12, slow=26, signal=9)`
+
+True when MACD line crossed **above** the signal line on Binance BTC data. Stateful — stores previous values. Returns `False` on the first tick.
+
+```python
+from polyalpha.conditions import macd_bullish_crossover
+
+condition = macd_bullish_crossover()         # default params
+condition = macd_bullish_crossover(12, 26, 9)  # explicit
+```
+
+### `macd_bearish_crossover(fast=12, slow=26, signal=9)`
+
+True when MACD line crossed **below** the signal line on Binance BTC data.
+
+```python
+from polyalpha.conditions import macd_bearish_crossover
+
+condition = macd_bearish_crossover()
+```
+
+### `macd_above_zero(fast=12, slow=26, signal=9)`
+
+True when MACD histogram is positive (momentum bullish) on Binance BTC data.
+
+```python
+from polyalpha.conditions import macd_above_zero
+
+condition = macd_above_zero()
+```
+
+### `macd_below_zero(fast=12, slow=26, signal=9)`
+
+True when MACD histogram is negative (momentum bearish) on Binance BTC data.
+
+```python
+from polyalpha.conditions import macd_below_zero
+
+condition = macd_below_zero()
+```
+
 ### `always()`
 
 Always true — useful as a default or fallthrough.
@@ -411,6 +498,14 @@ bot.run()
 | `ichimoku_price_below_cloud(side, t=9, k=26, s=52)` | `IchimokuPriceBelowCloud` | Price below cloud bottom |
 | `ichimoku_bullish_breakout(side, t=9, k=26, s=52)` | `IchimokuBullishBreakout` | Price above cloud + tenkan > kijun |
 | `ichimoku_bearish_breakout(side, t=9, k=26, s=52)` | `IchimokuBearishBreakout` | Price below cloud + tenkan < kijun |
+| `macd_bullish_crossover(f=12, s=26, sig=9)` | `MACDBullishCrossover` | MACD crossed above signal (Binance BTC) |
+| `macd_bearish_crossover(f=12, s=26, sig=9)` | `MACDBearishCrossover` | MACD crossed below signal (Binance BTC) |
+| `macd_above_zero(f=12, s=26, sig=9)` | `MACDAboveZero` | MACD histogram positive (Binance BTC) |
+| `macd_below_zero(f=12, s=26, sig=9)` | `MACDBelowZero` | MACD histogram negative (Binance BTC) |
+| `price_change_above(min, candles=1)` | `PriceChangeAbove` | BTC price up by $min+ (Binance BTC) |
+| `price_change_below(min, candles=1)` | `PriceChangeBelow` | BTC price down by $min+ (Binance BTC) |
+| `price_up(candles=1)` | `PriceUp` | BTC close higher than N candles ago (Binance BTC) |
+| `price_down(candles=1)` | `PriceDown` | BTC close lower than N candles ago (Binance BTC) |
 | `always()` | `Always` | Always true |
 | `never()` | `Never` | Always false |
 | `when(fn)` | `LambdaCondition` | Custom function as condition |

@@ -225,6 +225,8 @@ def strategy(ctx):
 | `rsi` | `float \| None` | RSI(14) — legacy, prefer `ctx.indicators.rsi(14)` |
 | `sma_20` | `float \| None` | SMA(20) — legacy, prefer `ctx.indicators.sma(20)` |
 | `ema_12` | `float \| None` | EMA(12) — legacy, prefer `ctx.indicators.ema(12)` |
+| `chainlink` | `ChainlinkStreamer \| None` | Latest BTC/USD spot price from Polymarket's Chainlink oracle — see below |
+| `binance` | `BinanceAccessor \| None` | Binance BTC market data for external TA (MACD, price change, RSI, etc.) — see below |
 
 ### IndicatorAccessor (`ctx.indicators`)
 
@@ -265,6 +267,104 @@ roc = ctx.indicators.roc(12)
 | `donchian(length=20)` | `DonchianResult \| None` | Upper, mid, lower Donchian bands |
 
 All return `None` when `pandas` is not installed or there is insufficient price history.
+
+### Chainlink Spot Price (`ctx.chainlink`)
+
+Exposes the live BTC/USD spot price from Polymarket's Chainlink oracle WebSocket feed. Auto-started when `Bot` or `BotHub` initializes — no manual setup needed.
+
+```python
+@bot.on_tick
+def strategy(ctx):
+    spot = ctx.chainlink.last_price       # float | None — latest BTC/USD spot
+    updated = ctx.chainlink.last_update    # float | None — timestamp
+    symbol = ctx.chainlink.last_symbol     # str — e.g. "BTC/USD"
+```
+
+| Property | Returns | Description |
+|----------|---------|-------------|
+| `last_price` | `float \| None` | Latest BTC/USD spot price from the Chainlink oracle |
+| `last_update` | `float \| None` | Unix timestamp of the last price update |
+| `last_symbol` | `str \| None` | Symbol string (e.g. `"BTC/USD"`) |
+
+Returns `None` if no price has been received yet (initial connect may take a few seconds).
+
+### Binance Market Data (`ctx.binance`)
+
+Pulls OHLCV data from the free Binance REST API for external technical analysis (MACD, RSI, price momentum, etc.). Auto-refreshes once per candle — no redundant API calls.
+
+```python
+@bot.on_tick
+def strategy(ctx):
+    # Raw market data
+    close = ctx.binance.close             # float — latest close price
+    high = ctx.binance.high               # float — current candle high
+    low = ctx.binance.low                 # float — current candle low
+    volume = ctx.binance.volume           # float — current candle volume
+
+    # Indicators (computed from Binance OHLCV data)
+    macd = ctx.binance.macd(12, 26, 9)    # MACDResult(macd, signal, histogram)
+    rsi = ctx.binance.rsi(14)             # float | None
+    sma = ctx.binance.sma(20)             # float | None
+    ema = ctx.binance.ema(12)             # float | None
+
+    # Price movement helpers
+    change = ctx.binance.price_change(3)           # float — BTC price change over last 3 candles
+    change_pct = ctx.binance.price_change_percent(3)  # float — percent change
+    up = ctx.binance.price_up(2)                   # bool — close higher than 2 candles ago?
+    jumped = ctx.binance.price_above_by(50)        # bool — moved up at least $50?
+```
+
+| Property / Method | Returns | Description |
+|-------------------|---------|-------------|
+| `close` | `float \| None` | Latest Binance close price |
+| `high` | `float \| None` | Current candle high |
+| `low` | `float \| None` | Current candle low |
+| `volume` | `float \| None` | Current candle volume |
+| `macd(fast=12, slow=26, signal=9)` | `MACDResult \| None` | MACD line, signal, histogram |
+| `rsi(period=14)` | `float \| None` | Relative Strength Index |
+| `sma(period=20)` | `float \| None` | Simple Moving Average |
+| `ema(period=12)` | `float \| None` | Exponential Moving Average |
+| `price_change(candles=1)` | `float \| None` | BTC close price change over N candles |
+| `price_change_percent(candles=1)` | `float \| None` | BTC percent change over N candles |
+| `price_up(candles=1)` | `bool` | Close higher than N candles ago |
+| `price_above_by(min_change)` | `bool` | Close moved up by at least `min_change` USD |
+
+Returns `None` on indicator methods when insufficient data.
+
+### Mixing Data Sources in One Bot
+
+Combine Polymarket UP/DOWN prices, Chainlink BTC spot, and Binance TA in a single strategy:
+
+```python
+from polyalpha.conditions import and_, price_above, macd_bullish_crossover
+
+bot = polyalpha.Bot("BTC", "5m", balance=500)
+
+bot.when(
+    and_(
+        price_above("UP", 0.90),           # Polymarket WSS
+        macd_bullish_crossover(),           # Binance API (MACD on BTC)
+    )
+).buy("UP", 20)
+
+bot.run()
+```
+
+Or in an `on_tick` strategy:
+
+```python
+@bot.on_tick
+def strategy(ctx):
+    # Polymarket market price
+    up_price = ctx.price.up
+    # Chainlink BTC spot
+    btc_spot = ctx.chainlink.last_price
+    # Binance MACD
+    macd = ctx.binance.macd(12, 26, 9)
+
+    if up_price > 0.9 and btc_spot and btc_spot > 60000 and macd and macd.histogram > 0:
+        ctx.buy("UP", 20)
+```
 
 ### Methods
 
@@ -462,7 +562,7 @@ hub = polyalpha.BotHub(
     default_balance=100.0,    # default starting balance per strategy
     mode="simple",            # "simple", "realistic", or "custom"
     paper_config=None,        # PaperConfig for mode="custom"
-    chainlink=True,           # enable Chainlink oracle price feed
+    chainlink=True,           # enable Chainlink oracle price feed (also starts Binance TA stream)
     log_dir=None,             # directory for per-strategy rotating log files
     **kwargs,                 # forwarded to polyalpha.Client
 )
@@ -545,7 +645,12 @@ Same public API as `TickContext` plus Chainlink/candle/orderbook properties and 
 @hub.strategy("example")
 def strategy(ctx):
     # Chainlink spot price (requires chainlink=True)
-    spot = ctx.spot_price
+    spot = ctx.chainlink.last_price
+
+    # Binance BTC market data (auto-started for all BotHub instances)
+    macd = ctx.binance.macd(12, 26, 9)
+    change = ctx.binance.price_change(3)
+    btc_close = ctx.binance.close
 
     # Order book (auto-attached to shared WebSocket stream)
     bids = ctx.orderbook.up.bids        # tuple[BookLevel]
@@ -568,7 +673,7 @@ def strategy(ctx):
 | Property | Returns | Description |
 |----------|---------|-------------|
 | `price` | `PriceSnapshot` | Current UP/DOWN prices from the shared stream |
-| `spot_price` | `float \| None` | Current Chainlink oracle price (requires `chainlink=True`) |
+| `spot_price` | `float \| None` | Current Chainlink oracle price (requires `chainlink=True`). Prefer `ctx.chainlink.last_price` for live WS feed. |
 | `balance` | `float` | This strategy's paper balance |
 | `positions` | `list` | This strategy's open positions |
 | `pnl` | `float` | This strategy's realised P&L |
@@ -582,6 +687,8 @@ def strategy(ctx):
 | `rsi` | `float \| None` | RSI(14) — legacy, prefer `ctx.indicators.rsi(14)` |
 | `sma_20` | `float \| None` | SMA(20) — legacy, prefer `ctx.indicators.sma(20)` |
 | `ema_12` | `float \| None` | EMA(12) — legacy, prefer `ctx.indicators.ema(12)` |
+| `chainlink` | `ChainlinkStreamer \| None` | Latest BTC/USD spot price from Polymarket's Chainlink oracle — see below |
+| `binance` | `BinanceAccessor \| None` | Binance BTC market data for external TA (MACD, price change, RSI, etc.) — see below |
 
 Methods: `buy(side, amount)`, `limit(side, price, amount)`, `close_position(side, amount=None)`, `buy_once_per_candle(side, amount)`, `buy_in_window(side, amount, min_seconds, max_seconds)` — same signatures as `TickContext`.
 

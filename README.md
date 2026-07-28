@@ -192,6 +192,9 @@ ctx.positions                   # open positions
 ctx.pnl                         # realised P&L
 ctx.rsi / ctx.sma_20 / ctx.ema_12   # indicators (requires pandas)
 ctx.tick_count / ctx.trade_count
+ctx.chainlink.last_price        # BTC spot from Chainlink oracle
+ctx.binance.macd(12, 26, 9)     # MACD from Binance data
+ctx.binance.price_change(3)     # BTC price change over 3 candles
 ctx.buy("UP", 20)               # market buy
 ctx.limit("UP", 0.92, 25)       # limit order
 ctx.close_position("UP")        # close position
@@ -209,7 +212,20 @@ bot.when(rsi_below(30) & price_below("down", 0.15)).buy("DOWN", 20)
 bot.run()
 ```
 
-**Built-in conditions:** `rsi_above`, `rsi_below`, `price_above`, `price_below`, `price_change_pct_above`, `sma_above`, `sma_below`, `trending_up`, `trending_down`, `volatility_above`, `volume_above`, `min_tick_count`, `max_spend`, `stopped`
+**Built-in conditions:** `rsi_above`, `rsi_below`, `price_above`, `price_below`, `price_change_pct_above`, `sma_above`, `sma_below`, `trending_up`, `trending_down`, `volatility_above`, `volume_above`, `min_tick_count`, `max_spend`, `stopped`, `macd_bullish_crossover`, `macd_bearish_crossover`, `macd_above_zero`, `macd_below_zero`, `price_change_above`, `price_change_below`, `price_up`, `price_down`
+
+**Mixing data sources:** Conditions like `macd_bullish_crossover()` read from Binance BTC data via `ctx.binance`, while `price_above()` reads Polymarket UP/DOWN prices. Both work together in the same declarative rule:
+
+```python
+from polyalpha.conditions import and_, price_above, macd_bullish_crossover
+
+bot.when(
+    and_(price_above("UP", 0.90), macd_bullish_crossover())
+).buy("UP", 20)
+bot.run()
+```
+
+Chainlink BTC spot is also available at `ctx.chainlink.last_price` in `on_tick` strategies or via `ctx.chainlink` in `BotHub` strategies.
 
 See [`examples/bot_simple.py`](./examples/bot_simple.py).
 

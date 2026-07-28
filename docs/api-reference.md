@@ -151,6 +151,8 @@ See [Logging](./logging.md) for full usage.
 | `Sniper` | `bots/sniper.py` | Automated time-window trading bot with state machine |
 | `Tracker` | `bots/tracker.py` | P&L tracking bot |
 | `Bot` | `bot.py` | Declarative bot framework: `@on_tick`, `.when()` + `.buy()` |
+| `BotHub` | `bot_hub.py` | Multi-strategy hub: one WebSocket, N isolated paper engines |
+| `BinanceAccessor` | `bot_hub.py` | Binance BTC market data for bot strategies — `.close`, `.macd()`, `.price_change()`, etc. |
 
 ---
 
@@ -158,7 +160,7 @@ See [Logging](./logging.md) for full usage.
 
 | Symbol | Source | Description |
 |--------|--------|-------------|
-| `conditions` | `conditions.py` | Module. 28 condition classes, 3 combinators (`and_`, `or_`, `not_`), 26 factories (`rsi_above`, `ema_crossed_above`, `supertrend_up`, `ichimoku_bullish_breakout`, etc.), operator overloading (`&`, `\|`, `~`) |
+| `conditions` | `conditions.py` | Module. 28+ condition classes, 3 combinators (`and_`, `or_`, `not_`), 34+ factories (`rsi_above`, `ema_crossed_above`, `supertrend_up`, `ichimoku_bullish_breakout`, `macd_bullish_crossover`, `price_change_above`, etc.), operator overloading (`&`, `\|`, `~`) |
 
 ---
 
@@ -218,7 +220,7 @@ See [Logging](./logging.md) for full usage.
 ```
 Client, Market, Stream,
 load_env_file, get_env_config,
-Bot, log_call,
+Bot, BotHub, BinanceAccessor, log_call,
 PaperEngine, PaperConfig, AutoRedeemConfig,
 RealTradingEngine, RealTradingConfig, RealOrder, RealPosition, WalletManager,
 ReportPreset, TradeDatabase,
@@ -238,4 +240,4 @@ AIError, AIAuthenticationError, AIModelNotFoundError, AIQuotaExceededError,
   AIResponseError, AITimeoutError, AIConnectionError
 ```
 
-**Total: 57 exported symbols** (including the `conditions` module).
+**Total: 60 exported symbols** (including the `conditions` module).

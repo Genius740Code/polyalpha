@@ -1,9 +1,13 @@
 # Streaming
 
-Real-time price streaming via the Polymarket CLOB WebSocket.
+Real-time price streaming via the Polymarket CLOB WebSocket, and optional background Chainlink oracle feed for BTC/USD spot prices.
 
 ```python
+# Polymarket price stream
 stream = client.stream(market)
+
+# Chainlink oracle (auto-started by Bot / BotHub)
+# ctx.chainlink.last_price  — latest BTC/USD spot
 ```
 
 ## Stream Constructor
