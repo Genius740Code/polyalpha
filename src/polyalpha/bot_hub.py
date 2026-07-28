@@ -317,7 +317,6 @@ class BinanceAccessor:
         if self._feed is None:
             self._lazy_init()
         now = time.time()
-        from ..core.constants import TIMEFRAME_SECONDS
         tf_secs = TIMEFRAME_SECONDS.get(self._timeframe, 300)
         candle_key = str(int(now // tf_secs))
         if self._last_candle_key == candle_key and self._data is not None:
