@@ -237,8 +237,14 @@ class OrderBookSnapshot:
 
     @property
     def mid_price(self) -> float:
+        """
+        Polymarket price rule: midpoint of best bid/ask, UNLESS spread > $0.10,
+        in which case fallback to last traded price.
+        """
         if self.best_bid > 0 and self.best_ask > 0:
-            return round((self.best_bid + self.best_ask) / 2, PRICE_ROUNDING)
+            spread = self.best_ask - self.best_bid
+            if spread <= 0.10:
+                return round((self.best_bid + self.best_ask) / 2, PRICE_ROUNDING)
         if self.last_trade_price > 0:
             return round(self.last_trade_price, PRICE_ROUNDING)
         return 0.0

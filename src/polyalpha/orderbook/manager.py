@@ -42,6 +42,12 @@ class OrderBookManager:
         self._subscribers: list[Subscriber] = []
         self._lock = asyncio.Lock()
 
+    def clear_state(self) -> None:
+        """Clear all book state - used on reconnect to prevent stale data."""
+        self._books.clear()
+        self._trades.clear()
+        self._sequence = 0
+
     @property
     def sequence(self) -> int:
         return self._sequence

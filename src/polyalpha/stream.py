@@ -139,6 +139,8 @@ class Stream:
 
         # Mid-price per token ID (populated from WS events)
         self._token_prices: dict[str, float] = {}
+        # Last trade price per token ID (for spread fallback)
+        self._last_trade_prices: dict[str, float] = {}
 
         # Circuit breaker to prevent cascading failures
         if self._enable_circuit_breaker:
@@ -396,6 +398,9 @@ class Stream:
 
         async with websockets.connect(CLOB_WS) as ws:
             self._consecutive_failures = 0
+            # Clear stale price state on reconnect
+            self._token_prices.clear()
+            self._last_trade_prices.clear()
             self._emit("connect")
 
             await ws.send(json.dumps({
@@ -486,6 +491,9 @@ class Stream:
 
     def _on_open(self, ws, token_ids: list[str]) -> None:
         self._consecutive_failures = 0
+        # Clear stale price state on reconnect
+        self._token_prices.clear()
+        self._last_trade_prices.clear()
         log.info("Stream: connected — subscribing to %d token(s)", len([mask_transaction_hash(t) for t in token_ids]))
 
         ws.send(json.dumps({
@@ -604,12 +612,30 @@ class Stream:
 
     # ── Price extraction ───────────────────────────────────────────────────────
 
-    def _mid(self, bid: Any, ask: Any) -> float | None:
-        """Return bid/ask mid-price, or None if either is absent/zero."""
+    def _mid(self, bid: Any, ask: Any, last_trade_price: float = 0.0, token_id: str = "") -> float | None:
+        """
+        Return bid/ask mid-price with Polymarket spread rule.
+        If spread > $0.10, fallback to last_trade_price.
+        """
         try:
             b, a = float(bid), float(ask)
             if b > 0 and a > 0:
-                return round((b + a) / 2, PRICE_ROUNDING)
+                spread = a - b
+                if spread <= 0.10:
+                    computed = round((b + a) / 2, PRICE_ROUNDING)
+                    log.debug(
+                        "Price calc: token=%s bid=%.6f ask=%.6f spread=%.6f last_trade=%.6f -> midpoint=%.6f",
+                        token_id[:12] if token_id else "", b, a, spread, last_trade_price, computed
+                    )
+                    return computed
+                # Spread too wide - fallback to last trade price
+                if last_trade_price > 0:
+                    computed = round(float(last_trade_price), PRICE_ROUNDING)
+                    log.debug(
+                        "Price calc (spread fallback): token=%s bid=%.6f ask=%.6f spread=%.6f last_trade=%.6f -> fallback=%.6f",
+                        token_id[:12] if token_id else "", b, a, spread, last_trade_price, computed
+                    )
+                    return computed
         except (TypeError, ValueError):
             pass
         return None
@@ -621,7 +647,8 @@ class Stream:
     def _handle_price_change(self, msg: dict) -> None:
         for pc in msg.get("price_changes", []):
             asset_id = pc.get("asset_id", "")
-            mid = self._mid(pc.get("best_bid"), pc.get("best_ask"))
+            last_trade = self._last_trade_prices.get(asset_id, 0.0)
+            mid = self._mid(pc.get("best_bid"), pc.get("best_ask"), last_trade, asset_id)
             if mid is not None:
                 self._set_token_price(asset_id, mid)
             elif pc.get("price"):
@@ -633,7 +660,8 @@ class Stream:
 
     def _handle_best_bid_ask(self, msg: dict) -> None:
         asset_id = msg.get("asset_id", "")
-        mid = self._mid(msg.get("best_bid"), msg.get("best_ask"))
+        last_trade = self._last_trade_prices.get(asset_id, 0.0)
+        mid = self._mid(msg.get("best_bid"), msg.get("best_ask"), last_trade, asset_id)
         if mid is not None:
             self._set_token_price(asset_id, mid)
         self._publish_prices()
@@ -643,8 +671,12 @@ class Stream:
         try:
             bids = msg.get("bids", [])
             asks = msg.get("asks", [])
+            # Track last_trade_price from book snapshot
+            if msg.get("last_trade_price"):
+                self._last_trade_prices[asset_id] = float(msg["last_trade_price"])
             if bids and asks:
-                mid = self._mid(bids[0]["price"], asks[0]["price"])
+                last_trade = self._last_trade_prices.get(asset_id, 0.0)
+                mid = self._mid(bids[0]["price"], asks[0]["price"], last_trade, asset_id)
                 if mid is not None:
                     self._set_token_price(asset_id, mid)
         except (KeyError, IndexError):
@@ -655,6 +687,8 @@ class Stream:
         asset_id = msg.get("asset_id", "")
         try:
             price = float(msg.get("price", 0))
+            # Track last trade price for spread fallback
+            self._last_trade_prices[asset_id] = price
             self._set_token_price(asset_id, price)
         except (TypeError, ValueError):
             pass

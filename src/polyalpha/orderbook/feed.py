@@ -151,6 +151,13 @@ class OrderBookFeed:
         self._attached = True
         self._emit("connect")
 
+        # Clear book state on stream reconnect
+        original_on_open = stream._on_open
+        def patched_on_open(ws, token_ids: list[str]) -> None:
+            original_on_open(ws, token_ids)
+            self._manager.clear_state()
+        stream._on_open = patched_on_open  # type: ignore[method-assign]
+
     def _run_async(self, coro: Any) -> Any:
         try:
             loop = asyncio.get_running_loop()
