@@ -63,11 +63,23 @@ class IndicatorCalculator:
 
         self._log = logging.getLogger(__name__)
         self._cache: dict[str, pd.Series | dict[str, pd.Series]] = {}
+        self._data_version = 0
+
+    @property
+    def data(self):
+        return self._data
+
+    @data.setter
+    def data(self, value):
+        self._data = value.copy()
+        self._data_version += 1
+        self._cache.clear()
 
     def _get_cache_key(self, indicator: str, **kwargs) -> str:
         """Generate cache key for indicator with parameters."""
         params_str = "_".join(f"{k}_{v}" for k, v in sorted(kwargs.items()))
-        return f"{indicator}_{params_str}" if params_str else indicator
+        base = f"{indicator}_{params_str}" if params_str else indicator
+        return f"{base}_v{self._data_version}"
 
     def clear_cache(self) -> None:
         """Clear the indicator cache."""

@@ -429,6 +429,8 @@ class Sniper:
         self._stream = None
         self._pending_order = None
         self._filled_order = None
+        self._final_up: Optional[float] = None
+        self._final_down: Optional[float] = None
 
         # Statistics
         self._stats = SniperStats()
@@ -1072,38 +1074,36 @@ class Sniper:
 
         # For paper trading, we need to manually resolve positions
         # Determine outcome based on final price
-        if self._stream:
-            final_up = getattr(self._stream, 'up', None)
-            final_down = getattr(self._stream, 'down', None)
-            
-            if final_up is not None and final_down is not None:
-                # Determine outcome: higher price wins
-                outcome = "UP" if final_up > final_down else "DOWN"
-                self._log.info("Paper resolution: %s (final prices: UP=%.4f, DOWN=%.4f)", 
-                              outcome, final_up, final_down)
-                
-                # Resolve the position (this saves to database)
-                try:
-                    self.client.paper.resolve(self._market, outcome)
-                except Exception as exc:
-                    self._log.error("Failed to resolve position: %s", exc)
-                
-                # Now record the trade
-                positions = self.client.paper.positions()
-                for pos in positions:
-                    if pos.market_id == self._market.id and pos.resolved:
-                        self._record_trade(pos)
-                        return
+        final_up = getattr(self, '_final_up', None)
+        final_down = getattr(self, '_final_down', None)
+
+        if final_up is not None and final_down is not None:
+            # Determine outcome: higher price wins
+            outcome = "UP" if final_up > final_down else "DOWN"
+            self._log.info("Paper resolution: %s (final prices: UP=%.4f, DOWN=%.4f)",
+                          outcome, final_up, final_down)
+
+            # Resolve the position (this saves to database)
+            try:
+                self.client.paper.resolve(self._market, outcome)
+            except Exception as exc:
+                self._log.error("Failed to resolve position: %s", exc)
+
+            # Now record the trade
+            positions = self.client.paper.positions()
+            for pos in positions:
+                if pos.market_id == self._market.id and pos.resolved:
+                    self._record_trade(pos)
+                    return
 
         self._log.warning("No resolved position found for %s", self._market.slug)
 
     def _on_market_close(self) -> None:
         """Handle market close event."""
         self._log.info("Market closed: %s", self._market.slug)
-
-        # For paper trading, we need to manually resolve
-        # In production, this would be automatic
-        pass
+        if self._stream:
+            self._final_up = self._stream.up
+            self._final_down = self._stream.down
 
     def _record_trade(self, position) -> None:
         """Record a completed trade."""

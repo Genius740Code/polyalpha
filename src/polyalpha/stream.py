@@ -73,7 +73,7 @@ from .trading.error_handling import CircuitBreaker
 log = logging.getLogger(__name__)
 
 # Event names exposed to callers
-EVENTS = frozenset({"price", "book", "trade", "close", "error", "connect"})
+EVENTS = frozenset({"price", "book", "trade", "close", "error", "connect", "price_reset"})
 
 
 class Stream:
@@ -402,6 +402,7 @@ class Stream:
             # Clear stale price state on reconnect
             self._token_prices.clear()
             self._last_trade_prices.clear()
+            self._emit("price_reset")
             self._emit("connect")
 
             await ws.send(json.dumps({
@@ -495,6 +496,7 @@ class Stream:
         # Clear stale price state on reconnect
         self._token_prices.clear()
         self._last_trade_prices.clear()
+        self._emit("price_reset")
         log.info("Stream: connected — subscribing to %d token(s)", len([mask_transaction_hash(t) for t in token_ids]))
 
         ws.send(json.dumps({

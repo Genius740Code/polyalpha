@@ -54,25 +54,25 @@ Missing or insufficient locking around shared state.
 
 Using outdated data after state changes.
 
-### 5. Sniper resolution uses stale prices after stream closes CRITICAL
+### 5. Sniper resolution uses stale prices after stream closes CRITICAL — IMPLEMENTED
 - **File**: `src/polyalpha/bots/sniper.py:1075-1081`
 - **What's wrong**: `getattr(self._stream, 'up', None)` after close — prices may be stale/reset.
 - **Why it matters**: Wrong P&L on position resolution.
 - **Fix**: Cache final prices before close, or fetch from REST API.
 
-### 8. Chainlink cache lock not used for timestamp check HIGH
+### 8. Chainlink cache lock not used for timestamp check HIGH — IMPLEMENTED
 - **File**: `src/polyalpha/core/chainlink_cache.py:43-47`
 - **What's wrong**: Lock protects dict access but doesn't check staleness.
 - **Why it matters**: Strategies use stale spot prices.
 - **Fix**: Add timestamp staleness check inside lock, return None if too old.
 
-### 14. Stream reconnection clears price state without notification MEDIUM
+### 14. Stream reconnection clears price state without notification MEDIUM — IMPLEMENTED
 - **File**: `src/polyalpha/stream.py:401-403, 494-496`
 - **What's wrong**: `_token_prices.clear()` / `_last_trade_prices.clear()` on reconnect, no event emitted.
 - **Why it matters**: Strategies use stale cached prices after reconnect.
 - **Fix**: Emit "reconnect" or "price_reset" event after clearing.
 
-### 15. Indicator cache not invalidated on data update MEDIUM
+### 15. Indicator cache not invalidated on data update MEDIUM — IMPLEMENTED
 - **File**: `src/polyalpha/analysis/indicators.py:59-74`
 - **What's wrong**: Cache keyed by params only, not data version.
 - **Why it matters**: Real-time strategies compute on stale data.
@@ -143,7 +143,7 @@ Using outdated data after state changes.
 |-------|-------|-------------|-----------|
 | 1 — Thread Safety | 5 | 5 | 0 |
 | 2 — Monkey-patching | 1 | 1 | 0 |
-| 3 — Stale Data | 4 | 0 | 4 |
+| 3 — Stale Data | 4 | 4 | 0 |
 | 4 — Calculation Bugs | 4 | 0 | 4 |
 | 5 — Error Handling | 1 | 0 | 1 |
 | 6 — Code Quality | 3 | 0 | 3 |
