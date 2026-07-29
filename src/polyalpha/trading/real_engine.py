@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
@@ -125,6 +126,9 @@ class RealTradingEngine:
         # Order management
         self._orders: dict[str, RealOrder] = {}
         self._positions: dict[str, RealPosition] = {}  # key: "{market_id}:{side}"
+
+        # Position lock for thread-safe position share modifications
+        self._position_lock: threading.RLock = threading.RLock()
 
         # Advanced order types storage
         self._oco_orders: dict[str, OCOOrder] = {}
@@ -1216,30 +1220,31 @@ class RealTradingEngine:
         """
         positions = self._resolve_positions()
         position_key = f"{order.market_id}:{order.side}"
-        
-        if position_key not in positions:
-            log.warning("Position not found for partial fill order %s", order.id)
-            return
 
-        position = positions[position_key]
+        with self._position_lock:
+            if position_key not in positions:
+                log.warning("Position not found for partial fill order %s", order.id)
+                return
 
-        # Calculate additional shares from this partial fill
-        new_shares = filled_shares - position.shares
-        if new_shares <= 0:
-            return  # No new shares to add
+            position = positions[position_key]
 
-        # Update position with volume-weighted average price
-        total_shares = position.shares + new_shares
-        position.avg_price = (
-            (position.avg_price * position.shares + avg_price * new_shares)
-            / total_shares
-        )
-        position.shares = total_shares
-        position.cost_basis = position.shares * position.avg_price
-        position.current_value = position.shares * avg_price
+            # Calculate additional shares from this partial fill
+            new_shares = filled_shares - position.shares
+            if new_shares <= 0:
+                return  # No new shares to add
 
-        log.debug("Position updated with partial fill: %s %s, shares=%.2f, avg_price=%.4f",
-                 position.slug, position.side, position.shares, position.avg_price)
+            # Update position with volume-weighted average price
+            total_shares = position.shares + new_shares
+            position.avg_price = (
+                (position.avg_price * position.shares + avg_price * new_shares)
+                / total_shares
+            )
+            position.shares = total_shares
+            position.cost_basis = position.shares * position.avg_price
+            position.current_value = position.shares * avg_price
+
+            log.debug("Position updated with partial fill: %s %s, shares=%.2f, avg_price=%.4f",
+                     position.slug, position.side, position.shares, position.avg_price)
 
     def _on_order_filled(self, order: RealOrder) -> None:
         """
@@ -2202,11 +2207,12 @@ class RealTradingEngine:
             receipt = self._wallet.wait_for_transaction(tx_hash, timeout=120)
 
             if receipt['status'] == 1:
-                position.shares -= shares_to_transfer
-                position.cost_basis = position.shares * position.avg_price
-                position.current_value = position.shares * position.current_price
+                with self._position_lock:
+                    position.shares -= shares_to_transfer
+                    position.cost_basis = position.shares * position.avg_price
+                    position.current_value = position.shares * position.current_price
 
-                del self._positions[position_key]
+                    del self._positions[position_key]
 
                 log.info("Transfer successful: %s %s -> %s (tx=%s)",
                          market.slug, side, target_wallet_address, tx_hash)
@@ -2856,32 +2862,33 @@ class RealTradingEngine:
         else:
             positions = self._resolve_positions()
 
-        if key in positions:
-            position = positions[key]
-            position.order_ids.append(order.id)
+        with self._position_lock:
+            if key in positions:
+                position = positions[key]
+                position.order_ids.append(order.id)
 
-            total_shares = position.shares + order.shares
-            position.avg_price = (
-                (position.avg_price * position.shares + order.price * order.shares)
-                / total_shares
-            )
-            position.shares = total_shares
-            position.cost_basis = position.shares * position.avg_price
-            position.current_value = position.shares * order.price
-        else:
-            position = RealPosition(
-                market_id=market.id,
-                slug=market.slug,
-                question=market.question,
-                side=side,
-                shares=order.shares,
-                avg_price=order.price,
-                current_price=order.price,
-                cost_basis=order.amount,
-                current_value=order.amount,
-                order_ids=[order.id],
-            )
-            positions[key] = position
+                total_shares = position.shares + order.shares
+                position.avg_price = (
+                    (position.avg_price * position.shares + order.price * order.shares)
+                    / total_shares
+                )
+                position.shares = total_shares
+                position.cost_basis = position.shares * position.avg_price
+                position.current_value = position.shares * order.price
+            else:
+                position = RealPosition(
+                    market_id=market.id,
+                    slug=market.slug,
+                    question=market.question,
+                    side=side,
+                    shares=order.shares,
+                    avg_price=order.price,
+                    current_price=order.price,
+                    cost_basis=order.amount,
+                    current_value=order.amount,
+                    order_ids=[order.id],
+                )
+                positions[key] = position
 
     def _get_market_exposure(self, market_id: str) -> float:
         """Get total exposure for a market."""

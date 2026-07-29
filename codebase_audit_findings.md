@@ -14,7 +14,7 @@
 - **Why it matters**: Could cause overspending, negative balances, or lost funds in paper trading simulation.
 - **Suggested fix**: Add `threading.Lock` around all balance read-modify-write operations in PaperEngine.
 
-### 3. Position shares modification not atomic
+### 3. Position shares modification not atomic IMPLEMENTED
 - **File**: `src/polyalpha/trading/paper_engine.py:729`
 - **What's wrong**: `position.shares -= sell_shares` is not atomic. Concurrent sells on same position could lead to negative shares or corrupted state.
 - **Why it matters**: Could corrupt position tracking, causing incorrect P&L calculations and position management failures.

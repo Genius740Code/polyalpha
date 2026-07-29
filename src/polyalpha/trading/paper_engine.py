@@ -92,6 +92,8 @@ class PaperEngine:
 
         # Balance lock for thread-safe balance updates
         self._balance_lock: threading.Lock = threading.Lock()
+        # Position lock for thread-safe position share modifications
+        self._position_lock: threading.RLock = threading.RLock()
 
         # Risk management
         self._risk_manager: RiskManager = RiskManager(self._config, self._balance)
@@ -674,80 +676,81 @@ class PaperEngine:
             wallet = self._get_active_wallet()
         key = f"{market.id}:{side}"
 
-        if key not in wallet._positions:
-            raise ValueError(f"No position found for {market.slug} {side}")
+        with self._position_lock:
+            if key not in wallet._positions:
+                raise ValueError(f"No position found for {market.slug} {side}")
 
-        position = wallet._positions[key]
-        current_price = position.current_price
+            position = wallet._positions[key]
+            current_price = position.current_price
 
-        if current_price <= 0:
-            current_price = FALLBACK_PRICE
+            if current_price <= 0:
+                current_price = FALLBACK_PRICE
 
-        if position.shares <= 0:
-            raise ValueError(f"Position has no shares to sell: {position.shares}")
+            if position.shares <= 0:
+                raise ValueError(f"Position has no shares to sell: {position.shares}")
 
-        if amount is None:
-            sell_shares = position.shares
-            sell_amount = sell_shares * current_price
-        else:
-            amount = validate_positive(float(amount), "amount")
-            sell_shares = amount / current_price
-            sell_amount = amount
-            if sell_shares > position.shares:
-                raise ValueError(f"Cannot sell {sell_shares:.4f} shares, only {position.shares:.4f} available")
+            if amount is None:
+                sell_shares = position.shares
+                sell_amount = sell_shares * current_price
+            else:
+                amount = validate_positive(float(amount), "amount")
+                sell_shares = amount / current_price
+                sell_amount = amount
+                if sell_shares > position.shares:
+                    raise ValueError(f"Cannot sell {sell_shares:.4f} shares, only {position.shares:.4f} available")
 
-        self._fee_manager.apply_execution_delay()
-        actual_price, filled = self._fee_manager.apply_slippage(current_price, side)
-        if not filled:
-            log.debug("Paper: sell order not filled due to slippage threshold")
-            order_id = new_id()
-            order = PaperOrder(
-                id=order_id, market_id=market.id, slug=market.slug, side=side,
-                price=current_price, amount=0.0, shares=0.0, fee=0.0,
-                status="cancelled", is_limit=False, filled_at=now(),
-            )
-            wallet._orders[order_id] = order
-            return order
+            self._fee_manager.apply_execution_delay()
+            actual_price, filled = self._fee_manager.apply_slippage(current_price, side)
+            if not filled:
+                log.debug("Paper: sell order not filled due to slippage threshold")
+                order_id = new_id()
+                order = PaperOrder(
+                    id=order_id, market_id=market.id, slug=market.slug, side=side,
+                    price=current_price, amount=0.0, shares=0.0, fee=0.0,
+                    status="cancelled", is_limit=False, filled_at=now(),
+                )
+                wallet._orders[order_id] = order
+                return order
 
-        fee, rebate_amount, rebate_rate, fee_type = self._fee_manager.calculate_fee(
-            sell_amount, actual_price, sell_shares, is_maker=False
-        )
-        net_amount = sell_amount - fee
-
-        if self._config.fee_mode == "polymarket":
-            sell_shares = round(net_amount / actual_price, SHARE_ROUNDING) if actual_price > 0 else 0.0
             fee, rebate_amount, rebate_rate, fee_type = self._fee_manager.calculate_fee(
-                net_amount, actual_price, sell_shares, is_maker=False
+                sell_amount, actual_price, sell_shares, is_maker=False
             )
             net_amount = sell_amount - fee
 
-        with self._balance_lock:
-            wallet.balance += net_amount
-            if not self._use_multi_wallet:
-                self._balance = wallet.balance
+            if self._config.fee_mode == "polymarket":
+                sell_shares = round(net_amount / actual_price, SHARE_ROUNDING) if actual_price > 0 else 0.0
+                fee, rebate_amount, rebate_rate, fee_type = self._fee_manager.calculate_fee(
+                    net_amount, actual_price, sell_shares, is_maker=False
+                )
+                net_amount = sell_amount - fee
 
-        order_id = new_id()
-        order = PaperOrder(
-            id=order_id, market_id=market.id, slug=market.slug, side=side,
-            price=actual_price, amount=sell_amount, shares=sell_shares, fee=fee,
-            status="filled", is_limit=False, filled_at=now(),
-        )
-        wallet._orders[order_id] = order
+            with self._balance_lock:
+                wallet.balance += net_amount
+                if not self._use_multi_wallet:
+                    self._balance = wallet.balance
 
-        closed_cost_basis = position.cost_basis
-        position.shares -= sell_shares
-        if position.shares <= 0.001:
-            position.shares = 0
-            position.resolved = True
-            position.outcome = "CLOSED"
-            pnl = net_amount - closed_cost_basis
-            wallet.risk_manager.record_trade(pnl)
-            log.info("Paper: closed position %s %s — proceeds $%.2f, balance $%.2f",
-                     market.slug, side, net_amount, wallet.balance)
-            self._save_trade_to_db(position)
-        else:
-            log.info("Paper: reduced position %s %s by %.2f shares — proceeds $%.2f",
-                     market.slug, side, sell_shares, net_amount)
+            order_id = new_id()
+            order = PaperOrder(
+                id=order_id, market_id=market.id, slug=market.slug, side=side,
+                price=actual_price, amount=sell_amount, shares=sell_shares, fee=fee,
+                status="filled", is_limit=False, filled_at=now(),
+            )
+            wallet._orders[order_id] = order
+
+            closed_cost_basis = position.cost_basis
+            position.shares -= sell_shares
+            if position.shares <= 0.001:
+                position.shares = 0
+                position.resolved = True
+                position.outcome = "CLOSED"
+                pnl = net_amount - closed_cost_basis
+                wallet.risk_manager.record_trade(pnl)
+                log.info("Paper: closed position %s %s — proceeds $%.2f, balance $%.2f",
+                         market.slug, side, net_amount, wallet.balance)
+                self._save_trade_to_db(position)
+            else:
+                log.info("Paper: reduced position %s %s by %.2f shares — proceeds $%.2f",
+                         market.slug, side, sell_shares, net_amount)
 
         return order
 
@@ -1307,16 +1310,17 @@ class PaperEngine:
             wallet = self._get_active_wallet()
 
         key = f"{market_id}:{side}"
-        if key in wallet._positions:
-            pos = wallet._positions[key]
-            total = pos.shares + shares
-            pos.avg_price = round(
-                (pos.shares * pos.avg_price + shares * price) / total, PRICE_ROUNDING,
-            )
-            pos.shares = total
-            pos.order_ids.append(order_id)
-        else:
-            wallet._positions[key] = PaperPosition(
-                market_id=market_id, slug=slug, question=question, side=side,
-                shares=shares, avg_price=price, current_price=price, order_ids=[order_id],
-            )
+        with self._position_lock:
+            if key in wallet._positions:
+                pos = wallet._positions[key]
+                total = pos.shares + shares
+                pos.avg_price = round(
+                    (pos.shares * pos.avg_price + shares * price) / total, PRICE_ROUNDING,
+                )
+                pos.shares = total
+                pos.order_ids.append(order_id)
+            else:
+                wallet._positions[key] = PaperPosition(
+                    market_id=market_id, slug=slug, question=question, side=side,
+                    shares=shares, avg_price=price, current_price=price, order_ids=[order_id],
+                )
