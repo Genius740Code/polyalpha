@@ -889,12 +889,13 @@ class Sniper:
             if self.config.log_prices:
                 self._log.debug("Price: %s=%.4f", self.config.side, current_price)
 
-            # Check exit threshold
+            # Check exit threshold (UP exits when price falls, DOWN exits when price rises)
             if (self.config.exit_price is not None and
                 self._pending_order and
-                current_price <= self.config.exit_price):
-                self._log.info("Exit threshold triggered: %.4f <= %.4f",
-                              current_price, self.config.exit_price)
+                ((self.config.side == "UP" and current_price <= self.config.exit_price) or
+                 (self.config.side == "DOWN" and current_price >= self.config.exit_price))):
+                self._log.info("Exit threshold triggered: %.4f %s %.4f",
+                              current_price, "<=" if self.config.side == "UP" else ">=", self.config.exit_price)
                 self._cancel_order("exit_threshold")
                 return
 

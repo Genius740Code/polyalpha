@@ -22,6 +22,7 @@ class BacktestEngine:
         self.positions: dict[str, float] = {}
         self.trades: list[Trade] = []
         self.equity_curve: list[float] = []
+        self._last_prices: dict[str, float] = {}
         self.order_book_history: list[MarketOrderBook] = []
 
     async def load_snapshots(self, snapshots: list[MarketOrderBook]) -> None:
@@ -102,8 +103,12 @@ class BacktestEngine:
         return 0.0
 
     def _update_equity(self, book: MarketOrderBook) -> None:
-        mid = self._mid_for_book(book)
-        position_value = sum(pos * mid for pos in self.positions.values())
+        price = self._mid_for_book(book)
+        self._last_prices[book.market_slug] = price
+        position_value = sum(
+            shares * self._last_prices.get(sym, 0.0)
+            for sym, shares in self.positions.items()
+        )
         self.equity_curve.append(self.current_capital + position_value)
 
     def _generate_report(self) -> dict[str, Any]:

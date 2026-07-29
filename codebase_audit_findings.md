@@ -80,27 +80,27 @@ Using outdated data after state changes.
 
 ---
 
-## Group 4: Calculation / Logic Bugs
+## Group 4: Calculation / Logic Bugs — IMPLEMENTED
 
-### 6. Paper engine avg_price precision loss HIGH
+### 6. Paper engine avg_price precision loss HIGH — IMPLEMENTED
 - **File**: `src/polyalpha/trading/paper_engine.py:1300-1302`
 - **What's wrong**: VWAP `round((shares * avg + shares * price) / total, ...)` accumulates rounding errors.
 - **Why it matters**: Incorrect P&L for high-frequency strategies.
-- **Fix**: Track total cost basis + total shares separately; compute avg_price on demand.
+- **Fix**: Added `total_cost` field to `PaperPosition`; `cost_basis` now reads `total_cost` directly; `avg_price` computed as `total_cost / shares` without intermediate rounding.
 
-### 10. Sniper exit threshold wrong comparison for DOWN side HIGH
+### 10. Sniper exit threshold wrong comparison for DOWN side HIGH — IMPLEMENTED
 - **File**: `src/polyalpha/bots/sniper.py:891-893`
 - **What's wrong**: `current_price <= exit_price` for both UP and DOWN. DOWN should exit when price *goes up*.
 - **Why it matters**: DOWN exits never trigger; holds losing positions.
-- **Fix**: Side-specific logic: `if side == "UP" and current_price <= exit_price` / `DOWN and current_price >= exit_price`.
+- **Fix**: Side-specific: `UP → current_price <= exit_price`, `DOWN → current_price >= exit_price`.
 
-### 12. Backtest equity uses single mid-price for all positions MEDIUM
+### 12. Backtest equity uses single mid-price for all positions MEDIUM — IMPLEMENTED
 - **File**: `src/polyalpha/orderbook/backtest.py:104-107`
 - **What's wrong**: `sum(pos * mid for pos in positions)` — assumes all positions have same price.
 - **Why it matters**: Wrong equity curve for multi-market strategies.
-- **Fix**: Calculate position value per symbol using appropriate prices.
+- **Fix**: Track per-symbol `_last_prices` dict; value each position at its own symbol's price.
 
-### 13. Paper engine partial close P&L uses full cost basis MEDIUM
+### 13. Paper engine partial close P&L uses full cost basis MEDIUM — IMPLEMENTED
 - **File**: `src/polyalpha/trading/paper_engine.py:728-738`
 - **What's wrong**: `pnl = net_amount - closed_cost_basis` where `closed_cost_basis` is total, not proportional.
 - **Why it matters**: Partial closes have wrong P&L.
@@ -144,7 +144,7 @@ Using outdated data after state changes.
 | 1 — Thread Safety | 5 | 5 | 0 |
 | 2 — Monkey-patching | 1 | 1 | 0 |
 | 3 — Stale Data | 4 | 4 | 0 |
-| 4 — Calculation Bugs | 4 | 0 | 4 |
+| 4 — Calculation Bugs | 4 | 4 | 0 |
 | 5 — Error Handling | 1 | 0 | 1 |
 | 6 — Code Quality | 3 | 0 | 3 |
-| **Total** | **18** | **5** | **13** |
+| **Total** | **18** | **14** | **4** |

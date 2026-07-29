@@ -102,6 +102,7 @@ class PaperPosition:
     shares:        float
     avg_price:     float
     current_price: float         # updated live from the attached stream
+    total_cost:    float         = 0.0
     resolved:      bool                = False
     outcome:       Optional[str]       = None   # "WON" | "LOST"
     order_ids:     list[str]           = field(default_factory=list)
@@ -117,7 +118,7 @@ class PaperPosition:
 
     @property
     def cost_basis(self) -> float:
-        return round(self.shares * self.avg_price, PRICE_ROUNDING)
+        return round(self.total_cost, PRICE_ROUNDING)
 
     @property
     def current_value(self) -> float:

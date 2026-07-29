@@ -737,7 +737,7 @@ class PaperEngine:
             )
             wallet._orders[order_id] = order
 
-            closed_cost_basis = position.cost_basis
+            closed_cost_basis = position.cost_basis * (sell_shares / position.shares)
             position.shares -= sell_shares
             if position.shares <= 0.001:
                 position.shares = 0
@@ -1313,14 +1313,14 @@ class PaperEngine:
         with self._position_lock:
             if key in wallet._positions:
                 pos = wallet._positions[key]
-                total = pos.shares + shares
-                pos.avg_price = round(
-                    (pos.shares * pos.avg_price + shares * price) / total, PRICE_ROUNDING,
-                )
-                pos.shares = total
+                pos.total_cost += shares * price
+                pos.shares += shares
+                if pos.shares > 0:
+                    pos.avg_price = pos.total_cost / pos.shares
                 pos.order_ids.append(order_id)
             else:
                 wallet._positions[key] = PaperPosition(
                     market_id=market_id, slug=slug, question=question, side=side,
-                    shares=shares, avg_price=price, current_price=price, order_ids=[order_id],
+                    shares=shares, avg_price=price, current_price=price,
+                    total_cost=shares * price, order_ids=[order_id],
                 )
