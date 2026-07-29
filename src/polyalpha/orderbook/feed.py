@@ -57,6 +57,9 @@ class OrderBookFeed:
         self._handlers: dict[str, list[FeedEvent]] = defaultdict(list)
         self._attached = False
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._stream: Stream | None = None
+        self._orig_dispatch: Callable | None = None
+        self._orig_on_open: Callable | None = None
 
     @property
     def manager(self) -> OrderBookManager:
@@ -139,10 +142,12 @@ class OrderBookFeed:
             self._emit("trade", trade)
             self._emit("update", self.book)
 
-        original_dispatch = stream._dispatch
+        self._stream = stream
+        self._orig_dispatch = stream._dispatch
+        self._orig_on_open = stream._on_open
 
         def patched_dispatch(msg: dict[str, Any]) -> None:
-            original_dispatch(msg)
+            self._orig_dispatch(msg)
             if msg.get("event_type") == "price_change":
                 self._run_async(self._manager.apply_price_change(msg))
                 self._emit("update", self.book)
@@ -152,9 +157,8 @@ class OrderBookFeed:
         self._emit("connect")
 
         # Clear book state on stream reconnect
-        original_on_open = stream._on_open
         def patched_on_open(ws, token_ids: list[str]) -> None:
-            original_on_open(ws, token_ids)
+            self._orig_on_open(ws, token_ids)
             self._manager.clear_state()
         stream._on_open = patched_on_open  # type: ignore[method-assign]
 
@@ -170,5 +174,14 @@ class OrderBookFeed:
         return asyncio.run(coro)
 
     def close(self) -> None:
+        if self._stream is not None:
+            if self._orig_dispatch is not None:
+                self._stream._dispatch = self._orig_dispatch  # type: ignore[method-assign]
+            if self._orig_on_open is not None:
+                self._stream._on_open = self._orig_on_open  # type: ignore[method-assign]
+            self._stream = None
+            self._orig_dispatch = None
+            self._orig_on_open = None
+            self._attached = False
         if self._owns_clob:
             self._clob.close()

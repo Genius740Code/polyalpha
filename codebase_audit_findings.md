@@ -42,7 +42,7 @@ Missing or insufficient locking around shared state.
 
 ## Group 2: Monkey-patching Without Restoration
 
-### 4. OrderBookFeed patches stream methods without cleanup CRITICAL
+### 4. OrderBookFeed patches stream methods without cleanup CRITICAL — IMPLEMENTED
 - **File**: `src/polyalpha/orderbook/feed.py:142-159`
 - **What's wrong**: Patches `stream._dispatch`/`_on_open`, never restores. Multiple feeds overwrite each other.
 - **Why it matters**: Lost handlers, corrupted order book state.
@@ -142,7 +142,7 @@ Using outdated data after state changes.
 | Group | Total | IMPLEMENTED | Remaining |
 |-------|-------|-------------|-----------|
 | 1 — Thread Safety | 5 | 5 | 0 |
-| 2 — Monkey-patching | 1 | 0 | 1 |
+| 2 — Monkey-patching | 1 | 1 | 0 |
 | 3 — Stale Data | 4 | 0 | 4 |
 | 4 — Calculation Bugs | 4 | 0 | 4 |
 | 5 — Error Handling | 1 | 0 | 1 |
