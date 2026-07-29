@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -224,13 +225,7 @@ class DataFeed:
 
         # WebSocket cache
         self._ws_cache: list[dict] = []
-        self._ws_lock = None
-
-        try:
-            import threading
-            self._ws_lock = threading.Lock()
-        except ImportError:
-            pass
+        self._ws_lock = threading.Lock()
 
         # Create cache directory if needed
         if self.config.use_cache and self.config.cache_dir:
@@ -321,14 +316,9 @@ class DataFeed:
             "price": price,
         }
 
-        if self._ws_lock:
-            with self._ws_lock:
-                self._ws_cache.append(tick)
-                # Keep last N ticks
-                if len(self._ws_cache) > DEFAULT_CACHE_MAX_TICKS:
-                    self._ws_cache.pop(0)
-        else:
+        with self._ws_lock:
             self._ws_cache.append(tick)
+            # Keep last N ticks
             if len(self._ws_cache) > DEFAULT_CACHE_MAX_TICKS:
                 self._ws_cache.pop(0)
 
@@ -877,10 +867,7 @@ class DataFeed:
         if not self._ws_cache:
             raise ValueError("No WebSocket cache data available")
 
-        if self._ws_lock:
-            with self._ws_lock:
-                ticks = self._ws_cache.copy()
-        else:
+        with self._ws_lock:
             ticks = self._ws_cache.copy()
 
         # Convert to DataFrame

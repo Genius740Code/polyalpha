@@ -122,6 +122,7 @@ class Stream:
         self._ws:          object | None           = None
         self._thread:      threading.Thread | None = None
         self._stop:        threading.Event         = threading.Event()
+        self._price_lock:  threading.Lock          = threading.Lock()
 
         # Latest prices — always readable without a callback
         self.up:   float = market.up_price
@@ -729,28 +730,29 @@ class Stream:
             return
         changed = False
 
-        # Degenerate case: both tokens share the same ID — derive complement
-        if up_id and down_id and up_id == down_id:
-            if up_id in self._token_prices:
-                self.up   = self._token_prices[up_id]
-                self.down = round(1.0 - self.up, PRICE_ROUNDING)
-                changed   = True
-        else:
-            if up_id and up_id in self._token_prices:
-                self.up  = self._token_prices[up_id]
-                changed  = True
-            if down_id and down_id in self._token_prices:
-                self.down = self._token_prices[down_id]
-                changed   = True
+        with self._price_lock:
+            # Degenerate case: both tokens share the same ID — derive complement
+            if up_id and down_id and up_id == down_id:
+                if up_id in self._token_prices:
+                    self.up   = self._token_prices[up_id]
+                    self.down = round(1.0 - self.up, PRICE_ROUNDING)
+                    changed   = True
+            else:
+                if up_id and up_id in self._token_prices:
+                    self.up  = self._token_prices[up_id]
+                    changed  = True
+                if down_id and down_id in self._token_prices:
+                    self.down = self._token_prices[down_id]
+                    changed   = True
 
-        if changed:
-            self._last_price_time = time.time()
-            # Only emit if price change exceeds threshold
-            if (abs(self.up - self._last_emitted_up) > self._price_threshold or
-                abs(self.down - self._last_emitted_down) > self._price_threshold):
-                self._emit("price", self.up, self.down)
-                self._last_emitted_up = self.up
-                self._last_emitted_down = self.down
+            if changed:
+                self._last_price_time = time.time()
+                # Only emit if price change exceeds threshold
+                if (abs(self.up - self._last_emitted_up) > self._price_threshold or
+                    abs(self.down - self._last_emitted_down) > self._price_threshold):
+                    self._emit("price", self.up, self.down)
+                    self._last_emitted_up = self.up
+                    self._last_emitted_down = self.down
 
     # ── Event emission ─────────────────────────────────────────────────────────
 
