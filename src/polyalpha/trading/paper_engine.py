@@ -56,6 +56,9 @@ from .paper_fees import PaperFeeManager
 
 log = logging.getLogger(__name__)
 
+# Positions with shares below this threshold are considered fully closed.
+MIN_SHARE_THRESHOLD = 1e-10
+
 
 class PaperEngine:
     """
@@ -739,7 +742,7 @@ class PaperEngine:
 
             closed_cost_basis = position.cost_basis * (sell_shares / position.shares)
             position.shares -= sell_shares
-            if position.shares <= 0.001:
+            if position.shares <= MIN_SHARE_THRESHOLD:
                 position.shares = 0
                 position.resolved = True
                 position.outcome = "CLOSED"
@@ -1199,6 +1202,9 @@ class PaperEngine:
         net = amount - fee + rebate_amount
         shares = round(net / price, SHARE_ROUNDING) if price > 0 else 0.0
 
+        # Polymarket fee structure: the taker fee is calculated on the *net* order
+        # amount (after subtracting the initial fee from the gross amount). This
+        # second `calculate_fee` call computes the final fee on the adjusted size.
         if self._config.fee_mode == "polymarket":
             fee, rebate_amount, rebate_rate, fee_type = self._fee_manager.calculate_fee(
                 net, price, shares, is_maker=is_limit,

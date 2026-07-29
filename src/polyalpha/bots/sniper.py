@@ -129,6 +129,7 @@ class SniperConfig:
     # Trading parameters
     entry_price: float = 0.92
     entry_price_max: Optional[float] = None  # Maximum entry price for price range
+    max_price: float = 1.0  # Max valid price from stream (edge cases can briefly exceed normal 1.0)
     exit_price: Optional[float] = 0.88
     excluded_price_ranges: Optional[List[tuple[float, float]]] = None  # List of (min, max) ranges to exclude
     window_seconds: int = DEFAULT_WINDOW_SECONDS
@@ -201,6 +202,12 @@ class SniperConfig:
                     f"entry_price_max ({self.entry_price_max}) must be greater than "
                     f"entry_price ({self.entry_price})"
                 )
+
+        # Validate max_price
+        if self.max_price <= 0:
+            raise ValueError(
+                f"max_price must be positive, got {self.max_price}"
+            )
 
         # Validate excluded_price_ranges if provided
         if self.excluded_price_ranges is not None:
@@ -976,13 +983,18 @@ class Sniper:
                 self._log.error("Cannot get current price from stream for order placement")
                 return
             
-            # Validate price is within valid range (0, 1]
-            if not (0 < current_price <= 1.0):
+            # Validate price is within allowed range
+            if current_price <= 0:
                 self._log.warning(
-                    "Invalid price %.4f from stream (must be 0 < price <= 1.0), skipping order",
+                    "Invalid price %.4f from stream (must be > 0), skipping order",
                     current_price
                 )
                 return
+            if current_price > self.config.max_price:
+                self._log.warning(
+                    "Price %.4f exceeds max_price %.4f — proceeding anyway (edge case)",
+                    current_price, self.config.max_price
+                )
             
             # Place limit order at current price (will fill immediately since current >= current)
             order = self.client.paper.limit(

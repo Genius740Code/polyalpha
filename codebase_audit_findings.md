@@ -133,20 +133,20 @@ Using outdated data after state changes.
 
 ## Group 6: Code Quality / Maintainability
 
-### 16. Magic number for position close threshold LOW
+### 16. Magic number for position close threshold LOW — IMPLEMENTED
 - **File**: `src/polyalpha/trading/paper_engine.py:730`
 - **What's wrong**: `if position.shares <= 0.001` — magic number.
-- **Fix**: Define `MIN_SHARE_THRESHOLD` constant or add to PaperConfig.
+- **Fix**: Defined `MIN_SHARE_THRESHOLD = 1e-10` module-level constant.
 
-### 17. Duplicate fee calculation in polymarket mode LOW
+### 17. Duplicate fee calculation in polymarket mode LOW — IMPLEMENTED
 - **File**: `src/polyalpha/trading/paper_engine.py:1188-1191, 1261-1264`
 - **What's wrong**: Fee calculated twice in polymarket mode, no explanation.
-- **Fix**: Add comment explaining polymarket fee structure.
+- **Fix**: Added comment explaining Polymarket net-of-fee fee structure.
 
-### 18. Sniper price validation range too strict LOW
+### 18. Sniper price validation range too strict LOW — IMPLEMENTED
 - **File**: `src/polyalpha/bots/sniper.py:976-982`
 - **What's wrong**: Rejects `price > 1.0` but edge cases briefly exceed it.
-- **Fix**: Configurable range, warn instead of hard reject.
+- **Fix**: Added configurable `max_price` field to `SniperConfig`; hard reject changed to warning when price exceeds `max_price`.
 
 ---
 
@@ -159,5 +159,5 @@ Using outdated data after state changes.
 | 3 — Stale Data | 4 | 4 | 0 |
 | 4 — Calculation Bugs | 4 | 4 | 0 |
 | 5 — Error Handling | 1 | 1 | 0 |
-| 6 — Code Quality | 3 | 0 | 3 |
-| **Total** | **18** | **15** | **3** |
+| 6 — Code Quality | 3 | 3 | 0 |
+| **Total** | **18** | **18** | **0** |
