@@ -3,41 +3,87 @@ MULTI WALLET SUPPORT FOR REAL TRADING
 WALLET TRACKER
 
 
-big giles into saml lfiles
+big files into small files
+    such as paper engine
 
 
-mayeb since time so it doesnt get wrong time for polymarket markets as in the slug code
+syncing time to ensure getting correct polymarket time slug
 
 
-binacne data such as volume ect
+binacne data such as volume ect (more if nessary)
 
-redo telegram bot, add features such as custom message ect currently simple forr use case
 
-mabye add feature for notify to send windows notifaicton
 
-better WINDOW_SECONDS so you can choose x multipe ect
+Finish telegram bot
+    telegram tests
+    Before stratign ensure that the sturcute code is wrokign great
+    Prests for buying, and selling
+    send total pl and wallet blance every X minutes
+
+ONLY READ ONLY
+
+better WINDOW_SECONDS so you can choose x multipe ect, eg only trade 01:00 to 02:00, and 02:30- 03:00
 
 verify max btc change feature
 
-check if btc chace data has error'
+check if btc chainlink data has error
 
 
-when using poylmakret stem adatqa, add option to choose to use clonb api, ws or both
-default websocket idk
+LOADS OF CODE REVIEWS
 
-do some checks before connecting to ws, or findig market to reduce chance of errors
 
-redo or remvoe stale checking
+
+
+
+
+API Key Handling: The clob_client.py handles private keys and API credentials. Need to verify:
+
+    Are private keys stored securely? (codeSummary shows they're passed as constructor args — standard practice, not a vulnerability)
+    No hardcoded secrets detected in excerpts
+
+EIP-712 Signing: The CLOB client implements custom EIP-712 signed orders. This is Polymarket-specific and appears sound, but custom crypto should be audited.
+
+Simulated Responses: The clob_client includes mock response generation for testing. This should only be used in dev/test, never production.
+
+
+
+
+
+when using poylmakret up down price, allow user to choose websocket (websocket is default) clob or a mix
+
+
+do some checks before connecting to ws, or findig market to reduce chance of errors 
+
+
+loook for logic and calcultion errors
+
+redo or remvoe stale checking as in stalled data (data not updating, for btc price and yes no)
 
 
 make sure frotnend terminal has same data as the backend    
 
-risk managment kidna sucks overcompliacted ect
+risk managment kidna sucks overcompliacted ect, redo or remove
 
 
 fidn and look for errors in buying, makking srue it buys t correct price, with the delay and spilalge and fee aswell ect
 
 
-verify buying shares works the same as buying x usd 
 
-maybe use  https://docs.polymarket.com/market-data/realtime-data instead of other
+maybe use  https://docs.polymarket.com/market-data/realtime-data instead of other or both
+
+
+Do a ton of testing, tell ai to write loads of example scirpts, test them, ask ai whats wrong with polyalpha
+
+
+verify all tests are passing, and all tests are added
+
+ensrue docs are good and updated
+
+make ti easier to update db on resolve or sell 
+
+BETTER SEO FOR STUFF LIKE STRATS.MD
+
+PLESAE DONT DO THE ONCE BELOW
+
+    mabye add feature for notify to send windows notifaicton, 
+    maybe elgram bot will support commands
