@@ -1168,12 +1168,17 @@ class RealTradingEngine:
                          order_id, filled_size, order.shares)
                 order.status = "partially_filled"
 
+            prev_filled = order.filled_shares
+            incremental = filled_size - prev_filled
+            if incremental <= 0:
+                return
+
             order.filled_shares = filled_size
             order.filled_amount = filled_size * avg_price
             order.avg_fill_price = avg_price
 
-            # Update position with partial fill
-            self._handle_partial_fill(order, filled_size, avg_price)
+            # Update position with partial fill (pass incremental, not cumulative)
+            self._handle_partial_fill(order, incremental, avg_price)
 
         # Handle full fills
         elif filled_size >= order.shares or api_status == "filled":
@@ -1205,61 +1210,121 @@ class RealTradingEngine:
         if self._db_enabled:
             self._update_order_in_db(order)
 
-    def _handle_partial_fill(self, order: RealOrder, filled_shares: float, avg_price: float) -> None:
+    def _handle_partial_fill(self, order: RealOrder, incremental_shares: float, avg_price: float) -> None:
         """
         Handle partial fill by updating position incrementally.
+
+        ``buy()`` optimistically adds ``order.shares`` to the position before
+        the CLOB confirms the fill. This method first reverts that optimistic
+        addition (if still present), then applies only the actual incremental
+        fill at the real fill price.
 
         Parameters
         ----------
         order : RealOrder
             Order that was partially filled
-        filled_shares : float
-            Number of shares filled in this update
+        incremental_shares : float
+            Number of *new* shares filled since the last update (not cumulative)
         avg_price : float
-            Average fill price
+            Average fill price for this increment
         """
         positions = self._resolve_positions()
         position_key = f"{order.market_id}:{order.side}"
 
         with self._position_lock:
             if position_key not in positions:
-                log.warning("Position not found for partial fill order %s", order.id)
-                return
+                from .real_orders import RealPosition
+                position = RealPosition(
+                    market_id=order.market_id,
+                    slug=order.slug,
+                    question=order.slug,
+                    side=order.side,
+                    shares=0,
+                    avg_price=0,
+                    current_price=0,
+                    cost_basis=0,
+                    current_value=0,
+                    order_ids=[order.id],
+                )
+                positions[position_key] = position
+            else:
+                position = positions[position_key]
 
-            position = positions[position_key]
+            # Revert optimistic addition from buy() if still present.
+            # buy() adds order.shares at order.price — this must be undone
+            # before applying the actual fill data.
+            if position.shares >= order.shares:
+                position.shares -= order.shares
+                position.cost_basis = max(0.0, position.cost_basis - order.shares * order.price)
 
-            # Calculate additional shares from this partial fill
-            new_shares = filled_shares - position.shares
-            if new_shares <= 0:
-                return  # No new shares to add
+            # Apply actual incremental fill
+            position.shares += incremental_shares
+            position.cost_basis += incremental_shares * avg_price
+            if position.shares > 0:
+                position.avg_price = position.cost_basis / position.shares
+            position.current_value = position.shares * order.price
 
-            # Update position with volume-weighted average price
-            total_shares = position.shares + new_shares
-            position.avg_price = (
-                (position.avg_price * position.shares + avg_price * new_shares)
-                / total_shares
-            )
-            position.shares = total_shares
-            position.cost_basis = position.shares * position.avg_price
-            position.current_value = position.shares * avg_price
-
-            log.debug("Position updated with partial fill: %s %s, shares=%.2f, avg_price=%.4f",
+            log.debug("Position updated with partial fill: %s %s, shares=%.2f, avg_price=$.4f",
                      position.slug, position.side, position.shares, position.avg_price)
 
     def _on_order_filled(self, order: RealOrder) -> None:
         """
         Callback when order is fully filled.
 
+        Corrects the position to use the actual fill price from the CLOB
+        instead of the submission price (which may differ for market orders).
+
         Parameters
         ----------
         order : RealOrder
             Filled order
         """
-        log.debug("Order fill callback: %s %s $%.2f @ $%.4f",
-                 order.slug, order.side, order.amount, order.price)
+        log.debug("Order fill callback: %s %s $%.2f @ $%.4f (avg_fill: $%.4f)",
+                 order.slug, order.side, order.amount, order.price, order.avg_fill_price)
+
+        if order.avg_fill_price > 0:
+            self._correct_position_from_fill(order)
 
         risk_manager = self._resolve_risk_manager()
         risk_manager.record_trade(0.0)
+
+    def _correct_position_from_fill(self, order: RealOrder) -> None:
+        """
+        Correct position after actual fill price is known.
+
+        The position was created optimistically in buy() with ``order.shares``
+        at ``order.price``. This method removes that optimistic contribution
+        and applies the actual fill (``order.filled_shares`` at ``order.avg_fill_price``).
+
+        Parameters
+        ----------
+        order : RealOrder
+            Filled order with ``avg_fill_price`` and ``filled_shares`` populated.
+        """
+        positions = self._resolve_positions()
+        key = f"{order.market_id}:{order.side}"
+        with self._position_lock:
+            position = positions.get(key)
+            if position is None:
+                return
+
+            actual_shares = max(order.filled_shares, 0.0)
+            if actual_shares <= 0:
+                actual_shares = order.shares
+
+            fill_price = order.avg_fill_price
+
+            if position.shares >= order.shares:
+                # Remove optimistic contribution
+                position.shares -= order.shares
+                position.cost_basis = max(0.0, position.cost_basis - order.shares * order.price)
+
+            # Apply actual fill
+            position.shares += actual_shares
+            position.cost_basis += actual_shares * fill_price
+            if position.shares > 0:
+                position.avg_price = position.cost_basis / position.shares
+            position.current_value = position.shares * order.price
 
     def check_order_timeout(self, order_id: str) -> bool:
         """
@@ -2884,8 +2949,8 @@ class RealTradingEngine:
                     shares=order.shares,
                     avg_price=order.price,
                     current_price=order.price,
-                    cost_basis=order.amount,
-                    current_value=order.amount,
+                    cost_basis=order.shares * order.price,
+                    current_value=order.shares * order.price,
                     order_ids=[order.id],
                 )
                 positions[key] = position

@@ -1209,6 +1209,8 @@ class PaperEngine:
             fee, rebate_amount, rebate_rate, fee_type = self._fee_manager.calculate_fee(
                 net, price, shares, is_maker=is_limit,
             )
+            net = amount - fee + rebate_amount
+            shares = round(net / price, SHARE_ROUNDING) if price > 0 else 0.0
 
         with self._balance_lock:
             wallet.balance -= amount
@@ -1284,6 +1286,8 @@ class PaperEngine:
             fee, rebate_amount, rebate_rate, fee_type = self._fee_manager.calculate_fee(
                 net, actual_price, shares, is_maker=True,
             )
+            net = order.amount - fee + rebate_amount
+            shares = round(net / actual_price, SHARE_ROUNDING) if actual_price > 0 else 0.0
 
         self._fee_manager.track_fee_and_rebate(fee, rebate_amount, fee_type, order.amount)
 
