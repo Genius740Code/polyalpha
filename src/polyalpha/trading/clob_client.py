@@ -214,7 +214,7 @@ class ClobClient:
                 from eth_account import Account
                 account = Account.from_key(self._private_key)
                 self._address = account.address
-            except Exception:
+            except ImportError:
                 if self.simulate:
                     self._address = "0x" + "0" * 40
                 else:
@@ -222,7 +222,14 @@ class ClobClient:
                         "Failed to derive address from private key. "
                         "Ensure a valid hex private key is provided. "
                         "Install eth-account if missing: pip install eth-account"
-                    )
+                    ) from None
+            except Exception as exc:
+                if self.simulate:
+                    self._address = "0x" + "0" * 40
+                else:
+                    raise RuntimeError(
+                        f"Failed to derive address from private key: {exc}"
+                    ) from exc
         return self._address
     
     @property
@@ -669,14 +676,20 @@ class ClobClient:
             signed = Account.from_key(self.private_key).sign_message(signable)
             return "0x" + signed.signature.hex()
 
-        except Exception:
+        except ImportError:
             if self.simulate:
                 return "0x" + "a" * 130
             raise RuntimeError(
                 "Failed to sign EIP-712 order. "
                 "Ensure a valid hex private key is provided. "
                 "Install eth-account if missing: pip install eth-account"
-            )
+            ) from None
+        except Exception as exc:
+            if self.simulate:
+                return "0x" + "a" * 130
+            raise RuntimeError(
+                f"Failed to sign EIP-712 order: {exc}"
+            ) from exc
 
     # ── Public API Methods ─────────────────────────────────────────────────────
 
@@ -781,10 +794,10 @@ class ClobClient:
             raise
         except NetworkError as e:
             log.error("Failed to place order: %s", e)
-            raise OrderRejected(f"Order rejected: {e}")
-        except Exception as e:
-            log.error("Failed to place order: %s", e)
-            raise OrderRejected(f"Order rejected: {e}")
+            raise OrderRejected(f"Order rejected: {e}") from e
+        except Exception:
+            log.exception("Failed to place order")
+            raise OrderRejected("Order rejected: unexpected error")
 
     def cancel_order(self, order_id: str) -> dict:
         """
@@ -815,9 +828,9 @@ class ClobClient:
                 "order_id": order_id,
                 "status": response.get("status", "cancelled"),
             }
-        except Exception as e:
-            log.error("Failed to cancel order %s: %s", order_id, e)
-            raise NetworkError(f"Failed to cancel order: {e}")
+        except Exception:
+            log.exception("Failed to cancel order %s", order_id)
+            raise NetworkError(f"Failed to cancel order: {order_id}")
 
     def get_order_status(self, order_id: str) -> dict:
         """
@@ -849,9 +862,9 @@ class ClobClient:
                 "avg_price": float(response.get("avgPrice", response.get("avg_price", 0))),
                 "original_size": float(response.get("originalSize", response.get("size", 0))),
             }
-        except Exception as e:
-            log.error("Failed to get order status %s: %s", order_id, e)
-            raise NetworkError(f"Failed to get order status: {e}")
+        except Exception:
+            log.exception("Failed to get order status %s", order_id)
+            raise NetworkError(f"Failed to get order status: {order_id}")
 
     def get_orderbook(self, token_id: str) -> dict:
         """
@@ -895,9 +908,9 @@ class ClobClient:
 
             return {"bids": bids, "asks": asks}
 
-        except Exception as e:
-            log.error("Failed to get orderbook for token %s: %s", token_id, e)
-            raise NetworkError(f"Failed to get orderbook: {e}")
+        except Exception:
+            log.exception("Failed to get orderbook for token %s", token_id)
+            raise NetworkError(f"Failed to get orderbook for token: {token_id}")
 
     def get_balance(self) -> dict:
         """
@@ -922,9 +935,9 @@ class ClobClient:
                 "usdc_balance": float(response.get("usdc", response.get("balance", response.get("usdc_balance", 0)))),
                 "allowance": float(response.get("allowance", 0)),
             }
-        except Exception as e:
-            log.error("Failed to get balance: %s", e)
-            raise NetworkError(f"Failed to get balance: {e}")
+        except Exception:
+            log.exception("Failed to get balance")
+            raise NetworkError("Failed to get balance")
 
     def close(self) -> None:
         """Close HTTP session."""

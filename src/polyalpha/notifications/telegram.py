@@ -79,8 +79,8 @@ class TelegramNotifier:
         except TelegramError as e:
             log.error("Failed to send Telegram message: %s", e)
             return False
-        except Exception as e:
-            log.error("Unexpected error sending Telegram message: %s", e)
+        except Exception:
+            log.exception("Unexpected error sending Telegram message")
             return False
     
     def send_buy(

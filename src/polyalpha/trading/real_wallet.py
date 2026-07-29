@@ -224,9 +224,9 @@ class WalletManager:
 
             return self.wait_for_transaction(new_tx_hash_hex, timeout=60)
 
-        except Exception as e:
-            log.error("Failed to re-broadcast transaction %s: %s", tx_hash, e)
-            raise TransactionRebroadcastError(f"Failed to re-broadcast transaction: {e}")
+        except Exception:
+            log.exception("Failed to re-broadcast transaction %s", tx_hash)
+            raise TransactionRebroadcastError(f"Failed to re-broadcast transaction: {tx_hash}")
 
     def get_gas_stats(self) -> dict:
         return {
@@ -252,9 +252,9 @@ class WalletManager:
                 self._address
             ).call()
             self._balance = float(balance_raw) / 1e6
-        except Exception as e:
-            log.error("Failed to fetch balance: %s", e)
-            raise NetworkError(f"Failed to fetch balance from blockchain: {e}")
+        except Exception:
+            log.exception("Failed to fetch balance")
+            raise NetworkError("Failed to fetch balance from blockchain")
 
         return self._balance
 
@@ -269,9 +269,9 @@ class WalletManager:
                 spender_address
             ).call()
             self._allowance = float(allowance_raw) / 1e6
-        except Exception as e:
-            log.error("Failed to fetch allowance: %s", e)
-            raise NetworkError(f"Failed to fetch allowance from blockchain: {e}")
+        except Exception:
+            log.exception("Failed to fetch allowance")
+            raise NetworkError("Failed to fetch allowance from blockchain")
 
         return self._allowance
 
@@ -288,9 +288,9 @@ class WalletManager:
                     spender_address,
                     amount_raw
                 ).estimate_gas({'from': self._address})
-            except Exception as e:
-                log.error("Gas estimation failed for approval: %s", e)
-                raise GasEstimationError(f"Failed to estimate gas for approval: {e}")
+            except Exception:
+                log.exception("Gas estimation failed for approval")
+                raise GasEstimationError("Failed to estimate gas for approval")
 
             tx_params = self._build_transaction_params(
                 gas_estimate=gas_estimate,
@@ -313,9 +313,9 @@ class WalletManager:
             return tx_hash_hex
         except GasEstimationError:
             raise
-        except Exception as e:
-            log.error("Failed to approve spender: %s", e)
-            raise NetworkError(f"Failed to approve spender: {e}")
+        except Exception:
+            log.exception("Failed to approve spender")
+            raise NetworkError("Failed to approve spender")
 
     def refresh_balance(self) -> None:
         """Refresh balance from blockchain."""
@@ -362,7 +362,7 @@ class WalletManager:
                     }
 
             except Exception:
-                pass
+                log.debug("Receipt poll attempt failed for %s", tx_hash, exc_info=True)
 
             time.sleep(poll_interval)
 

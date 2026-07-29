@@ -103,6 +103,7 @@ class ClobBookClient:
                 raise
             except Exception as exc:
                 last_exc = exc
+                log.warning("CLOB request failed (attempt %d/%d): %s", attempt + 1, self._retries + 1, exc)
                 if attempt < self._retries:
                     time.sleep(HTTP_RETRY_DELAY_MULTIPLIER * attempt)
                     continue

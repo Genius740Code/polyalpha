@@ -357,8 +357,8 @@ class TradeDatabase:
             while not self._optimization_stop_event.wait(self._optimization_interval):
                 try:
                     self._run_background_optimization()
-                except Exception as e:
-                    log.error("Background optimization failed: %s", e)
+                except Exception:
+                    log.exception("Background optimization failed")
 
         self._optimization_thread = Thread(target=optimization_loop, daemon=True)
         self._optimization_thread.start()

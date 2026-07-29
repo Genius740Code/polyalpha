@@ -271,9 +271,9 @@ class TradeRepository:
                 self._on_cache_invalidate()
                 log.info("Bulk saved %d trades", len(trades))
                 return trade_ids
-            except Exception as e:
+            except Exception:
                 conn.rollback()
-                log.error("Bulk insert failed: %s", e)
+                log.exception("Bulk insert failed")
                 raise
 
     def update_trade_status(
@@ -302,9 +302,9 @@ class TradeRepository:
                     return True
                 log.warning("No trade found with order_id=%s", order_id)
                 return False
-            except Exception as e:
+            except Exception:
                 conn.rollback()
-                log.error("Failed to update trade status: %s", e)
+                log.exception("Failed to update trade status")
                 return False
 
     def is_duplicate_trade(
@@ -695,8 +695,8 @@ class TradeRepository:
             for future in as_completed(futures):
                 try:
                     future.result()
-                except Exception as e:
-                    log.error("Parallel query failed: %s", e)
+                except Exception:
+                    log.exception("Parallel query failed")
         return results
 
     def get_parallel_statistics_by_assets(self, assets: List[str], max_workers: int = 4) -> Dict[str, Dict[str, Any]]:

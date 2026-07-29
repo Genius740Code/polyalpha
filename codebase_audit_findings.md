@@ -110,11 +110,24 @@ Using outdated data after state changes.
 
 ## Group 5: Error Handling
 
-### 11. Broad exception catching hides errors MEDIUM
+### 11. Broad exception catching hides errors MEDIUM — IMPLEMENTED
 - **File**: 204 matches across codebase
 - **What's wrong**: `except Exception as exc:` everywhere, no specific handling.
 - **Why it matters**: Silent failures, hard to debug production issues.
 - **Fix**: Catch specific exceptions where possible, or log full stack traces.
+- **Changes**:
+  - `bot.py`: Silent `except Exception: pass` → `log.warning()`/`log.debug(exc_info=True)` in cleanup, rollover, Binance refresh, and indicator compute methods
+  - `stream.py`: Silent `except Exception: pass` → `log.debug(exc_info=True)` for WS close and PONG send
+  - `clob_client.py`: Narrowed `except Exception` to `except ImportError` for eth_account deps; all API error handlers changed from `log.error(...)` to `log.exception(...)`
+  - `real_engine.py`: All 20+ error handlers changed from `log.error("msg: %s", e)` to `log.exception("msg")`
+  - `real_wallet.py`: All error handlers changed to `log.exception(...)` with full stack traces
+  - `paper_engine.py`: DB save/init error handlers changed to `log.exception()`
+  - `retry.py`: Unexpected error handlers changed to `log.exception()`
+  - `wallet.py`, `alchemy_client.py`, `auto_redeem.py`: Error handlers changed to `log.exception()`
+  - `error_handling.py`: Circuit breaker, retry, rollback, and backup error handlers changed to `log.exception()`
+  - `database/`: Migration, query, backup error handlers changed to `log.exception()`
+  - `notifications/telegram.py`: Send error handler changed to `log.exception()`
+  - `ai/client.py`: Retry error handler changed to `log.exception()`
 
 ---
 
@@ -145,6 +158,6 @@ Using outdated data after state changes.
 | 2 — Monkey-patching | 1 | 1 | 0 |
 | 3 — Stale Data | 4 | 4 | 0 |
 | 4 — Calculation Bugs | 4 | 4 | 0 |
-| 5 — Error Handling | 1 | 0 | 1 |
+| 5 — Error Handling | 1 | 1 | 0 |
 | 6 — Code Quality | 3 | 0 | 3 |
-| **Total** | **18** | **14** | **4** |
+| **Total** | **18** | **15** | **3** |

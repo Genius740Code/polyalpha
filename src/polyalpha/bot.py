@@ -376,6 +376,7 @@ class TickContext:
             val = _rsi(series, 14).iloc[-1]
             return None if pd.isna(val) else float(val)
         except Exception:
+            self._log.debug("RSI computation failed", exc_info=True)
             return None
 
     @property
@@ -388,6 +389,7 @@ class TickContext:
             val = _sma(series, 20).iloc[-1]
             return None if pd.isna(val) else float(val)
         except Exception:
+            self._log.debug("SMA(20) computation failed", exc_info=True)
             return None
 
     @property
@@ -400,6 +402,7 @@ class TickContext:
             val = _ema(series, 12).iloc[-1]
             return None if pd.isna(val) else float(val)
         except Exception:
+            self._log.debug("EMA(12) computation failed", exc_info=True)
             return None
 
 
@@ -680,13 +683,13 @@ class Bot:
         if self._stream:
             try:
                 self._stream.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._log.warning("Error stopping stream: %s", exc)
         if self._chainlink:
             try:
                 self._chainlink.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._log.warning("Error stopping chainlink: %s", exc)
 
     @property
     def stats(self) -> dict:
@@ -757,8 +760,8 @@ class Bot:
             if self._binance:
                 try:
                     self._binance._refresh()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._log.warning("Binance refresh failed: %s", exc)
             # ── Candle tracking ──────────────────────────────────────────
             now = time.time()
             tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
@@ -800,8 +803,8 @@ class Bot:
             if self._binance:
                 try:
                     self._binance._refresh()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._log.warning("Binance refresh failed: %s", exc)
             # ── Candle tracking ──────────────────────────────────────────
             now = time.time()
             tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
@@ -828,8 +831,8 @@ class Bot:
         if self._stream:
             try:
                 self._stream.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._log.warning("Error stopping stream during rollover: %s", exc)
             self._stream = None
         self._market = None
         self._ctx = None
@@ -871,8 +874,8 @@ class Bot:
         if self._stream:
             try:
                 self._stream.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._log.warning("Error stopping stream during rollover: %s", exc)
             self._stream = None
         self._market = None
         self._ctx = None
@@ -902,11 +905,11 @@ class Bot:
         if self._stream:
             try:
                 self._stream.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._log.warning("Error stopping stream during cleanup: %s", exc)
         if self._chainlink:
             try:
                 self._chainlink.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._log.warning("Error stopping chainlink during cleanup: %s", exc)
         self._client.close()

@@ -338,9 +338,9 @@ class OpenRouterClient:
                 
             except (AIAuthenticationError, AIModelNotFoundError):
                 raise
-            except Exception as e:
-                last_error = AIResponseError(f"Unexpected error: {e}")
-                self._log.warning(f"Unexpected error on attempt {attempt + 1}/{self.max_retries}")
+            except Exception:
+                self._log.exception("Unexpected error on attempt %d/%d", attempt + 1, self.max_retries)
+                last_error = AIResponseError("Unexpected error during API call")
             
             if attempt < self.max_retries - 1:
                 time.sleep(2 ** attempt)

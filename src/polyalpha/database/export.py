@@ -174,8 +174,8 @@ class DatabaseBackup:
             s3_client = boto3.client("s3", **session_kwargs)
             s3_client.upload_file(str(self._db.db_path), bucket, object_key)
             log.info("Database backup uploaded to S3: s3://%s/%s", bucket, mask_address(object_key))
-        except Exception as e:
-            log.error("S3 backup failed: %s", e)
+        except Exception:
+            log.exception("S3 backup failed")
             raise
         finally:
             self._db._get_connection()
@@ -220,8 +220,8 @@ class DatabaseBackup:
             blob_obj = bucket_obj.blob(blob)
             blob_obj.upload_from_filename(str(self._db.db_path))
             log.info("Database backup uploaded to GCS: gs://%s/%s", bucket, blob)
-        except Exception as e:
-            log.error("GCS backup failed: %s", e)
+        except Exception:
+            log.exception("GCS backup failed")
             raise
         finally:
             self._db._get_connection()

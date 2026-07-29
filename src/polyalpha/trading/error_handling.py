@@ -272,9 +272,9 @@ class CircuitBreaker:
         except self._expected_exception as e:
             self._record_failure(e)
             raise
-        except Exception as e:
+        except Exception:
             # Unexpected exceptions don't affect circuit state
-            log.error("Unexpected exception in CircuitBreaker '%s': %s", self.name, e)
+            log.exception("Unexpected exception in CircuitBreaker '%s'", self.name)
             raise
 
     def reset(self) -> None:
@@ -536,7 +536,7 @@ class ErrorRecoveryManager:
                             )
                             time.sleep(delay)
                         else:
-                            log.error("All retry attempts failed")
+                            log.exception("All retry attempts failed for %s", config.strategy.value)
                             raise
 
             elif config.strategy == RecoveryStrategy.RETRY_WITH_JITTER:
@@ -557,7 +557,7 @@ class ErrorRecoveryManager:
                             )
                             time.sleep(delay)
                         else:
-                            log.error("All retry attempts failed")
+                            log.exception("All retry attempts failed for %s", config.strategy.value)
                             raise
 
             elif config.strategy == RecoveryStrategy.FALLBACK_TO_ALTERNATIVE:
@@ -567,7 +567,7 @@ class ErrorRecoveryManager:
                         return config.fallback_func(*args, **kwargs)
                     except Exception as fallback_e:
                         last_exception = fallback_e
-                        log.error("Fallback function failed: %s", fallback_e)
+                        log.exception("Fallback function failed: %s", fallback_e)
                         raise
                 else:
                     log.error("No fallback function configured")
@@ -955,9 +955,9 @@ class TransactionRollbackManager:
                         rollback_func()
                         step["rollback_status"] = "completed"
                         log.info("Rolled back step %s", step_name)
-                    except Exception as e:
+                    except Exception:
                         step["rollback_status"] = "failed"
-                        log.error("Failed to rollback step %s: %s", step_name, e)
+                        log.exception("Failed to rollback step %s", step_name)
                 else:
                     step["rollback_status"] = "skipped"
                     log.warning("No rollback handler for step %s", step_name)
@@ -1098,8 +1098,8 @@ class DisasterRecovery:
             self._cleanup_old_backups()
             return filename
 
-        except Exception as e:
-            log.error("Failed to create backup: %s", e)
+        except Exception:
+            log.exception("Failed to create backup")
             raise
 
     def restore_backup(self, backup_path: str) -> Dict:
@@ -1141,8 +1141,8 @@ class DisasterRecovery:
         except json.JSONDecodeError as e:
             log.error("Backup file corrupted: %s", e)
             raise ValueError(f"Backup file corrupted: {e}")
-        except Exception as e:
-            log.error("Failed to restore backup: %s", e)
+        except Exception:
+            log.exception("Failed to restore backup")
             raise
 
     def list_backups(self, data_type: Optional[str] = None) -> List[Dict]:
@@ -1188,8 +1188,8 @@ class DisasterRecovery:
                     "size": os.path.getsize(filepath),
                 })
 
-            except Exception as e:
-                log.warning("Failed to read backup metadata for %s: %s", filename, e)
+            except Exception:
+                log.warning("Failed to read backup metadata for %s", filename, exc_info=True)
 
         # Sort by timestamp (newest first)
         backups.sort(key=lambda x: x["timestamp"], reverse=True)
@@ -1206,7 +1206,7 @@ class DisasterRecovery:
                     os.remove(backup["path"])
                     log.info("Removed old backup: %s", backup["filename"])
                 except Exception as e:
-                    log.error("Failed to remove old backup %s: %s", backup["filename"], e)
+                    log.exception("Failed to remove old backup %s", backup["filename"])
 
     def create_emergency_snapshot(
         self,

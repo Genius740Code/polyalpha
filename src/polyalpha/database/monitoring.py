@@ -153,8 +153,8 @@ class DatabaseMonitor:
                     if rule.callback:
                         try:
                             rule.callback(name, metric_value, rule.threshold)
-                        except Exception as e:
-                            log.error("Error in alert callback for %s: %s", name, e)
+                        except Exception:
+                            log.exception("Error in alert callback for %s", name)
                     log.warning("Alert triggered: %s - %s = %s (threshold: %s)",
                                 name, rule.metric, metric_value, rule.threshold)
 
@@ -244,24 +244,24 @@ class EventSystem:
             for callback in self._trade_saved_hooks:
                 try:
                     callback(trade)
-                except Exception as e:
-                    log.error("Error in trade_saved callback %s: %s", callback.__name__, e)
+                except Exception:
+                    log.exception("Error in trade_saved callback %s", callback.__name__)
 
     def _trigger_trade_updated_hooks(self, trade_id: int, changes: Dict[str, Any]) -> None:
         with self._hooks_lock:
             for callback in self._trade_updated_hooks:
                 try:
                     callback(trade_id, changes)
-                except Exception as e:
-                    log.error("Error in trade_updated callback %s: %s", callback.__name__, e)
+                except Exception:
+                    log.exception("Error in trade_updated callback %s", callback.__name__)
 
     def _trigger_trade_deleted_hooks(self, trade_id: int) -> None:
         with self._hooks_lock:
             for callback in self._trade_deleted_hooks:
                 try:
                     callback(trade_id)
-                except Exception as e:
-                    log.error("Error in trade_deleted callback %s: %s", callback.__name__, e)
+                except Exception:
+                    log.exception("Error in trade_deleted callback %s", callback.__name__)
 
     def enable_streaming(self) -> None:
         self._streaming_enabled = True

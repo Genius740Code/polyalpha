@@ -487,8 +487,8 @@ class RealTradingWalletManager:
         for wallet in self.wallets.values():
             try:
                 wallet.refresh_balance()
-            except Exception as e:
-                log.error("Failed to refresh balance for wallet %s: %s", wallet.wallet_id, e)
+            except Exception:
+                log.exception("Failed to refresh balance for wallet %s", wallet.wallet_id)
 
     def get_aggregated_summary(self) -> dict:
         """Get aggregated statistics across all wallets."""

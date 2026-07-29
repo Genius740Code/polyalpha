@@ -244,8 +244,8 @@ class AutoRedeemEngine:
             else:
                 log.warning("Trading engine has no position tracking")
                 return []
-        except Exception as e:
-            log.error(f"Failed to fetch positions: {e}")
+        except Exception:
+            log.exception("Failed to fetch positions")
             return []
         
         for pos in positions:
@@ -418,10 +418,10 @@ class AutoRedeemEngine:
                         errors.append(f"{pos.slug}: no redeem_position method on trading engine")
                         failed_count += 1
                         
-            except Exception as e:
+            except Exception:
                 failed_count += 1
-                errors.append(f"{pos.slug}: {e}")
-                log.error(f"Failed to redeem {pos.slug}: {e}")
+                errors.append(f"{pos.slug}: unexpected error")
+                log.exception("Failed to redeem %s", pos.slug)
         
         # Create record
         record = RedeemRecord(
@@ -502,9 +502,9 @@ class AutoRedeemEngine:
             try:
                 log.info("Running scheduled redemption check")
                 result = self.redeem()
-                log.info(f"Scheduled redemption result: {result.redeemed_count} redeemed")
-            except Exception as e:
-                log.error(f"Error in scheduled redemption: {e}")
+                log.info("Scheduled redemption result: %d redeemed", result.redeemed_count)
+            except Exception:
+                log.exception("Error in scheduled redemption")
         
         log.info("Scheduler stopped")
     

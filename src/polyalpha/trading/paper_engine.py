@@ -358,8 +358,8 @@ class PaperEngine:
         except ImportError:
             log.error("Paper: database module not available.")
             self._db_enabled = False
-        except Exception as e:
-            log.error("Paper: failed to enable database: %s", e)
+        except Exception:
+            log.exception("Paper: failed to enable database")
             self._db_enabled = False
             raise
 
@@ -409,8 +409,8 @@ class PaperEngine:
                 timestamp=datetime.now(timezone.utc),
             )
             log.debug("Paper: trade saved to database for %s %s", position.slug, position.side)
-        except Exception as exc:
-            log.error("Paper: failed to save trade to database: %s", exc)
+        except Exception:
+            log.exception("Paper: failed to save trade to database")
 
     # ── Price helpers ──────────────────────────────────────────────────────────
 

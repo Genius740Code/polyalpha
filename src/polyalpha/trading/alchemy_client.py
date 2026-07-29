@@ -54,8 +54,8 @@ class AlchemyClient:
             transfers_out = data.get("result", {}).get("transfers", [])
 
             return transfers_in + transfers_out
-        except Exception as e:
-            log.error(f"Failed to fetch asset transfers from Alchemy: {e}")
+        except Exception:
+            log.exception("Failed to fetch asset transfers from Alchemy")
             return []
 
     def get_token_balances(self, address: str) -> Dict[str, int]:
@@ -97,6 +97,6 @@ class AlchemyClient:
                 res = self._session.get(f"https://gamma-api.polymarket.com/tokens/{token_id_dec}")
                 if res.status_code == 200:
                     metadata[token_id] = res.json()
-            except Exception as e:
-                log.warning(f"Failed to fetch metadata for token {mask_transaction_hash(token_id)}: {e}")
+            except Exception:
+                log.warning("Failed to fetch metadata for token %s", mask_transaction_hash(token_id), exc_info=True)
         return metadata

@@ -286,7 +286,7 @@ class Stream:
             try:
                 self._ws.close()  # type: ignore[union-attr]
             except Exception:
-                pass
+                log.debug("Error closing WebSocket connection", exc_info=True)
 
     @property
     def running(self) -> bool:
@@ -433,7 +433,7 @@ class Stream:
         try:
             await ws.send("PONG")
         except Exception:
-            pass
+            log.debug("Failed to send PONG", exc_info=True)
 
     async def _ping_loop_async(self, ws) -> None:
         """Send text 'PING' at intervals and check for stale data."""

@@ -399,9 +399,9 @@ class RealTradingEngine:
             )
             log.info("Emergency backup created: %s", backup_path)
             return backup_path
-        except Exception as e:
-            log.error("Failed to create emergency backup: %s", e)
-            raise BackupError(f"Failed to create emergency backup: {e}")
+        except Exception:
+            log.exception("Failed to create emergency backup")
+            raise BackupError("Failed to create emergency backup")
 
     def restore_from_backup(self, backup_path: str) -> dict:
         """
@@ -488,9 +488,9 @@ class RealTradingEngine:
                 "balance": self._balance,
             }
 
-        except Exception as e:
-            log.error("Failed to restore from backup: %s", e)
-            raise BackupError(f"Failed to restore from backup: {e}")
+        except Exception:
+            log.exception("Failed to restore from backup")
+            raise BackupError("Failed to restore from backup")
 
     # ── Database Integration ─────────────────────────────────────────────────────
 
@@ -1129,8 +1129,8 @@ class RealTradingEngine:
             log.debug("Order %s status: %s", order_id, status_response.get("status"))
             return status_response
         except Exception as e:
-            log.error("Failed to poll order %s status (attempt %d): %s",
-                     order_id, order.status_check_attempts, e)
+            log.exception("Failed to poll order %s status (attempt %d)",
+                         order_id, order.status_check_attempts)
             if order.status_check_attempts >= config.retry_attempts:
                 raise NetworkError(f"Order status polling failed after {config.retry_attempts} attempts: {e}")
             raise
@@ -1312,8 +1312,8 @@ class RealTradingEngine:
                     self.update_order_fill_status(order_id)
                     if order.status != old_status:
                         status_updates[order_id] = order.status
-                except Exception as e:
-                    log.error("Failed to update order %s status: %s", order_id, e)
+                except Exception:
+                    log.exception("Failed to update order %s status", order_id)
 
                     if self.check_order_timeout(order_id):
                         status_updates[order_id] = "timeout"
@@ -1384,7 +1384,7 @@ class RealTradingEngine:
                     elif best_ask > 0:
                         fill_price = best_ask
                 except Exception:
-                    pass
+                    log.warning("Failed to fetch orderbook for fill price", exc_info=True)
 
             position_key = f"{market_id}:{side}"
             if fill_price is None and position_key in positions_dict:
@@ -1439,7 +1439,7 @@ class RealTradingEngine:
                         wallet.positions,
                     )
                 except Exception as e:
-                    log.error("Failed to sync positions for wallet %s: %s", wallet.wallet_id, e)
+                    log.exception("Failed to sync positions for wallet %s", wallet.wallet_id)
         else:
             self._sync_single_wallet_positions(
                 self._wallet.address,
@@ -1797,8 +1797,8 @@ class RealTradingEngine:
                      position.slug, position.side, order.id)
                     
         except Exception as e:
-            log.error("Failed to execute trailing stop exit for %s %s: %s",
-                      position.slug, position.side, e)
+            log.exception("Failed to execute trailing stop exit for %s %s",
+                          position.slug, position.side)
 
     # ── Position Management ───────────────────────────────────────────────────────
 
@@ -2044,7 +2044,7 @@ class RealTradingEngine:
             try:
                 self._alchemy_client.get_token_balances(self._wallet.address)
             except Exception:
-                pass
+                log.warning("Failed to check token balances for redemption", exc_info=True)
 
         if self._wallet._web3 is None:
             self._wallet._init_web3()
@@ -2105,7 +2105,7 @@ class RealTradingEngine:
                 return {"success": False, "tx_hash": tx_hash, "error": "On-chain revert"}
 
         except Exception as e:
-            log.error("Failed to redeem position %s %s: %s", position.slug, side, e)
+            log.exception("Failed to redeem position %s %s", position.slug, side)
             return {"success": False, "tx_hash": tx_hash, "error": str(e)}
 
     def transfer_position(
@@ -2231,7 +2231,7 @@ class RealTradingEngine:
                 raise RuntimeError("Transfer reverted on-chain")
 
         except Exception as e:
-            log.error("Failed to transfer position %s %s: %s", market.slug, side, e)
+            log.exception("Failed to transfer position %s %s", market.slug, side)
             tx_details = {
                 "from_wallet": from_address,
                 "to_wallet": to_address,
@@ -2584,7 +2584,7 @@ class RealTradingEngine:
                 self._save_exit_to_db(position, reason, current_price)
 
         except Exception as e:
-            log.error("Failed to execute exit order for %s %s: %s", position.slug, position.side, e)
+            log.exception("Failed to execute exit order for %s %s", position.slug, position.side)
 
     def _save_exit_to_db(self, position: RealPosition, reason: str, exit_price: float) -> None:
         """
@@ -2636,7 +2636,7 @@ class RealTradingEngine:
             )
             log.debug("Real: exit saved to database for %s", position.slug)
         except Exception as exc:
-            log.error("Real: failed to save exit to database: %s", exc)
+            log.exception("Real: failed to save exit to database")
 
     # ── Safety Features ───────────────────────────────────────────────────────────
 
@@ -2656,7 +2656,7 @@ class RealTradingEngine:
             try:
                 self.cancel(order_id)
             except Exception as e:
-                log.error("Failed to cancel order %s: %s", order_id, e)
+                log.exception("Failed to cancel order %s", order_id)
 
         # Set emergency flag
         self._emergency_mode = True
@@ -2933,7 +2933,7 @@ class RealTradingEngine:
             )
             log.debug("Real: order saved to database for %s", order.slug)
         except Exception as exc:
-            log.error("Real: failed to save order to database: %s", exc)
+            log.exception("Real: failed to save order to database")
 
     def _update_order_in_db(self, order: RealOrder) -> None:
         """Update order status in database after fill status changes."""
@@ -2952,7 +2952,7 @@ class RealTradingEngine:
             )
             log.debug("Real: order status updated in database for %s: %s", order.slug, order.status)
         except Exception as exc:
-            log.error("Real: failed to update order in database: %s", exc)
+            log.exception("Real: failed to update order in database")
 
     # ── Advanced Order Types ─────────────────────────────────────────────────────────
 
@@ -3073,7 +3073,7 @@ class RealTradingEngine:
                     triggered_ocos.append(oco_id)
                     log.info("OCO triggered: order1 %s filled, cancelled order2 %s", order1.id, order2.id)
                 except Exception as e:
-                    log.error("Failed to cancel order2 in OCO %s: %s", oco_id, e)
+                    log.exception("Failed to cancel order2 in OCO %s", oco_id)
 
             # Check if order2 is filled
             elif order2.status == "filled":
@@ -3087,7 +3087,7 @@ class RealTradingEngine:
                     triggered_ocos.append(oco_id)
                     log.info("OCO triggered: order2 %s filled, cancelled order1 %s", order2.id, order1.id)
                 except Exception as e:
-                    log.error("Failed to cancel order1 in OCO %s: %s", oco_id, e)
+                    log.exception("Failed to cancel order1 in OCO %s", oco_id)
 
         return triggered_ocos
 
@@ -3225,7 +3225,7 @@ class RealTradingEngine:
                         )
                         bracket.stop_loss_order_id = sl_order.get("order_id", "")
                     except Exception as e:
-                        log.error("Failed to place stop loss for bracket %s: %s", bracket_id, e)
+                        log.exception("Failed to place stop loss for bracket %s", bracket_id)
 
                 # Place take profit order if specified
                 if bracket.take_profit_price is not None:
@@ -3240,7 +3240,7 @@ class RealTradingEngine:
                         )
                         bracket.take_profit_order_id = tp_order.get("order_id", "")
                     except Exception as e:
-                        log.error("Failed to place take profit for bracket %s: %s", bracket_id, e)
+                        log.exception("Failed to place take profit for bracket %s", bracket_id)
 
                 log.info("Bracket order %s activated", bracket_id)
 
@@ -3386,7 +3386,7 @@ class RealTradingEngine:
                         cond.triggered_at = datetime.now(timezone.utc)
                         triggered.append(cond_id)
                     except Exception as e:
-                        log.error("Failed to place child order for conditional %s: %s", cond_id, e)
+                        log.exception("Failed to place child order for conditional %s", cond_id)
 
         return triggered
 
@@ -3529,7 +3529,7 @@ class RealTradingEngine:
             return order
 
         except Exception as e:
-            log.error("Failed to execute iceberg slice for %s: %s", iceberg_id, e)
+            log.exception("Failed to execute iceberg slice for %s", iceberg_id)
             return None
 
     def update_iceberg_orders(self) -> None:
@@ -3735,7 +3735,7 @@ class RealTradingEngine:
             return order
 
         except Exception as e:
-            log.error("Failed to execute TWAP slice for %s: %s", twap_id, e)
+            log.exception("Failed to execute TWAP slice for %s", twap_id)
             return None
 
     def update_twap_orders(self) -> None:

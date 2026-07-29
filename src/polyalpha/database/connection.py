@@ -179,9 +179,9 @@ class DatabaseConnection:
                 cursor.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (version,))
                 conn.commit()
                 log.info("Migration %d applied successfully", version)
-            except Exception as e:
+            except Exception:
                 conn.rollback()
-                log.warning("Migration %d skipped: %s", version, e)
+                log.exception("Migration %d failed, rolled back", version)
 
     def run_migrations(self) -> None:
         current_version = self.get_schema_version()

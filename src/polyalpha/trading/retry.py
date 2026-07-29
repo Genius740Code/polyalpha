@@ -90,9 +90,9 @@ def retry_on_error(
                             max_attempts, func.__name__
                         )
                         raise
-                except Exception as e:
+                except Exception:
                     # Unexpected exception - don't retry
-                    log.error("Unexpected error in %s: %s", func.__name__, e)
+                    log.exception("Unexpected error in %s", func.__name__)
                     raise
             
             # This should never be reached, but just in case
@@ -171,8 +171,8 @@ def retry_with_jitter(
                             max_attempts, func.__name__
                         )
                         raise
-                except Exception as e:
-                    log.error("Unexpected error in %s: %s", func.__name__, e)
+                except Exception:
+                    log.exception("Unexpected error in %s", func.__name__)
                     raise
             
             if last_error:
