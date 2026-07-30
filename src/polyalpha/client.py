@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 
 from .ai import OpenRouterClient
-from .core import Market
+from .core import Market, TimeSync
 from .markets import MarketClient
 from .stream import Stream
 from .trading import PaperEngine, RealTradingEngine
@@ -130,6 +130,7 @@ class Client:
 
         self._timeout = timeout
         self._retries = retries
+        self.time_sync = TimeSync()
         self._log.info(
             "Client ready — balance=%.1f, timeout=%d, retries=%d, rate_limit=%s",
             balance, timeout, retries, rate_limit or "unlimited",
@@ -152,6 +153,56 @@ class Client:
         """Context manager exit - ensures resources are cleaned up."""
         self.close()
         return False
+
+    def check(self, force_ntp: bool = False) -> dict:
+        """Run a pre-market health check and return a report.
+
+        Checks
+        ------
+        1. **NTP clock sync** — ensures local clock drift is below the
+           fail threshold so deterministic slug generation produces the
+           correct Polymarket windows.
+        2. **Gamma API reachability** — verifies the Polymarket Gamma API
+           responds before a market lookup.
+
+        Parameters
+        ----------
+        force_ntp : Force a fresh NTP query (bypasses cache).
+
+        Returns
+        -------
+        dict with keys:
+            ntp   : NTP sync report (offset, warnings, can_proceed).
+            gamma : Gamma API health check.
+            all_ok : True when every check passes.
+
+        Example
+        -------
+        >>> client = polyalpha.Client()
+        >>> report = client.check()
+        >>> report["all_ok"]
+        True
+        """
+        ntp_report = self.time_sync.sync(force=force_ntp)
+        gamma_ok = self._check_gamma()
+        all_ok = ntp_report["can_proceed"] and gamma_ok
+        return {
+            "ntp": ntp_report,
+            "gamma": gamma_ok,
+            "all_ok": all_ok,
+        }
+
+    def _check_gamma(self) -> bool:
+        """Quick reachability check against the Gamma API."""
+        try:
+            from .core.constants import GAMMA_API
+            import httpx
+            with httpx.Client(timeout=5.0) as c:
+                r = c.get(GAMMA_API + "/events", params={"limit": 1})
+                r.raise_for_status()
+                return True
+        except Exception:
+            return False
 
     def stream(self, market: Market, retries: int | None = None) -> Stream:
         """

@@ -68,6 +68,7 @@ from .errors import (
     RateLimitExceeded,
 )
 from .market import Market
+from .time_sync import TimeSync
 from .market_sessions import (
     MarketSession,
     MARKET_SESSIONS,
@@ -144,6 +145,7 @@ __all__ = [
     "GasEstimationError",
     "TransactionRebroadcastError",
     "RateLimitExceeded",
+    "TimeSync",
     "Market",
     "MarketSession",
     "MARKET_SESSIONS",

@@ -141,7 +141,7 @@ _setup_logging()
 _setup_logging()
 
 from .client import Client
-from .core import Market
+from .core import Market, TimeSync
 from .core.env import load_env_file, get_env_config
 from .stream import Stream
 from .bot import Bot
