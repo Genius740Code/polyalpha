@@ -210,7 +210,7 @@ class TickContext:
         
         # Send Telegram notification if configured
         if self._bot._telegram and order:
-            price = getattr(self._bot._stream, side.lower(), None) or self.price.up if side == "UP" else self.price.down
+            price = getattr(self._bot._stream, side.lower(), None) or (self.price.up if side == "UP" else self.price.down)
             self._bot._telegram.send_buy(
                 asset=self._bot.asset,
                 side=side,
@@ -259,7 +259,7 @@ class TickContext:
         
         # Send Telegram notification if configured
         if self._bot._telegram and order:
-            price = getattr(self._bot._stream, side.lower(), None) or self.price.up if side == "UP" else self.price.down
+            price = getattr(self._bot._stream, side.lower(), None) or (self.price.up if side == "UP" else self.price.down)
             sell_amount = amount if amount else (order.amount if hasattr(order, 'amount') else 0)
             self._bot._telegram.send_sell(
                 asset=self._bot.asset,
@@ -518,6 +518,7 @@ class Bot:
         self._stream = None
         self._strategy: Optional[Callable] = None
         self._on_resolve: Optional[Callable] = None
+        self._price_anomaly_handler: Optional[Callable] = None
         self._condition: Optional[Condition] = None
         self._buy_side: Optional[str] = None
         self._buy_amount: Optional[float] = None
@@ -593,6 +594,21 @@ class Bot:
                 print(f"{pos.side} {pos.outcome} pnl=${pos.pnl:.2f}")
         """
         self._on_resolve = fn
+        return fn
+
+    def on_price_anomaly(self, fn: Callable) -> Callable:
+        """
+        Decorator — register a price anomaly callback.
+
+        The function receives anomaly details when price validation fails.
+
+        Usage
+        -----
+            @bot.on_price_anomaly
+            def handle_anomaly(anomaly_type: str, *args):
+                print(f"Price anomaly: {anomaly_type}")
+        """
+        self._price_anomaly_handler = fn
         return fn
 
     def when(self, condition: Condition) -> Bot:
@@ -828,6 +844,18 @@ class Bot:
         @self._stream.on("close")
         def on_close():
             self._log.info("Market closed: %s", self._market.slug)
+
+        @self._stream.on("price_anomaly")
+        def on_price_anomaly(anomaly_type: str, *args):
+            if self._stop_event.is_set():
+                return
+            self._log.warning("Price anomaly detected: type=%s", anomaly_type)
+            # Call the price anomaly handler if registered
+            if hasattr(self, '_price_anomaly_handler') and self._price_anomaly_handler:
+                try:
+                    self._price_anomaly_handler(anomaly_type, *args)
+                except Exception as exc:
+                    self._log.exception("Price anomaly handler error: %s", exc)
 
         # Start blocking — returns when stream ends
         self._stream.start(background=False)
