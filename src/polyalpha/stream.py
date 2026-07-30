@@ -66,6 +66,7 @@ from .core import (
     FALLBACK_PRICE,
     Market,
     StreamDisconnected,
+    CircuitBreakerOpenError,
 )
 from .markets import RateLimiter
 from .trading.error_handling import CircuitBreaker
@@ -313,13 +314,6 @@ class Stream:
         high_retry_warned = False
 
         while not self._stop.is_set():
-            # Check circuit breaker before attempting connection
-            if self._circuit_breaker and self._circuit_breaker.is_open:
-                log.warning("Stream: circuit breaker is open, blocking connection attempt")
-                recovery = getattr(self._circuit_breaker, 'recovery_timeout', 60)
-                time.sleep(recovery)
-                continue
-
             try:
                 if self._circuit_breaker:
                     self._circuit_breaker.call(self._connect)
@@ -352,6 +346,12 @@ class Stream:
                     self._consecutive_failures, self.retries, delay,
                 )
                 time.sleep(delay)
+
+            except CircuitBreakerOpenError:
+                recovery = getattr(self._circuit_breaker, 'recovery_timeout', 60) if self._circuit_breaker else 60
+                log.warning("Stream: circuit breaker is open, blocking connection attempt")
+                time.sleep(recovery)
+                continue
 
             except Exception as exc:
                 log.exception("Stream: unexpected error: %s", exc)
