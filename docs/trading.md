@@ -171,9 +171,33 @@ stream.start(background=True)
 
 ### Database Persistence
 
+Trades are automatically saved to the SQLite database when positions are resolved or sold. You can also record trades manually.
+
 ```python
+# Enable via client constructor
+client = polyalpha.Client(balance=1000.0, db_path="trades.db")
+
+# Or enable after creation
 client.paper.enable_database("./trades.db")
 client.paper.database       # TradeDatabase instance or None
+client.db                   # Same instance, accessible directly on client
+
+# Record a buy manually
+client.db.buy_trade(
+    market_slug="btc-up-2025-07-30",
+    market_id="0x1234",
+    side="UP",
+    price=0.85,
+    amount=20.0,
+)
+
+# Record a sell (auto-calculates PnL)
+client.db.sell_trade(trade_id=1, exit_price=0.92)
+
+# View portfolio
+client.db.portfolio()
+
+# Disable when done
 client.paper.disable_database()
 ```
 

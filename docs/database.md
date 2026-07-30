@@ -39,13 +39,65 @@ with TradeDatabase("trades.db") as db:
 
 ---
 
-### Trade CRUD
+### Buy / Sell / Portfolio (recommended)
 
 | Method | Description |
 |--------|-------------|
-| `save_trade(market_slug, market_id, side, entry_price, exit_price, amount, shares, fee, outcome, pnl, timestamp, market_session=None, check_duplicates=True, order_id=None, status="pending") -> int` | Insert a new trade record |
+| `buy_trade(market_slug, market_id, side, price, amount, shares=None, fee=0.0, market_session=None, user_id=None, timestamp=None) -> int` | Record a buy. Auto-calculates `shares = amount / price`, defaults `fee=0`, `pnl=0`, `outcome=None`, `status="open"`, `timestamp=now` |
+| `sell_trade(trade_id, exit_price, pnl=None, outcome=None) -> bool` | Record a sell/exit. Auto-calculates `pnl = (exit_price - entry_price) × shares`, sets `outcome="WON"/"LOST"` and `status="closed"` |
+| `get_portfolio() -> dict` | Returns all trades with summary stats (`total_trades`, `closed_trades`, `open_trades`, `wins`, `losses`, `win_rate`, `total_invested`, `total_pnl`, best/worst trade) |
+| `portfolio()` | Prints formatted table of all trades + summary |
+
+```python
+# Record a buy
+tid = db.buy_trade(
+    market_slug="btc-up-2025-07-30",
+    market_id="0x1234",
+    side="UP",
+    price=0.85,
+    amount=20.0,
+)
+
+# Record a sell (auto-calculates PnL)
+db.sell_trade(trade_id=tid, exit_price=0.92)
+
+# View everything
+db.portfolio()
+```
+
+Output of `portfolio()`:
+
+```
+────────────────────────────────────────────────────────────────
+  POLYALPHA — TRADE PORTFOLIO
+────────────────────────────────────────────────────────────────
+  ID   MARKET      SIDE  ENTRY    EXIT   AMOUNT     P&L RESULT
+  ──── ─────────── ───── ─────── ─────── ─────── ──────── ──────
+  2    eth-down... DOWN  0.4500      —    15.00   +0.00   OPEN
+  1    btc-up-...  UP    0.8500 0.9200   20.00  $+1.65   WON
+────────────────────────────────────────────────────────────────
+  SUMMARY
+────────────────────────────────────────────────────────────────
+  Total trades           2
+  Closed trades          1
+  Open trades            1
+  Wins                   1
+  Losses                 0
+  Win rate               100.0%
+  Total invested         $   35.00
+  Total P&L              $   +1.65
+────────────────────────────────────────────────────────────────
+```
+
+### Legacy Trade CRUD (deprecated — use `buy_trade`/`sell_trade` instead)
+
+| Method | Description |
+|--------|-------------|
+| `save_trade(...) -> int` | ⚠️ Deprecated. Insert a new trade record. Use `buy_trade()` instead. |
 | `save_trades_bulk(trades, check_duplicates=True) -> list[int]` | Bulk insert multiple trades |
 | `update_trade_status(order_id, status, filled_shares=0.0, filled_amount=0.0, avg_fill_price=0.0, filled_at=None) -> bool` | Update trade status after fill |
+| `update_trade(trade_id, **fields) -> bool` | Update arbitrary fields on a trade by ID (e.g. `exit_price`, `pnl`, `outcome`, `status`) |
+| `get_trade(trade_id) -> TradeRecord \| None` | Fetch a single trade by ID |
 | `delete_trade(trade_id) -> bool` | Delete a trade by ID |
 | `clear_all_trades()` | Delete all trades |
 | `is_duplicate_trade(market_id, side, timestamp, tolerance_seconds=1) -> bool` | Check for duplicate trades |
@@ -268,30 +320,37 @@ Method: `to_dict() -> dict`
 
 ```sql
 CREATE TABLE trades (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    market_slug TEXT NOT NULL,
-    market_id TEXT NOT NULL,
-    side TEXT NOT NULL,
-    entry_price REAL NOT NULL,
-    exit_price REAL,
-    amount REAL NOT NULL,
-    shares REAL NOT NULL,
-    fee REAL NOT NULL,
-    outcome TEXT,
-    pnl REAL NOT NULL,
-    timestamp TEXT NOT NULL,
-    market_session TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    market_slug     TEXT NOT NULL,
+    market_id       TEXT NOT NULL,
+    side            TEXT NOT NULL,
+    entry_price     REAL NOT NULL,
+    exit_price      REAL,
+    amount          REAL NOT NULL,
+    shares          REAL NOT NULL,
+    fee             REAL NOT NULL,
+    outcome         TEXT,
+    pnl             REAL NOT NULL,
+    timestamp       TEXT NOT NULL,
+    market_session  TEXT,
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    order_id        TEXT,
+    status          TEXT DEFAULT 'pending',
+    filled_shares   REAL DEFAULT 0.0,
+    filled_amount   REAL DEFAULT 0.0,
+    avg_fill_price  REAL DEFAULT 0.0,
+    filled_at       TEXT,
+    user_id         INTEGER REFERENCES users(id)
 );
 ```
 
-Indexes: `idx_market_slug`, `idx_market_id`, `idx_side`, `idx_outcome`, `idx_timestamp`, `idx_market_session`
+Indexes: `idx_market_slug`, `idx_market_id`, `idx_side`, `idx_outcome`, `idx_timestamp`, `idx_market_session`, `idx_duplicate_check`, `idx_user_id`
 
 Materialized views: `trade_statistics_mv` (per-asset), `daily_summary_mv` (per-date)
 
 ---
 
-## Integration with Paper Trading
+## Integration with Client
 
 ```python
 import polyalpha
@@ -299,9 +358,17 @@ import polyalpha
 # Enable database on client construction
 client = polyalpha.Client(balance=1000.0, db_path="trades.db")
 
-# Trades saved automatically on resolve
-client.paper.resolve(market, outcome="UP")
+# Access database directly via client.db
+client.db.buy_trade(
+    market_slug="btc-up-2025-07-30",
+    market_id="0x1234",
+    side="UP",
+    price=0.85,
+    amount=20.0,
+)
+client.db.sell_trade(trade_id=1, exit_price=0.92)
+client.db.portfolio()
 
-# Access database
-stats = client.paper.database.get_statistics()
+# Stats
+stats = client.db.get_statistics()
 ```
