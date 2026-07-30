@@ -58,12 +58,11 @@ class IndicatorCalculator:
 
     def __init__(self, data: pd.DataFrame):
         """Initialize indicator calculator."""
-        self.data = data.copy()
-        self._validate_data()
-
         self._log = logging.getLogger(__name__)
         self._cache: dict[str, pd.Series | dict[str, pd.Series]] = {}
         self._data_version = 0
+        self.data = data.copy()
+        self._validate_data()
 
     @property
     def data(self):

@@ -4,7 +4,6 @@ Concise reference of every symbol exported from `polyalpha.__init__`, grouped by
 
 ---
 
-**Package:** `polyalpha` v0.2.01
 **Python:** >=3.9
 
 ---
@@ -54,7 +53,7 @@ Concise reference of every symbol exported from `polyalpha.__init__`, grouped by
 
 | Symbol | Source | Description |
 |--------|--------|-------------|
-| `PaperEngine` | `trading/paper_engine.py` | Simulated trading engine. Methods: `buy()`, `sell()`, `limit()`, `cancel()`, `resolve()`, `positions()`, `orders()`, `open()`, `summary()`, etc. |
+| `PaperEngine` | `trading/paper_engine.py` | Simulated trading engine. Methods: `buy()`, `sell_position()`, `limit()`, `cancel()`, `resolve()`, `positions()`, `orders()`, `open()`, `summary()`, etc. |
 | `PaperConfig` | `trading/paper_config.py` | Configuration dataclass for paper trading: fee mode, slippage, delay, risk limits |
 
 ---
@@ -223,13 +222,15 @@ load_env_file, get_env_config,
 Bot, BotHub, BinanceAccessor, log_call,
 PaperEngine, PaperConfig, AutoRedeemConfig,
 RealTradingEngine, RealTradingConfig, RealOrder, RealPosition, WalletManager,
-ReportPreset, TradeDatabase,
+ReportPreset, ComparisonReport, VariantResult, TradeDatabase,
 ClobBookClient, OrderBookFeed, OrderBookManager, OrderBookSnapshot,
   MarketOrderBook, BookLevel, BookSide, FillEstimate, BookTrade,
   Strategy, ImbalanceStrategy, SpreadStrategy, MomentumStrategy,
   BacktestEngine, RiskManager, estimate_fill, book_summary,
 Sniper, Tracker,
 DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator,
+  ChainlinkStreamer, ChainlinkStreamerConfig,
+IndicatorAccessor, MACDResult, BBResult, DonchianResult,
 OpenRouterClient, MarketAnalysis, TradingSignal,
 conditions,
 PolyalphaError, MarketNotFound, MarketClosed, StreamDisconnected,
@@ -239,5 +240,3 @@ PolyalphaError, MarketNotFound, MarketClosed, StreamDisconnected,
 AIError, AIAuthenticationError, AIModelNotFoundError, AIQuotaExceededError,
   AIResponseError, AITimeoutError, AIConnectionError
 ```
-
-**Total: 60 exported symbols** (including the `conditions` module).

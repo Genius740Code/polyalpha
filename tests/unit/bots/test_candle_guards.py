@@ -38,6 +38,7 @@ class FakeBot:
         self._stream = None
         self._tick_count = 0
         self._trade_count = 0
+        self._telegram = None
         self._candle_start_time = 1000.0
         self._candle_open_price = 0.5
         self._candle_id = 1

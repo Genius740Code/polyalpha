@@ -253,10 +253,7 @@ client.real.sell(market, side="UP")
 client.real.cancel(order_id)
 client.real.balance                    # Current USDC balance
 client.real.refresh_balance()          # Refresh from chain
-client.real.open()                     # Open orders
-client.real.orders()                   # All orders
 client.real.positions()                # Live positions
-client.real.summary()                  # Position summary
 ```
 
 ### Auto-Redeem
@@ -276,7 +273,6 @@ client.real.set_position_sizer(KellyPositionSizer(kelly_fraction=0.25))
 ### Error Handling
 
 ```python
-client.real.get_error_handling_status() -> dict
 client.real.clob_circuit_breaker
 client.real.wallet_circuit_breaker
 client.real.error_recovery

@@ -208,7 +208,11 @@ from .ai import (
     TradingSignal,
 )
 
-__version__ = "0.2.2"
+try:
+    from importlib.metadata import version as _mversion
+    __version__ = _mversion("polyalpha")
+except Exception:
+    __version__ = "0.2.29"
 
 __all__ = [
     # Main entry point
