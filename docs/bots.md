@@ -117,7 +117,10 @@ config = SniperConfig(
 | `entry_price_max` | `None` | Maximum entry price for price range (must be > entry) |
 | `exit_price` | `0.88` | Exit price threshold (must be < entry) |
 | `excluded_price_ranges` | `None` | List of (min, max) tuples to exclude from entry |
-| `window_seconds` | `35` | Trading window before market end |
+| `window_seconds` | `35` | Trading window before market end (simple mode) |
+| `time_windows` | `None` | Advanced time windows (list of `TimeWindow` objects) |
+| `conditional_windows` | `None` | Indicator-based conditional windows (list of `ConditionalWindow` objects) |
+| `time_filter` | `None` | Day/hour filtering (`TimeFilter` object) |
 | `amount` | `20.0` | USDC amount per trade |
 | `max_position_size` | `None` | Maximum position exposure |
 | `max_consecutive_losses` | `3` | Stop after this many consecutive losses |
@@ -230,6 +233,236 @@ config = SniperConfig(
 ```
 
 This is useful for avoiding price zones with low liquidity or unfavorable conditions.
+
+### Advanced Time Windows
+
+The Sniper bot supports advanced time window configuration for complex trading schedules. Use `TimeWindow`, `ConditionalWindow`, and `TimeFilter` classes to create sophisticated trading strategies.
+
+#### TimeWindow
+
+Flexible time window specification supporting multiple window types:
+
+```python
+from polyalpha.bots import TimeWindow, ConditionalWindow, TimeFilter
+```
+
+**Offset-based windows** (relative to market end):
+```python
+# Trade between 2 min to 1 min before market end, and last 30 seconds
+config = SniperConfig(
+    asset="BTC",
+    timeframe="5m",
+    side="UP",
+    entry_price=0.92,
+    exit_price=0.88,
+    time_windows=[
+        TimeWindow(start_offset=-120, end_offset=-60),  # 2 min to 1 min before end
+        TimeWindow(start_offset=-30, end_offset=0),     # Last 30 seconds
+    ],
+    amount=20.0,
+)
+```
+
+**Absolute time windows** (specific UTC times):
+```python
+# Trade only during 01:00-02:00 and 02:30-03:00 UTC
+config = SniperConfig(
+    asset="BTC",
+    timeframe="5m",
+    side="UP",
+    entry_price=0.92,
+    exit_price=0.88,
+    time_windows=[
+        TimeWindow(start_time="01:00", end_time="02:00"),
+        TimeWindow(start_time="02:30", end_time="03:00"),
+    ],
+    amount=20.0,
+)
+```
+
+**Burst patterns** (repeating on/off intervals):
+```python
+# Trade in 10-second bursts with 20-second pauses
+config = SniperConfig(
+    asset="BTC",
+    timeframe="5m",
+    side="UP",
+    entry_price=0.92,
+    exit_price=0.88,
+    time_windows=[
+        TimeWindow(burst_on=10, burst_off=20),  # 10s on, 20s off, repeating
+    ],
+    amount=20.0,
+)
+```
+
+**TimeWindow parameters**:
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `start_offset` | `int \| None` | Seconds before market end (negative) or after start (positive) |
+| `end_offset` | `int \| None` | Seconds before market end (negative) or after start (positive) |
+| `start_time` | `str \| None` | Start time in HH:MM format (UTC) |
+| `end_time` | `str \| None` | End time in HH:MM format (UTC) |
+| `burst_on` | `int \| None` | Seconds to stay ON in burst pattern |
+| `burst_off` | `int \| None` | Seconds to stay OFF in burst pattern |
+
+Only one window type can be specified per `TimeWindow` instance.
+
+#### ConditionalWindow
+
+Indicator-based conditional windows that only open when specified conditions are met:
+
+```python
+# Trade only when BTC price change < 2%
+config = SniperConfig(
+    asset="BTC",
+    timeframe="5m",
+    side="UP",
+    entry_price=0.92,
+    exit_price=0.88,
+    time_windows=[
+        TimeWindow(start_offset=-60, end_offset=0),
+    ],
+    conditional_windows=[
+        ConditionalWindow(
+            indicator="btc_change",
+            operator="lt",
+            threshold=2.0,
+            periods=5
+        ),
+    ],
+    amount=20.0,
+)
+```
+
+**Supported indicators**:
+- `btc_change`: BTC spot price change percentage
+- `rsi`: Relative Strength Index
+- `sma`: Simple Moving Average
+- `custom`: Custom callable function
+
+**Supported operators**: `lt`, `lte`, `gt`, `gte`, `eq`
+
+**Data sources**: `binance`, `chainlink`, `custom`
+
+**ConditionalWindow parameters**:
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `indicator` | `str` | Indicator type (`btc_change`, `rsi`, `sma`, `custom`) |
+| `operator` | `str` | Comparison operator (`lt`, `lte`, `gt`, `gte`, `eq`) |
+| `threshold` | `float` | Threshold value for comparison |
+| `source` | `str \| None` | Data source (`binance`, `chainlink`, `custom`) |
+| `periods` | `int \| None` | Lookback periods for multi-period indicators |
+| `custom_check` | `Callable \| None` | Custom callable for complex conditions |
+
+**Custom conditional window**:
+```python
+def custom_condition():
+    # Your custom logic here
+    return True  # or False
+
+config = SniperConfig(
+    asset="BTC",
+    timeframe="5m",
+    side="UP",
+    entry_price=0.92,
+    exit_price=0.88,
+    time_windows=[
+        TimeWindow(start_offset=-60, end_offset=0),
+    ],
+    conditional_windows=[
+        ConditionalWindow(
+            indicator="custom",
+            operator="gt",
+            threshold=0.5,
+            custom_check=custom_condition
+        ),
+    ],
+    amount=20.0,
+)
+```
+
+#### TimeFilter
+
+Time-based filtering for day of week and hour of day restrictions:
+
+```python
+# Only trade weekdays (Monday-Friday) during business hours (9AM-5PM UTC)
+config = SniperConfig(
+    asset="BTC",
+    timeframe="5m",
+    side="UP",
+    entry_price=0.92,
+    exit_price=0.88,
+    time_windows=[
+        TimeWindow(start_offset=-60, end_offset=0),
+    ],
+    time_filter=TimeFilter(
+        days=[0, 1, 2, 3, 4],  # Monday-Friday (0=Monday, 6=Sunday)
+        hours=[9, 10, 11, 12, 13, 14, 15, 16, 17]  # 9AM-5PM UTC
+    ),
+    amount=20.0,
+)
+```
+
+**TimeFilter parameters**:
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `days` | `List[int] \| None` | Days of week (0=Monday, 6=Sunday) |
+| `hours` | `List[int] \| None` | Hours of day in UTC (0-23) |
+
+#### Combined Advanced Configuration
+
+All advanced features can be combined for sophisticated trading strategies:
+
+```python
+config = SniperConfig(
+    asset="BTC",
+    timeframe="5m",
+    side="UP",
+    entry_price=0.92,
+    exit_price=0.88,
+    # Multiple time windows
+    time_windows=[
+        TimeWindow(start_time="01:00", end_time="02:00"),
+        TimeWindow(start_time="02:30", end_time="03:00"),
+    ],
+    # Conditional windows (must also satisfy indicator conditions)
+    conditional_windows=[
+        ConditionalWindow(
+            indicator="btc_change",
+            operator="lt",
+            threshold=2.0,
+            periods=5
+        ),
+    ],
+    # Time filtering (only on specific days/hours)
+    time_filter=TimeFilter(
+        days=[0, 1, 2, 3, 4],  # Weekdays only
+        hours=[9, 10, 11, 12, 13, 14, 15, 16, 17]  # Business hours
+    ),
+    amount=20.0,
+)
+```
+
+#### Backward Compatibility
+
+The simple `window_seconds` parameter continues to work exactly as before:
+
+```python
+# Simple case (unchanged)
+config = SniperConfig(
+    asset="BTC",
+    timeframe="5m",
+    side="UP",
+    entry_price=0.92,
+    exit_price=0.88,
+    window_seconds=35,  # Still works as before
+    amount=20.0,
+)
+```
+
+If both `window_seconds` and `time_windows` are provided, `time_windows` takes precedence.
 
 ---
 

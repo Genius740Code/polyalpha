@@ -23,19 +23,14 @@ Finish telegram bot
 ONLY READ ONLY
 
 
-
-better WINDOW_SECONDS so you can choose x multipe ect, eg only trade 01:00 to 02:00, and 02:30- 03:00
-
 verify max btc change feature
 
 check if btc chainlink data has error
 
 
+readme has too much code
+
 LOADS OF CODE REVIEWS
-
-
-
-
 
 
 API Key Handling: The clob_client.py handles private keys and API credentials. Need to verify:
@@ -49,11 +44,7 @@ Simulated Responses: The clob_client includes mock response generation for testi
 
 
 
-
 logging prests, u say wheat u want  to log, an it knows, eh only log findign amrekts new market refersh ect
-
-
-when coding a strat what are fucntions shoudld be built in liek get price hcange of x secodns, ask ai for ones ttaht should be built in
 
 
 when using poylmakret up down price, allow user to choose websocket (websocket is default) clob or a mix
@@ -66,8 +57,6 @@ loook for logic and calcultion errors
 
 redo or remvoe stale checking as in stalled data (data not updating, for btc price and yes no)
 
-
-make sure frotnend terminal has same data as the backend    
 
 risk managment kidna sucks overcompliacted ect, redo or remove
 
@@ -86,6 +75,8 @@ ensrue docs are good and updated
 
 make ti easier to update db on resolve or sell 
 
+
+update examples with new refactoring
 
 PLESAE DONT DO THE ONCE BELOW
 

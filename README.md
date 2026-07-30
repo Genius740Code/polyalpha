@@ -499,20 +499,36 @@ See `docs/database.md` for the full database API.
 
 ## Sniper bot
 
-Time-window execution bot with configurable thresholds and auto-rollover.
+Time-window execution bot with configurable thresholds and auto-rollover. Supports advanced time windows: multiple disjoint periods, burst patterns, absolute time windows, conditional windows (indicator-based), and day/hour filtering.
 
 ```python
-from polyalpha import Sniper, SniperConfig
+from polyalpha import Sniper, SniperConfig, TimeWindow, ConditionalWindow, TimeFilter
 
+# Simple time window (backward compatible)
 Sniper(SniperConfig(
     asset="BTC", timeframe="5m",
     balance=500.0, window_seconds=30,
     side="UP", order_size=25.0,
     auto_rollover=True,
 )).run()
+
+# Advanced: Multiple time windows with conditions
+Sniper(SniperConfig(
+    asset="BTC", timeframe="5m",
+    side="UP", entry_price=0.92, exit_price=0.88,
+    time_windows=[
+        TimeWindow(start_time="01:00", end_time="02:00"),
+        TimeWindow(start_time="02:30", end_time="03:00"),
+    ],
+    conditional_windows=[
+        ConditionalWindow(indicator="btc_change", operator="lt", threshold=2.0, periods=5),
+    ],
+    time_filter=TimeFilter(days=[0, 1, 2, 3, 4], hours=[9, 10, 11, 12, 13, 14, 15, 16, 17]),
+    amount=20.0,
+)).run()
 ```
 
-See [`examples/sniper.py`](./examples/sniper.py), [`examples/sniper_minimal.py`](./examples/sniper_minimal.py), and [`examples/sniper_ta.py`](./examples/sniper_ta.py).
+See [`examples/sniper.py`](./examples/sniper.py), [`examples/sniper_minimal.py`](./examples/sniper_minimal.py), [`examples/sniper_ta.py`](./examples/sniper_ta.py), and [`docs/bots.md`](./docs/bots.md#advanced-time-windows).
 
 ---
 
@@ -618,6 +634,7 @@ client = polyalpha.Client(
 | [`examples/sniper.py`](./examples/sniper.py) | Sniper time-window bot |
 | [`examples/sniper_minimal.py`](./examples/sniper_minimal.py) | Minimal Sniper bot (~10 lines) |
 | [`examples/sniper_ta.py`](./examples/sniper_ta.py) | Sniper + technical analysis |
+| [`examples/sniper_advanced_windows.py`](./examples/sniper_advanced_windows.py) | Sniper with advanced time windows |
 | [`examples/analysis.py`](./examples/analysis.py) | TA data feed, indicators, signals |
 | [`examples/multi_wallet_paper.py`](./examples/multi_wallet_paper.py) | Multi-wallet paper trading |
 | [`examples/risk_management.py`](./examples/risk_management.py) | Risk limits and controls |

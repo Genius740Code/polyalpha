@@ -29,6 +29,9 @@ Minimal Sniper bot (~10 lines). Demonstrates the quick-start promise of the Snip
 ### `sniper_ta.py`
 Sniper bot with technical analysis integration — configures RSI threshold and SMA period filters, with event callbacks for monitoring.
 
+### `sniper_advanced_windows.py`
+Sniper bot with advanced time window features: multiple disjoint windows, burst patterns, absolute time windows, conditional windows (indicator-based), and day/hour filtering. Demonstrates sophisticated trading schedules and indicator-based entry conditions.
+
 ### `bot_hub.py`
 BotHub — multi-strategy hub running multiple strategies from a single WebSocket connection.
 
