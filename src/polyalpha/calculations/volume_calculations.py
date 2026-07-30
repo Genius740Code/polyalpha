@@ -147,6 +147,9 @@ class VolumeCalculations:
         """
         Calculate average volume over a period.
         
+        Note: This excludes the current (most recent) value to be consistent
+        with vol_ratio, which compares current value against historical average.
+        
         Parameters
         ----------
         data : list[float]
@@ -157,17 +160,22 @@ class VolumeCalculations:
         Returns
         -------
         float | None
-            Average volume over the period. Returns None if no data.
+            Average volume over the period (excluding current). Returns None if no data.
         
         Example
         -------
         >>> VolumeCalculations.avg_volume([100, 120, 110, 130], period=3)
-        120.0
+        110.0  # Average of [100, 120, 110], excluding current 130
         """
-        if not data:
+        if len(data) < 2:
             return None
         
-        window = data[-period:] if len(data) >= period else data
+        # Exclude current value for consistency with vol_ratio
+        window = data[-period-1:-1] if len(data) >= period + 1 else data[:-1]
+        
+        if not window:
+            return None
+        
         return sum(window) / len(window)
     
     @staticmethod
@@ -202,6 +210,8 @@ class VolumeCalculations:
         """
         Check if current volume is above a percentile of recent volumes.
         
+        Uses linear interpolation for more accurate percentile calculation.
+        
         Parameters
         ----------
         data : list[float]
@@ -232,7 +242,19 @@ class VolumeCalculations:
             return None
         
         sorted_window = sorted(window)
-        index = int(len(sorted_window) * percentile)
-        threshold = sorted_window[min(index, len(sorted_window) - 1)]
+        n = len(sorted_window)
+        
+        # Use linear interpolation for accurate percentile
+        # Based on numpy's percentile method with linear interpolation
+        index = percentile * (n - 1)
+        lower_idx = int(index)
+        upper_idx = min(lower_idx + 1, n - 1)
+        fraction = index - lower_idx
+        
+        lower_val = sorted_window[lower_idx]
+        upper_val = sorted_window[upper_idx]
+        
+        # Linear interpolation between adjacent values
+        threshold = lower_val + fraction * (upper_val - lower_val)
         
         return current > threshold

@@ -92,7 +92,7 @@ class Stream:
     ``close``        ()                         — market resolved / clean close
     ``error``        (exc: Exception)           — unrecoverable error
     ``connect``      ()                         — fired on every successful connect
-    ``price_reset``  (up: float, down: float)   — emitted when prices reset due to validation failure
+    ``price_reset``  (up: float, down: float)   — emitted when prices reset due to validation failure or reconnect
     ``price_anomaly`` (type: str, ...)          — emitted when price anomaly detected
     """
 
@@ -444,6 +444,8 @@ class Stream:
             # Clear stale price state on reconnect
             self._token_prices.clear()
             self._last_trade_prices.clear()
+            # Reset last price time to avoid immediate stale data detection after reconnect
+            self._last_price_time = time.time()
             self._emit("price_reset")
             self._emit("connect")
 
@@ -540,6 +542,8 @@ class Stream:
             log.info("Stream: reconnected — clearing stale price state")
         self._token_prices.clear()
         self._last_trade_prices.clear()
+        # Reset last price time to avoid immediate stale data detection after reconnect
+        self._last_price_time = time.time()
         self._emit("price_reset")
         log.info("Stream: connected — subscribing to %d token(s)", len([mask_transaction_hash(t) for t in token_ids]))
 
@@ -697,7 +701,8 @@ class Stream:
 
     def _set_token_price(self, token_id: str, price: float) -> None:
         if token_id and price > 0:
-            self._token_prices[token_id] = price
+            with self._price_lock:
+                self._token_prices[token_id] = price
 
     def _handle_price_change(self, msg: dict) -> None:
         for pc in msg.get("price_changes", []):
@@ -826,6 +831,13 @@ class Stream:
                 self._price_anomaly_mode = True
                 log.error("Entered price anomaly mode due to consistent price sum issues")
             return False
+        else:
+            # Reset anomaly count gradually when prices are consistent
+            if self._price_anomaly_count > 0:
+                self._price_anomaly_count = max(0, self._price_anomaly_count - 1)
+                if self._price_anomaly_count == 0 and self._price_anomaly_mode:
+                    self._price_anomaly_mode = False
+                    log.info("Exited price anomaly mode - prices are now consistent")
 
         # Check for extreme price jumps (possible token mapping swap)
         if self._last_valid_up > 0 and self._last_valid_down > 0:
@@ -841,22 +853,17 @@ class Stream:
                 self._emit("price_anomaly", "extreme_jump", up_jump, down_jump, self.up, self.down)
                 return False
 
-        # Check for logical consistency (UP shouldn't be much higher than DOWN in normal conditions)
-        if self.up > self.down + self._max_price_anomaly_threshold:
-            log.warning(
-                "Logical price inconsistency: UP (%.4f) > DOWN (%.4f) by %.4f. Possible token mapping issue.",
-                self.up, self.down, self.up - self.down
-            )
-            self._price_anomaly_count += 1
-            if self._price_anomaly_count >= 2:
-                log.error("Repeated logical inconsistency - possible websocket token mapping error")
-                return False
+        # Check for logical consistency (UP + DOWN should be close to 1.0 for binary markets)
+        # In binary markets, UP and DOWN represent probabilities that should sum to ~1.0
+        # Neither should consistently dominate the other; that depends on the actual probability
+        # Skip this check as it's not valid for binary markets where probabilities can vary
 
         # Prices passed validation - update last valid prices
         self._last_valid_up = self.up
         self._last_valid_down = self.down
-        self._price_anomaly_count = 0  # Reset anomaly count on successful validation
-        self._price_anomaly_mode = False
+        # Don't reset anomaly count immediately - use gradual recovery above
+        if self._price_anomaly_count == 0:
+            self._price_anomaly_mode = False
         
         return True
 
@@ -886,23 +893,35 @@ class Stream:
                     log.debug("Stream: Token %s not found in token_to_side mapping", token_id[:12])
             
             # Degenerate case: if both tokens share the same ID, derive complement
+            # This should not happen in normal operation but handle it gracefully
             up_id = self.market.up_token
             down_id = self.market.down_token
-            if up_id and down_id and up_id == down_id and up_id in self._token_prices:
-                self.up = self._token_prices[up_id]
-                self.down = round(1.0 - self.up, PRICE_ROUNDING)
-                changed = True
+            if up_id and down_id and up_id == down_id:
+                if up_id in self._token_prices:
+                    log.warning("Stream: Both tokens have same ID %s - this may indicate a configuration error", up_id[:12])
+                    self.up = self._token_prices[up_id]
+                    self.down = round(1.0 - self.up, PRICE_ROUNDING)
+                    changed = True
 
             if changed:
                 # Validate prices before updating
                 if self._validate_prices():
                     self._last_price_time = time.time()
                     # Only emit if price change exceeds threshold
-                    if (abs(self.up - self._last_emitted_up) > self._price_threshold or
-                        abs(self.down - self._last_emitted_down) > self._price_threshold):
-                        self._emit("price", self.up, self.down)
-                        self._last_emitted_up = self.up
-                        self._last_emitted_down = self.down
+                    # For binary markets, use AND logic since both prices move together
+                    # This prevents redundant emissions when only one price appears to change
+                    up_change = abs(self.up - self._last_emitted_up)
+                    down_change = abs(self.down - self._last_emitted_down)
+                    
+                    # Use OR logic but ensure prices are consistent (sum ≈ 1.0)
+                    if (up_change > self._price_threshold or down_change > self._price_threshold):
+                        # Additional check: for binary markets, both should move together
+                        # If one changed significantly but the other didn't, it might be noise
+                        price_sum = self.up + self.down
+                        if abs(price_sum - 1.0) < 0.15:  # Only emit if prices are still consistent
+                            self._emit("price", self.up, self.down)
+                            self._last_emitted_up = self.up
+                            self._last_emitted_down = self.down
                 else:
                     # Price validation failed - use last valid prices
                     log.warning(
@@ -911,6 +930,8 @@ class Stream:
                     )
                     self.up = self._last_valid_up
                     self.down = self._last_valid_down
+                    # Update timestamp to prevent stale data detection from triggering
+                    self._last_price_time = time.time()
                     
                     # Emit price reset event to signal anomaly
                     self._emit("price_reset", self.up, self.down)

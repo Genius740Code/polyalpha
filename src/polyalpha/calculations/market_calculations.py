@@ -117,7 +117,7 @@ class MarketCalculations:
         Example
         -------
         >>> MarketCalculations.rate_of_change([100, 105, 103], period=2, time_interval=5.0)
-        0.6  # 3.0 change over 5 seconds = 0.6 per second
+        0.6  # 3.0 change over 10 seconds (2 periods * 5s) = 0.3 per second
         """
         if len(data) < period + 1 or time_interval == 0:
             return None
@@ -126,7 +126,9 @@ class MarketCalculations:
         if abs_change is None:
             return None
         
-        return abs_change / (period * time_interval)
+        # Total time elapsed is period * time_interval
+        total_time = period * time_interval
+        return abs_change / total_time
     
     @staticmethod
     def trend(data: List[float], period: int = 1, threshold: float = 0.0) -> TrendDirection:
@@ -205,6 +207,9 @@ class MarketCalculations:
         """
         Calculate price volatility (standard deviation) over a period.
         
+        Uses sample standard deviation (dividing by n-1) for better statistical
+        estimation of the underlying population variance.
+        
         Parameters
         ----------
         data : list[float]
@@ -233,7 +238,8 @@ class MarketCalculations:
             return None
         
         mean = sum(window) / n
-        variance = sum((x - mean) ** 2 for x in window) / n
+        # Use sample variance (n-1) for better statistical estimation
+        variance = sum((x - mean) ** 2 for x in window) / (n - 1)
         return variance ** 0.5
     
     @staticmethod

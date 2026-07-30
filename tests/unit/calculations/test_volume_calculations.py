@@ -90,14 +90,14 @@ class TestVolumeCalculations:
         data = [100.0, 120.0, 110.0, 130.0]
         result = VolumeCalculations.avg_volume(data, period=3)
         assert result is not None
-        assert abs(result - 120.0) < 0.01  # (100 + 120 + 110 + 130) / 4 = 115
+        assert abs(result - 110.0) < 0.01  # Average of [100, 120, 110], excluding current 130
     
     def test_avg_volume_partial_window(self):
         """Test average volume with partial window."""
         data = [100.0, 120.0, 110.0]
         result = VolumeCalculations.avg_volume(data, period=10)
         assert result is not None
-        assert abs(result - 110.0) < 0.01  # (100 + 120 + 110) / 3
+        assert abs(result - 110.0) < 0.01  # Average of [100, 120], excluding current 110
     
     def test_avg_volume_no_data(self):
         """Test average volume with no data."""
@@ -159,7 +159,7 @@ class TestVolumeCalculations:
         assert VolumeCalculations.vol_ratio(data, period=3) == 1.0
         assert VolumeCalculations.volume_trend(data, period=2) == VolumeTrend.STABLE
         assert VolumeCalculations.volume_surge(data, multiplier=2.0) is False
-        assert VolumeCalculations.avg_volume(data, period=4) == 100.0
+        assert VolumeCalculations.avg_volume(data, period=4) == 100.0  # All values are 100
     
     def test_edge_case_zero_volume(self):
         """Test calculations with zero volume."""
@@ -167,7 +167,7 @@ class TestVolumeCalculations:
         
         # vol_ratio should return None due to division by zero
         assert VolumeCalculations.vol_ratio(data, period=3) is None
-        assert VolumeCalculations.avg_volume(data, period=4) == 0.0
+        assert VolumeCalculations.avg_volume(data, period=4) == 0.0  # Average of zeros is zero
     
     def test_edge_case_single_data_point(self):
         """Test calculations with single data point."""
@@ -176,7 +176,7 @@ class TestVolumeCalculations:
         assert VolumeCalculations.vol_ratio(data, period=3) is None
         assert VolumeCalculations.volume_trend(data, period=3) == VolumeTrend.STABLE
         assert VolumeCalculations.volume_surge(data, period=3) is None
-        assert VolumeCalculations.avg_volume(data, period=3) == 100.0
+        assert VolumeCalculations.avg_volume(data, period=3) is None  # Now requires at least 2 points
         assert VolumeCalculations.volume_momentum(data, period=3) is None
         assert VolumeCalculations.relative_volume(data, period=3) is None
     
