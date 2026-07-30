@@ -1,6 +1,6 @@
 # Strategy Abstraction Plan — PolyAlpha
 
-> **Status:** Phases 1–4 implemented. Phases 5–7 planned.
+> **Status:** Phases 1–5 implemented. Phases 6–8 planned.
 
 Every strategy example (~200 lines each) is ~80% boilerplate:
 
@@ -80,12 +80,42 @@ Also available on `StrategyContext` inside a `BotHub` / `StrategySuite`.
 - Added comprehensive unit tests in `tests/unit/core/test_windows.py`
 - Updated documentation in `docs/bot.md` and `README.md`
 
-### 3. `ctx.binance.vol_ratio` + `change_pct` —  (`bot_hub.py`)
+### 3. `Calculations Library` — ✅ (`calculations/`)
+
+Unified calculation library for all data sources with modular, reusable functions:
 
 ```python
-ctx.binance.vol_ratio(10)   # current vol / avg of last 10 candles
-ctx.binance.change_pct(3)   # price change % over N candles
+from polyalpha.calculations import MarketCalculations, VolumeCalculations
+
+# Universal price calculations (all sources)
+MarketCalculations.change_pct(data, period=1)     # % change over N periods
+MarketCalculations.change_abs(data, period=1)     # absolute price change
+MarketCalculations.rate_of_change(data, period=1) # speed of change per second
+MarketCalculations.trend(data, period=1)          # UP/DOWN/NEUTRAL
+MarketCalculations.direction(data, period=1)       # "up"/"down"/"flat"
+MarketCalculations.volatility(data, period=10)     # price volatility
+MarketCalculations.high(data, period=10)          # highest price
+MarketCalculations.low(data, period=10)           # lowest price
+MarketCalculations.range(data, period=10)         # price range
+
+# Volume calculations (Binance/Coinbase only)
+VolumeCalculations.vol_ratio(data, period=10)      # current / avg volume
+VolumeCalculations.volume_trend(data, period=5)    # INCREASING/DECREASING/STABLE
+VolumeCalculations.volume_surge(data, multiplier=2.0) # detect volume spikes
+VolumeCalculations.avg_volume(data, period=10)    # average volume
+VolumeCalculations.volume_momentum(data, period=5) # volume % change
+VolumeCalculations.relative_volume(data, percentile=0.75) # percentile-based
 ```
+
+**Implementation Details:**
+- Created `src/polyalpha/calculations/` folder with modular calculation functions
+- `market_calculations.py` - universal price calculations for all data sources
+- `volume_calculations.py` - volume-specific calculations for Binance/Coinbase
+- `base_accessor.py` - base class integrating TimeWindow with calculation methods
+- `chainlink_accessor.py` - Chainlink-specific accessor with price calculations only
+- Updated `BinanceAccessor` in `bot_hub.py` to use calculation library with fallback support
+- All calculations are source-aware (Chainlink has no volume, Binance has both)
+- Added comprehensive unit tests (121 tests, all passing)
 
 ### 4. `StrategySuite` — Run N Strategies on One Stream —  (`strategy/suite.py`)
 
@@ -101,9 +131,9 @@ suite.run()
 - No duplicate CL windows — shared across strategies via `TimeWindow`
 - Extensible: add any data source by subclassing or adding to context
 
-### 5. `TimeWindow` — Reusable Rolling Window —  (`windows.py`)
+### 5. `TimeWindow` + `BaseAccessor` — Reusable Infrastructure — ✅ (`windows.py`, `calculations/`)
 
-Generic, thread-safe, prunes old entries. Works with any data source:
+**TimeWindow**: Generic, thread-safe rolling window with automatic pruning:
 
 ```python
 from polyalpha import TimeWindow
@@ -114,6 +144,29 @@ w.value                  # latest
 w.change_pct(30)         # % change over 30 s
 w.age_s                  # seconds since last update
 ```
+
+**BaseAccessor**: Source-aware calculation methods using TimeWindow:
+
+```python
+from polyalpha.calculations import BaseAccessor, ChainlinkAccessor
+
+# Chainlink accessor (price calculations only)
+cl_accessor = ChainlinkAccessor(window)
+cl_accessor.change_pct(30)    # % change over 30 seconds
+cl_accessor.trend(60)         # trend direction
+cl_accessor.volatility(120)   # price volatility
+
+# Future: Coinbase accessor (price + volume calculations)
+# cb_accessor = CoinbaseAccessor(window)
+# cb_accessor.vol_ratio(10)   # volume calculations available
+```
+
+**Implementation Details:**
+- `TimeWindow` provides thread-safe rolling window infrastructure
+- `BaseAccessor` integrates TimeWindow with calculation library
+- Each data source has specific accessor (Chainlink, Binance, future Coinbase)
+- Accessors automatically adapt to available data (price-only vs price+volume)
+- All calculation methods are consistent across data sources
 
 ### 6. `ConfigurableStrategy` — Parameter-Only Strategies —  (`strategy/base.py`)
 
@@ -133,13 +186,14 @@ Auto-generates signal from CL threshold + price zone.
 
 | Phase | What | Status |
 |-------|------|--------|
-| P1 | Add `Strategy` base class, `Signal`, `SignalResult` |  |
+| P1 | Add `Strategy` base class, `Signal`, `SignalResult` | ✅ Done |
 | P2 | Add `ctx.cl.change_pct(30/60/90)` helpers | ✅ Done |
-| P3 | Add `ctx.binance.vol_ratio`, `ctx.binance.change_pct` |  |
-| P4 | Add `StrategySuite` with shared stream |  |
-| P5 | Add `from_config()` for parameter-only strats |   |
+| P3 | Add calculations library with market & volume calculations | ✅ Done |
+| P4 | Add `StrategySuite` with shared stream | ✅ Done |
+| P5 | Add `from_config()` for parameter-only strats | ✅ Done |
 | P6 | Port M41, M42, B1/B21 to new base | 📋 Planned |
 | P7 | Remove example boilerplate (argparse, logging, tg, etc.) | 📋 Planned |
+| P8 | Add Coinbase accessor with price + volume calculations | 📋 Future |
 
 ---
 

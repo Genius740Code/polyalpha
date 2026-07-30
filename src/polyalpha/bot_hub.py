@@ -294,6 +294,7 @@ class BinanceAccessor:
 
     Fetches Binance klines once per candle (auto-refreshed on each tick).
     Provides indicators computed on Binance spot price data (not Polymarket).
+    Now integrated with calculation library for enhanced price and volume analysis.
 
     Usage
     -----
@@ -301,6 +302,8 @@ class BinanceAccessor:
         >>> ctx.binance.macd(12, 26, 9)     # MACD on Binance BTC data
         >>> ctx.binance.price_change(3)     # BTC spot change over N candles
         >>> ctx.binance.price_up(2)         # BTC spot went up over N candles
+        >>> ctx.binance.change_pct(30)      # % change over 30 seconds (new)
+        >>> ctx.binance.vol_ratio(10)       # volume ratio (new)
     """
 
     def __init__(self, asset: str = "BTC", timeframe: str = "5m"):
@@ -309,6 +312,17 @@ class BinanceAccessor:
         self._data: Optional[pd.DataFrame] = None
         self._last_candle_key: Optional[str] = None
         self._feed: Optional[object] = None
+        
+        # Try to load calculation library for enhanced methods
+        try:
+            from .calculations import MarketCalculations, VolumeCalculations
+            self._market_calc = MarketCalculations()
+            self._volume_calc = VolumeCalculations()
+            self._has_calculations = True
+        except ImportError:
+            self._market_calc = None
+            self._volume_calc = None
+            self._has_calculations = False
 
     def _lazy_init(self) -> None:
         if self._feed is not None:
@@ -446,6 +460,215 @@ class BinanceAccessor:
             return None if (pd is not None and pd.isna(val)) else float(val)
         except Exception:
             return None
+    
+    # ── Enhanced Calculation Methods (using calculation library) ───────────────
+    
+    def change_pct(self, candles_back: int = 1) -> Optional[float]:
+        """
+        Percentage price change over N candles using calculation library.
+        
+        Parameters
+        ----------
+        candles_back : int
+            Number of candles back to compare (default: 1).
+        
+        Returns
+        -------
+        float | None
+            Percentage change as decimal, or None if insufficient data.
+        """
+        if not self._has_calculations:
+            # Fallback to existing method
+            change = self.price_change_percent(candles_back)
+            return change / 100.0 if change is not None else None
+        
+        self._refresh()
+        if self._data is None or len(self._data) <= candles_back:
+            return None
+        
+        close_data = self._data["close"].tolist()
+        return self._market_calc.change_pct(close_data, candles_back)
+    
+    def change_abs(self, candles_back: int = 1) -> Optional[float]:
+        """
+        Absolute price change over N candles using calculation library.
+        
+        Parameters
+        ----------
+        candles_back : int
+            Number of candles back to compare (default: 1).
+        
+        Returns
+        -------
+        float | None
+            Absolute price change, or None if insufficient data.
+        """
+        if not self._has_calculations:
+            # Fallback to existing method
+            return self.price_change(candles_back)
+        
+        self._refresh()
+        if self._data is None or len(self._data) <= candles_back:
+            return None
+        
+        close_data = self._data["close"].tolist()
+        return self._market_calc.change_abs(close_data, candles_back)
+    
+    def vol_ratio(self, period: int = 10) -> Optional[float]:
+        """
+        Current volume as ratio to average volume over N candles.
+        
+        Parameters
+        ----------
+        period : int
+            Number of candles to calculate average (default: 10).
+        
+        Returns
+        -------
+        float | None
+            Volume ratio, or None if insufficient data or calculations unavailable.
+        """
+        if not self._has_calculations:
+            return None
+        
+        self._refresh()
+        if self._data is None or len(self._data) <= period:
+            return None
+        
+        volume_data = self._data["volume"].tolist()
+        return self._volume_calc.vol_ratio(volume_data, period)
+    
+    def volume_trend(self, period: int = 5, threshold: float = 0.1) -> Optional[str]:
+        """
+        Determine volume trend direction over N candles.
+        
+        Parameters
+        ----------
+        period : int
+            Number of candles to analyze (default: 5).
+        threshold : float
+            Minimum relative change to consider a trend (default: 0.1).
+        
+        Returns
+        -------
+        str | None
+            "increasing", "decreasing", or "stable". None if insufficient data.
+        """
+        if not self._has_calculations:
+            return None
+        
+        self._refresh()
+        if self._data is None or len(self._data) <= period:
+            return None
+        
+        volume_data = self._data["volume"].tolist()
+        trend = self._volume_calc.volume_trend(volume_data, period, threshold)
+        return trend.value if trend else "stable"
+    
+    def volume_surge(self, multiplier: float = 2.0, period: int = 10) -> Optional[bool]:
+        """
+        Detect sudden volume surge compared to recent average.
+        
+        Parameters
+        ----------
+        multiplier : float
+            Multiple of average volume to consider a surge (default: 2.0).
+        period : int
+            Number of candles to calculate average (default: 10).
+        
+        Returns
+        -------
+        bool | None
+            True if volume surge detected, None if insufficient data.
+        """
+        if not self._has_calculations:
+            return None
+        
+        self._refresh()
+        if self._data is None or len(self._data) <= period:
+            return None
+        
+        volume_data = self._data["volume"].tolist()
+        return self._volume_calc.volume_surge(volume_data, multiplier, period)
+    
+    def trend(self, candles_back: int = 1, threshold: float = 0.0) -> Optional[str]:
+        """
+        Determine overall price trend direction over N candles.
+        
+        Parameters
+        ----------
+        candles_back : int
+            Number of candles back to analyze (default: 1).
+        threshold : float
+            Minimum absolute change to consider a trend (default: 0.0).
+        
+        Returns
+        -------
+        str | None
+            "up", "down", or "neutral". None if insufficient data.
+        """
+        if not self._has_calculations:
+            return None
+        
+        self._refresh()
+        if self._data is None or len(self._data) <= candles_back:
+            return None
+        
+        close_data = self._data["close"].tolist()
+        trend = self._market_calc.trend(close_data, candles_back, threshold)
+        return trend.value if trend else "neutral"
+    
+    def direction(self, candles_back: int = 1) -> Optional[str]:
+        """
+        Get simple direction of price change (up/down/flat).
+        
+        Parameters
+        ----------
+        candles_back : int
+            Number of candles back to compare (default: 1).
+        
+        Returns
+        -------
+        str | None
+            "up", "down", or "flat". None if insufficient data.
+        """
+        if not self._has_calculations:
+            # Fallback to existing method
+            is_up = self.price_up(candles_back)
+            if is_up is None:
+                return None
+            return "up" if is_up else "down"
+        
+        self._refresh()
+        if self._data is None or len(self._data) <= candles_back:
+            return None
+        
+        close_data = self._data["close"].tolist()
+        return self._market_calc.direction(close_data, candles_back)
+    
+    def volatility(self, period: int = 10) -> Optional[float]:
+        """
+        Calculate price volatility (standard deviation) over N candles.
+        
+        Parameters
+        ----------
+        period : int
+            Number of candles to analyze (default: 10).
+        
+        Returns
+        -------
+        float | None
+            Standard deviation of prices, or None if insufficient data.
+        """
+        if not self._has_calculations:
+            return None
+        
+        self._refresh()
+        if self._data is None or len(self._data) < 2:
+            return None
+        
+        close_data = self._data["close"].tolist()
+        return self._market_calc.volatility(close_data, period)
 
 
 # ── Order Book Accessor ────────────────────────────────────────────────────────

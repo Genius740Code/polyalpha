@@ -5,6 +5,7 @@ Provides simple Telegram notification support for trading events.
 Designed to be extensible for future notification types.
 """
 
+import asyncio
 import logging
 import os
 from typing import Optional
@@ -73,15 +74,27 @@ class TelegramNotifier:
         if not self._is_enabled():
             return False
         
+        async def _async_send() -> bool:
+            try:
+                await self._bot.send_message(chat_id=self._chat_id, text=message, parse_mode="HTML")
+                return True
+            except TelegramError as e:
+                log.error("Failed to send Telegram message: %s", e)
+                return False
+            except Exception:
+                log.exception("Unexpected error sending Telegram message")
+                return False
+        
         try:
-            self._bot.send_message(chat_id=self._chat_id, text=message, parse_mode="HTML")
+            loop = asyncio.get_running_loop()
+            asyncio.create_task(_async_send())
             return True
-        except TelegramError as e:
-            log.error("Failed to send Telegram message: %s", e)
-            return False
-        except Exception:
-            log.exception("Unexpected error sending Telegram message")
-            return False
+        except RuntimeError:
+            try:
+                return asyncio.run(_async_send())
+            except RuntimeError as e:
+                log.error("Failed to send Telegram message: %s", e)
+                return False
     
     def send_buy(
         self,
