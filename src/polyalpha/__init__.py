@@ -141,7 +141,7 @@ _setup_logging()
 _setup_logging()
 
 from .client import Client
-from .core import Market
+from .core import Market, TimeSync
 from .core.env import load_env_file, get_env_config
 from .stream import Stream
 from .bot import Bot
@@ -208,7 +208,11 @@ from .ai import (
     TradingSignal,
 )
 
-__version__ = "0.2.2"
+try:
+    from importlib.metadata import version as _mversion
+    __version__ = _mversion("polyalpha")
+except Exception:
+    __version__ = "0.2.29"
 
 __all__ = [
     # Main entry point

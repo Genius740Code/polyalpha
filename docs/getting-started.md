@@ -9,7 +9,7 @@ Install PolyAlpha, set up your environment, and run your first script.
 
 ## Installation
 
-Clone the repository and install from source (PolyAlpha is not on PyPI):
+Clone the repository and install from source:
 
 ```bash
 git clone https://github.com/your-org/polyalpha.git
@@ -73,7 +73,7 @@ print(f"Trading: {market.question}")
 from time import sleep
 
 stream = client.stream(market)
-stream.on("price", lambda price: print(f"Price: {price}"))
+stream.on("price")(lambda up, down: print(f"UP={up:.4f}  DOWN={down:.4f}"))
 stream.start(background=True)
 sleep(10)
 stream.stop()
@@ -104,7 +104,7 @@ print(f"Market: {market.question}")
 print(f"UP: {market.up_price}, DOWN: {market.down_price}")
 
 stream = client.stream(market)
-stream.on("price", lambda price: print(f"Price: {price}"))
+stream.on("price")(lambda up, down: print(f"UP={up:.4f}  DOWN={down:.4f}"))
 stream.start(background=True)
 
 order = client.paper.buy(market, side="UP", amount=10.0)

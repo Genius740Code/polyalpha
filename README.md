@@ -70,7 +70,7 @@ stream.up
 stream.down
 ```
 
-See [`examples/stream.py`](./examples/stream.py) and [`examples/async_stream.py`](./examples/async_stream.py).
+See [`examples/stream.py`](./examples/stream.py).
 
 ---
 
@@ -85,7 +85,6 @@ client.paper.buy(market, side="UP", amount=10.0)
 client.paper.sell_position(market, side="UP", amount=5.0)
 client.paper.limit(market, side="UP", price=0.92, amount=25.0)
 client.paper.cancel(order.id)
-client.paper.cancel_all()
 
 client.paper.positions()       # open positions
 client.paper.all_positions()   # all, incl. resolved
@@ -281,12 +280,12 @@ client = polyalpha.Client(
 client.real.buy(market, side="UP", amount=10.0)
 client.real.cancel(order.id)
 client.real.positions()
-client.real.order_history()
+client.real.balance
 ```
 
 **Real trading presets:** `CONSERVATIVE`, `REALISTIC`, `AGGRESSIVE`, `MINIMAL`, `HIGH_FREQUENCY`, `POSITION_TRADER`, `HEDGING_ENABLED`, `TEST`.
 
-See [`examples/real_trading.py`](./examples/real_trading.py) and [`examples/clob_client_example.py`](./examples/clob_client_example.py).
+Real trading is available via `client.real` — see `docs/trading.md` for the full API.
 
 ---
 
@@ -308,7 +307,7 @@ client.paper.auto_redeem.get_redeem_history()
 
 Triggers: time interval, market count, value threshold. Safety: dry-run, min age, max value caps.
 
-See [`examples/auto_redeem.py`](./examples/auto_redeem.py).
+Auto-redeem is available via `client.paper.auto_redeem` — see `docs/trading.md` for usage.
 
 ---
 
@@ -336,7 +335,7 @@ from polyalpha.orderbook import MomentumStrategy, SpreadStrategy, BacktestEngine
 
 **Strategies:** `MomentumStrategy`, `SpreadStrategy` (market making), `ImbalanceStrategy`.
 
-See [`examples/orderbook_example.py`](./examples/orderbook_example.py).
+See `docs/orderbook.md` for the full order book API.
 
 ---
 
@@ -369,7 +368,7 @@ sig.summary()  # all signals at once
 
 **Data sources:** `binance` (default), `chainlink`, `coingecko`, `custom`.
 
-See [`examples/analysis.py`](./examples/analysis.py).
+See [`examples/analysis.py`](./examples/analysis.py) and [`examples/price_change_signals.py`](./examples/price_change_signals.py).
 
 ---
 
@@ -391,7 +390,7 @@ signal.side           # "UP" | "DOWN" | None
 signal.confidence     # 0.0 – 1.0
 ```
 
-See [`examples/ai_trading.py`](./examples/ai_trading.py).
+AI analysis is available via `client.ai` — see `docs/ai.md` for usage.
 
 ---
 
@@ -409,7 +408,7 @@ client.paper.report.save_png("report.png")    # requires kaleido
 
 **12 charts:** equity curve, underwater drawdown, P&L per trade, win/loss distribution, monthly returns, rolling Sharpe, correlation matrix, P&L hourly heatmap.
 
-See [`examples/report.py`](./examples/report.py) and [`examples/reporting.py`](./examples/reporting.py).
+See `docs/reporting.md` for the full reporting API.
 
 ---
 
@@ -427,7 +426,7 @@ db.export_json("trades.json")
 db.export_csv("trades.csv")
 ```
 
-See [`examples/database_example.py`](./examples/database_example.py) and [`examples/database_security_example.py`](./examples/database_security_example.py).
+See `docs/database.md` for the full database API.
 
 ---
 
@@ -446,7 +445,7 @@ Sniper(SniperConfig(
 )).run()
 ```
 
-See [`examples/sniper.py`](./examples/sniper.py) and [`examples/sniper_ta.py`](./examples/sniper_ta.py).
+See [`examples/sniper.py`](./examples/sniper.py), [`examples/sniper_minimal.py`](./examples/sniper_minimal.py), and [`examples/sniper_ta.py`](./examples/sniper_ta.py).
 
 ---
 
@@ -464,7 +463,7 @@ tracker.export_json("trades.json")
 tracker.export_csv("trades.csv")
 ```
 
-See [`examples/tracker.py`](./examples/tracker.py).
+See `docs/bot.md` for Tracker usage.
 
 ---
 
@@ -542,33 +541,25 @@ client = polyalpha.Client(
 ## Examples index
 
 | File | What it shows |
-|---|---|
-| [`examples/market.py`](./examples/market.py) | Market discovery and slug resolution |
+|---|---|---|
 | [`examples/stream.py`](./examples/stream.py) | Price streaming with all event hooks |
 | [`examples/paper.py`](./examples/paper.py) | Paper trading — buy, sell, limit, summary |
 | [`examples/advanced_orders.py`](./examples/advanced_orders.py) | Trailing stop, OCO, take-profit |
+| [`examples/conditions.py`](./examples/conditions.py) | Composable trading conditions |
 | [`examples/bot_simple.py`](./examples/bot_simple.py) | Bot with on_tick strategy |
 | [`examples/bot_hub.py`](./examples/bot_hub.py) | BotHub — multi-strategy from one connection |
 | [`examples/sniper.py`](./examples/sniper.py) | Sniper time-window bot |
+| [`examples/sniper_minimal.py`](./examples/sniper_minimal.py) | Minimal Sniper bot (~10 lines) |
 | [`examples/sniper_ta.py`](./examples/sniper_ta.py) | Sniper + technical analysis |
 | [`examples/analysis.py`](./examples/analysis.py) | TA data feed, indicators, signals |
-| [`examples/ai_trading.py`](./examples/ai_trading.py) | AI-powered analysis + signals |
-| [`examples/orderbook_example.py`](./examples/orderbook_example.py) | Order book REST + WS + analytics |
-| [`examples/report.py`](./examples/report.py) | Report engine — show, HTML, PNG |
-| [`examples/reporting.py`](./examples/reporting.py) | Full reporting with metrics + charts |
-| [`examples/real_trading.py`](./examples/real_trading.py) | Live CLOB trading |
-| [`examples/auto_redeem.py`](./examples/auto_redeem.py) | Scheduled auto-redeem |
-| [`examples/tracker.py`](./examples/tracker.py) | P&L tracker + export |
 | [`examples/multi_wallet_paper.py`](./examples/multi_wallet_paper.py) | Multi-wallet paper trading |
-| [`examples/database_example.py`](./examples/database_example.py) | SQLite trade persistence |
-| [`examples/database_security_example.py`](./examples/database_security_example.py) | Encrypted database |
-| [`examples/async_bots.py`](./examples/async_bots.py) | Async bot strategies |
 | [`examples/risk_management.py`](./examples/risk_management.py) | Risk limits and controls |
 | [`examples/pairsum_arb.py`](./examples/pairsum_arb.py) | Arbitrage example |
-| [`examples/pre_trade_checks.py`](./examples/pre_trade_checks.py) | Pre-trade validation |
-| [`examples/fee_rebates.py`](./examples/fee_rebates.py) | Fee rebate tracking |
-| [`examples/portfolio_analytics.py`](./examples/portfolio_analytics.py) | Portfolio-level analysis |
-| [`examples/weather_config_example.py`](./examples/weather_config_example.py) | Weather market example |
+| [`examples/price_change_signals.py`](./examples/price_change_signals.py) | Price change detection signals |
+| [`examples/chainlink_btc_scraper.py`](./examples/chainlink_btc_scraper.py) | Chainlink BTC data scraper |
+| [`examples/m42_flb.py`](./examples/m42_flb.py) | M42 FLB strategy |
+| [`examples/multi_arb_bot.py`](./examples/multi_arb_bot.py) | Multi-arbitrage bot |
+| [`examples/telegram_notifications.py`](./examples/telegram_notifications.py) | Telegram notification integration |
 
 ---
 

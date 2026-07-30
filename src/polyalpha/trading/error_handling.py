@@ -277,6 +277,38 @@ class CircuitBreaker:
             log.exception("Unexpected exception in CircuitBreaker '%s'", self.name)
             raise
 
+    async def acall(self, func, *args, **kwargs) -> Any:
+        """
+        Async version of call() — execute an async function through the circuit breaker.
+
+        Parameters, return, and raises are identical to call().
+        """
+        with self._lock:
+            self._total_requests += 1
+            if self._state == CircuitBreakerState.OPEN:
+                if self._should_attempt_reset():
+                    self._state = CircuitBreakerState.HALF_OPEN
+                    self._failure_count = 0
+                    self._success_count = 0
+                    log.info("CircuitBreaker '%s' transitioning to HALF_OPEN", self.name)
+                else:
+                    log.warning("CircuitBreaker '%s' is open, blocking request", self.name)
+                    raise CircuitBreakerOpenError(
+                        f"Circuit breaker '{self.name}' is open. "
+                        f"Blocking requests until {self._config.recovery_timeout}s after last failure."
+                    )
+
+        try:
+            result = await func(*args, **kwargs)
+            self._record_success()
+            return result
+        except self._expected_exception as e:
+            self._record_failure(e)
+            raise
+        except Exception:
+            log.exception("Unexpected exception in CircuitBreaker '%s'", self.name)
+            raise
+
     def reset(self) -> None:
         """Manually reset the circuit breaker to CLOSED state."""
         with self._lock:

@@ -1,18 +1,15 @@
-# Strategy & Example Catalog
+# PolyAlpha Strategy & Example Catalog — Polymarket Trading Bots
 
-## Overview
+Trading strategies, bot patterns, and example scripts for [PolyAlpha](https://github.com/Genius740Code/polyalpha) — the Python SDK for [Polymarket](https://polymarket.com) prediction markets. Covers declarative bot strategies, arbitrage, technical analysis, paper trading, and sniper bots.
 
-This directory (`examples/`) contains 15 runnable Python scripts demonstrating every major SDK pattern in `polyalpha`.
-
-**Run any example:**
+**Run any example** (paper mode, no API keys needed):
 
 ```bash
+pip install polyalpha[analysis]
 python examples/bot_simple.py
 python examples/sniper.py
 python examples/paper.py
 ```
-
-All examples use **paper trading** by default. No API keys required — just `pip install polyalpha[analysis]` and go.
 
 ---
 
@@ -38,9 +35,9 @@ All examples use **paper trading** by default. No API keys required — just `pi
 
 ---
 
-## Per-Strategy Breakdown
+## Bot Strategies
 
-### 1. `bot_simple.py` — Minimal Bot
+### 1. `bot_simple.py` — Minimal Polymarket Trading Bot
 
 **Goal:** Demonstrate the simplest possible `Bot` with two entry conditions.
 
@@ -53,7 +50,7 @@ All examples use **paper trading** by default. No API keys required — just `pi
 
 ---
 
-### 2. `bot_hub.py` — BotHub Multi-Strategy
+### 2. `bot_hub.py` — Multi-Strategy BotHub
 
 **Goal:** Run 3 strategies side-by-side under one `BotHub`, compare results.
 
@@ -86,7 +83,7 @@ def on_tick(price):
 
 ---
 
-### 3. `sniper.py` — Full Sniper
+### 3. `sniper.py` — Polymarket Sniper Bot
 
 **Goal:** Complete time-window sniper with lifecycle event callbacks.
 
@@ -114,7 +111,7 @@ def on_tick(price):
 
 ---
 
-### 5. `sniper_ta.py` — Sniper + Technical Analysis
+### 5. `sniper_ta.py` — Sniper with Technical Analysis
 
 **Goal:** Add RSI and SMA thresholds to sniper entry logic.
 
@@ -126,6 +123,8 @@ def on_tick(price):
 | **Expected** | Sniper only arms when TA conditions are met, reducing false entries. |
 
 ---
+
+## Paper Trading Examples
 
 ### 6. `paper.py` — PaperEngine Basics
 
@@ -166,7 +165,7 @@ def on_tick(price):
 
 ---
 
-### 9. `multi_wallet_paper.py` — Wallet Selection
+### 9. `multi_wallet_paper.py` — Wallet Selection Strategies
 
 **Goal:** Route trades across multiple paper wallets.
 
@@ -179,7 +178,9 @@ def on_tick(price):
 
 ---
 
-### 10. `stream.py` — Real-Time Price Stream
+## Market Data & Streaming
+
+### 10. `stream.py` — Real-Time Polymarket Price Stream
 
 **Goal:** Subscribe to a market price stream and render a live UP/DOWN bar chart.
 
@@ -191,6 +192,8 @@ def on_tick(price):
 | **Expected** | Live price updates printed as ASCII bars. UP and DOWN prices update in real-time. Stream auto-reconnects on disconnect. |
 
 ---
+
+## Technical Analysis & Signals
 
 ### 11. `analysis.py` — DataFeed + Indicators + Signals
 
@@ -229,9 +232,11 @@ entry = signal.all_true(
 
 ---
 
+## Arbitrage Bots
+
 ### 13. `pairsum_arb.py` — Cross-Asset Pair-Sum Arbitrage
 
-**Goal:** Scan multiple markets for pricing gaps between related assets.
+**Goal:** Scan multiple Polymarket markets for pricing gaps between related assets.
 
 | | |
 |---|---|
@@ -255,7 +260,9 @@ entry = signal.all_true(
 
 ---
 
-### 15. `conditions.py` — Declarative Conditions API
+## Declarative Conditions API
+
+### 15. `conditions.py` — Composable Trading Conditions
 
 **Goal:** Show every condition builder and combinator in action.
 

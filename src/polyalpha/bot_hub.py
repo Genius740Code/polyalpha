@@ -689,7 +689,7 @@ class StrategyContext:
         order = self._paper.buy(market=self._market, side=side, amount=amount)
         
         # Send Telegram notification if configured
-        if self._hub._telegram and order:
+        if self._hub is not None and self._hub._telegram and order:
             price = getattr(self._stream, side.lower(), None) or self.price.up if side == "UP" else self.price.down
             self._hub._telegram.send_buy(
                 asset=self._asset,
@@ -714,7 +714,7 @@ class StrategyContext:
         )
         
         # Send Telegram notification if configured
-        if self._hub._telegram and order:
+        if self._hub is not None and self._hub._telegram and order:
             price = getattr(self._stream, side.lower(), None) or self.price.up if side == "UP" else self.price.down
             sell_amount = amount if amount else (order.amount if hasattr(order, 'amount') else 0)
             self._hub._telegram.send_sell(

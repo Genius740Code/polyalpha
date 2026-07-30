@@ -97,7 +97,7 @@ See [testing.md](testing.md) for detailed testing guide.
 ```
 src/polyalpha/     — Package source
 tests/             — Test suite (unit, integration, e2e, performance, property)
-examples/          — 32 example scripts
+examples/          — Example scripts
 docs/              — Documentation
 ```
 
@@ -149,7 +149,7 @@ When adding new public API:
 
 ## Versioning
 
-The project follows [Semantic Versioning](https://semver.org/). Version is defined in `pyproject.toml` as `version = "0.2.01"` and exported as `polyalpha.__version__`.
+The project follows [Semantic Versioning](https://semver.org/). Version is defined in `pyproject.toml` and exported dynamically via `polyalpha.__version__` (reads from package metadata).
 
 Releases are published to PyPI automatically when a `v*` tag is pushed to GitHub (see `.github/workflows/publish.yml`).
 

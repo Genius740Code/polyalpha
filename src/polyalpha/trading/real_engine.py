@@ -100,6 +100,7 @@ class RealTradingEngine:
         polymarket_api_passphrase: str = "",
         config: Optional[RealTradingConfig] = None,
         db_path: Optional[str] = None,
+        db: Optional[TradeDatabase] = None,
         simulate: bool = False,
     ):
         # Configuration
@@ -162,7 +163,10 @@ class RealTradingEngine:
         # Database
         self._db: Optional[TradeDatabase] = None
         self._db_enabled: bool = False
-        if db_path:
+        if db:
+            self._db = db
+            self._db_enabled = True
+        elif db_path:
             self.enable_database(db_path)
 
         # Reporting

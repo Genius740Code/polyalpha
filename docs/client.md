@@ -33,6 +33,7 @@ client = polyalpha.Client()
 | `client.paper` | `PaperEngine` | Simulated paper trading (orders, positions, P&L) |
 | `client.ai` | `OpenRouterClient \| None` | AI-powered analysis (if API key provided) |
 | `client.real` | `RealTradingEngine \| None` | Real trading with actual funds (if credentials provided) |
+| `client.db` | `TradeDatabase \| None` | SQLite trade database (if `db_path` provided) |
 
 ## Methods
 
@@ -102,6 +103,20 @@ client = polyalpha.Client(
     balance=100.0,
     openrouter_api_key="sk-or-...",
 )
+```
+
+**With database** — persist and query trades:
+```python
+client = polyalpha.Client(balance=500.0, db_path="./trades.db")
+
+# Record a buy
+client.db.buy_trade(market_slug="btc-up-2025", market_id="0x...", side="UP", price=0.85, amount=20.0)
+
+# Record a sell
+client.db.sell_trade(trade_id=1, exit_price=0.92)
+
+# View portfolio
+client.db.portfolio()
 ```
 
 **Full** — paper + AI + real trading + database:

@@ -135,6 +135,20 @@ def build_tweet_slug(subject: str, start_ts: int, end_ts: int | None = None, mon
     
     return f"{subject}-of-tweets-{start_month}-{start_day}-{end_month}-{end_day}"
 
+# ── NTP / Clock Sync ──────────────────────────────────────────────────────────
+
+DEFAULT_NTP_SERVERS: list[str] = [
+    "pool.ntp.org",
+    "time.google.com",
+    "time.cloudflare.com",
+    "time.windows.com",
+]
+NTP_TIMEOUT = 5.0       # Socket timeout per NTP request (seconds)
+NTP_RETRIES = 2         # Attempts per server before falling through
+NTP_CACHE_TTL = 300.0   # Cache TTL for sync results (5 minutes)
+DRIFT_WARN_MS = 2_000   # |offset| > this → warning
+DRIFT_FAIL_MS = 10_000  # |offset| > this → check fails
+
 # ── Rate Limiting ───────────────────────────────────────────────────────────────
 
 DEFAULT_RATE_LIMIT_MAX_REQUESTS = 100  # Default max requests per period for rate limiter

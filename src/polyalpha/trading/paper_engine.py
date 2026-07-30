@@ -76,12 +76,15 @@ class PaperEngine:
         Path to SQLite database file for trade persistence.
     """
 
-    def __init__(self, balance: float = 100.0, config: Optional[PaperConfig] = None, db_path: Optional[str] = None):
+    def __init__(self, balance: float = 100.0, config: Optional[PaperConfig] = None, db_path: Optional[str] = None, db: Optional[TradeDatabase] = None):
         self._config: PaperConfig = config or PaperConfig()
         self._report: Optional[ReportEngine] = None
         self._db: Optional[TradeDatabase] = None
         self._db_enabled: bool = False
-        if db_path:
+        if db:
+            self._db = db
+            self._db_enabled = True
+        elif db_path:
             self.enable_database(db_path)
 
         # Multi-wallet support

@@ -19,6 +19,7 @@ class FakeBot:
         self._stream = None
         self._tick_count = 0
         self._trade_count = 0
+        self._telegram = None
 
 
 @pytest.fixture
