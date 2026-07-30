@@ -121,6 +121,7 @@ class Stream:
 
         self._handlers: dict[str, list[Callable]] = defaultdict(list)
         self._ws:          object | None           = None
+        self._ws_lock:     threading.Lock          = threading.Lock()
         self._thread:      threading.Thread | None = None
         self._stop:        threading.Event         = threading.Event()
         self._price_lock:  threading.Lock          = threading.Lock()
@@ -246,8 +247,18 @@ class Stream:
 
         while not self._is_stopped():
             try:
-                await self._connect_async()
+                if self._circuit_breaker:
+                    await self._circuit_breaker.acall(self._connect_async)
+                else:
+                    await self._connect_async()
                 return
+
+            except CircuitBreakerOpenError:
+                recovery = getattr(self._circuit_breaker, 'recovery_timeout', 60) if self._circuit_breaker else 60
+                log.warning("Stream: circuit breaker is open, blocking connection attempt")
+                await asyncio.sleep(recovery)
+                continue
+
             except StreamDisconnected as exc:
                 self._consecutive_failures += 1
                 if self._consecutive_failures > self.retries:
@@ -283,9 +294,12 @@ class Stream:
         self._stop.set()
         if self._async_stop:
             self._async_stop.set()
-        if self._ws:
+        with self._ws_lock:
+            ws = self._ws
+            self._ws = None
+        if ws:
             try:
-                self._ws.close()  # type: ignore[union-attr]
+                ws.close()  # type: ignore[union-attr]
             except Exception:
                 log.debug("Error closing WebSocket connection", exc_info=True)
 
@@ -373,7 +387,8 @@ class Stream:
             on_error   = lambda ws, exc:     self._on_ws_error(ws, exc),
             on_close   = lambda ws, c, m:   self._on_ws_close(ws, c, m),
         )
-        self._ws = ws
+        with self._ws_lock:
+            self._ws = ws
 
         # Disable the library's binary WebSocket ping — we use text PING/PONG
         ws.run_forever(ping_interval=None, ping_timeout=None)
@@ -446,8 +461,8 @@ class Stream:
                 self._ping_count += 1
                 await ws.send("PING")
                 log.debug("Stream: → PING")
-                self._check_stale_data()
-                self._check_missing_pong()
+                if self._check_stale_data() or self._check_missing_pong():
+                    break
             except Exception:
                 break
 
@@ -494,6 +509,8 @@ class Stream:
     def _on_open(self, ws, token_ids: list[str]) -> None:
         self._consecutive_failures = 0
         # Clear stale price state on reconnect
+        if self._token_prices:
+            log.info("Stream: reconnected — clearing stale price state")
         self._token_prices.clear()
         self._last_trade_prices.clear()
         self._emit("price_reset")
@@ -527,10 +544,10 @@ class Stream:
                 self._ping_count += 1
                 ws.send("PING")
                 log.debug("Stream: → PING")
-                self._check_stale_data()
-                self._check_missing_pong()
+                if self._check_stale_data() or self._check_missing_pong():
+                    break
             except Exception:
-                break   # socket gone; _on_ws_close will trigger reconnect
+                break   # socket gone; _on_ws_close / force_reconnect will trigger reconnect
 
     def _on_message(self, ws, raw: str) -> None:
         # Server-sent PING — reply immediately (no rate limit for control messages)
@@ -584,7 +601,10 @@ class Stream:
         # Don't emit here — the retry loop handles it
 
     def _on_ws_close(self, ws, code: int | None, message: str | None) -> None:
-        log.info("Stream: closed (code=%s)", code)
+        if code and code != 1000:
+            log.warning("Stream: closed abnormally (code=%s) — initiating reconnect", code)
+        else:
+            log.info("Stream: closed (code=%s)", code)
 
     # ── Message dispatch ───────────────────────────────────────────────────────
 
@@ -697,10 +717,10 @@ class Stream:
             pass
         self._publish_prices()
 
-    def _check_missing_pong(self) -> None:
-        """Log a warning if no PONG received within WS_PING_TIMEOUT of last PING."""
+    def _check_missing_pong(self) -> bool:
+        """Force reconnect if no PONG received within 3x WS_PING_TIMEOUT."""
         if self._last_ping_time <= 0:
-            return
+            return False
         elapsed = time.time() - self._last_ping_time
         if elapsed > WS_PING_TIMEOUT and not self._pong_warned:
             log.warning(
@@ -711,8 +731,17 @@ class Stream:
         elif elapsed <= WS_PING_TIMEOUT:
             self._pong_warned = False
 
-    def _check_stale_data(self) -> None:
-        """Log a warning if no price update has been received for STALE_DATA_SECONDS."""
+        if elapsed > WS_PING_TIMEOUT * 3:
+            log.warning(
+                "Stream: no PONG for %.1fs (market %s) — forcing reconnect",
+                elapsed, self.market.slug,
+            )
+            self._force_reconnect()
+            return True
+        return False
+
+    def _check_stale_data(self) -> bool:
+        """Force reconnect if no price update for 3x STALE_DATA_SECONDS."""
         elapsed = time.time() - self._last_price_time
         if elapsed > self.STALE_DATA_SECONDS and not self._stale_warned:
             log.warning(
@@ -722,6 +751,26 @@ class Stream:
             self._stale_warned = True
         elif elapsed <= self.STALE_DATA_SECONDS:
             self._stale_warned = False
+
+        if elapsed > self.STALE_DATA_SECONDS * 3:
+            log.warning(
+                "Stream: no price update for %.0fs (market %s) — forcing reconnect",
+                elapsed, self.market.slug,
+            )
+            self._force_reconnect()
+            return True
+        return False
+
+    def _force_reconnect(self) -> None:
+        """Close the current WebSocket so the retry loop reconnects."""
+        with self._ws_lock:
+            ws = self._ws
+            self._ws = None
+        if ws:
+            try:
+                ws.close()
+            except Exception:
+                pass
 
     def _publish_prices(self) -> None:
         """Map per-token prices → (up, down) and emit a 'price' event."""
