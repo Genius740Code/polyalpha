@@ -288,6 +288,101 @@ def strategy(ctx):
 
 Returns `None` if no price has been received yet (initial connect may take a few seconds).
 
+### Chainlink Calculations (`ctx.cl`)
+
+Enhanced Chainlink price window with calculation methods for price analysis.
+
+```python
+@bot.on_tick
+def strategy(ctx):
+    # Basic price window access
+    latest = ctx.cl.value              # latest Chainlink price
+    age = ctx.cl.age_s                # seconds since last update
+    
+    # Price change calculations
+    change_30s = ctx.cl.change_pct(30)   # % change over 30 seconds
+    change_60s = ctx.cl.change_pct(60)   # % change over 60 seconds
+    change_abs = ctx.cl.change_abs(30)    # absolute price change
+    
+    # Trend analysis
+    trend = ctx.cl.trend(60)              # UP/DOWN/NEUTRAL
+    direction = ctx.cl.direction(30)      # "up"/"down"/"flat"
+    
+    # Volatility
+    volatility = ctx.cl.volatility(120)   # price volatility
+    
+    # Price range
+    high = ctx.cl.high(60)               # highest price in period
+    low = ctx.cl.low(60)                # lowest price in period
+    price_range = ctx.cl.range(60)       # price range (high - low)
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `value` | `float \| None` | Latest Chainlink price |
+| `age_s` | `float` | Seconds since last update |
+| `change_pct(seconds)` | `float \| None` | Percentage change over time period |
+| `change_abs(seconds)` | `float \| None` | Absolute price change over time period |
+| `trend(seconds, threshold=0.0)` | `TrendDirection` | UP/DOWN/NEUTRAL trend direction |
+| `direction(seconds)` | `str \| None` | Simple direction: "up"/"down"/"flat" |
+| `volatility(seconds)` | `float \| None` | Price volatility (standard deviation) |
+| `high(seconds)` | `float \| None` | Highest price in time period |
+| `low(seconds)` | `float \| None` | Lowest price in time period |
+| `range(seconds)` | `float \| None` | Price range (high - low) |
+
+### Binance Accessor (`ctx.binance`)
+
+Enhanced Binance market data accessor with calculation library integration.
+
+```python
+@bot.on_tick
+def strategy(ctx):
+    # Basic Binance data
+    close = ctx.binance.close          # latest Binance close price
+    high = ctx.binance.high            # latest high
+    low = ctx.binance.low             # latest low
+    volume = ctx.binance.volume        # latest volume
+    
+    # Price calculations (using calculation library)
+    change_pct = ctx.binance.change_pct(3)    # % change over 3 candles
+    change_abs = ctx.binance.change_abs(3)    # absolute change over 3 candles
+    trend = ctx.binance.trend(3)              # trend direction
+    direction = ctx.binance.direction(3)      # "up"/"down"/"flat"
+    volatility = ctx.binance.volatility(10)   # price volatility
+    
+    # Volume calculations (Binance has volume data)
+    vol_ratio = ctx.binance.vol_ratio(10)          # current / avg volume
+    volume_trend = ctx.binance.volume_trend(5)    # INCREASING/DECREASING/STABLE
+    volume_surge = ctx.binance.volume_surge(2.0)  # detect volume spikes
+    avg_volume = ctx.binance.avg_volume(10)        # average volume
+    
+    # Technical indicators (existing functionality)
+    macd = ctx.binance.macd(12, 26, 9)    # MACD from Binance data
+    rsi = ctx.binance.rsi(14)              # RSI from Binance data
+    sma = ctx.binance.sma(20)              # SMA from Binance data
+    ema = ctx.binance.ema(12)              # EMA from Binance data
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `close` | `float \| None` | Latest Binance close price |
+| `high` | `float \| None` | Latest high price |
+| `low` | `float \| None` | Latest low price |
+| `volume` | `float \| None` | Latest volume |
+| `change_pct(candles_back)` | `float \| None` | % price change over N candles |
+| `change_abs(candles_back)` | `float \| None` | Absolute price change over N candles |
+| `trend(candles_back, threshold=0.0)` | `str \| None` | Trend direction: "up"/"down"/"neutral" |
+| `direction(candles_back)` | `str \| None` | Simple direction: "up"/"down"/"flat" |
+| `volatility(candles_back)` | `float \| None` | Price volatility |
+| `vol_ratio(period)` | `float \| None` | Current volume / average volume |
+| `volume_trend(period, threshold=0.1)` | `str \| None` | Volume trend: "increasing"/"decreasing"/"stable" |
+| `volume_surge(multiplier, period)` | `bool \| None` | True if volume surge detected |
+| `avg_volume(period)` | `float \| None` | Average volume over period |
+| `macd(fast, slow, signal)` | `MACDResult \| None` | MACD indicator |
+| `rsi(period)` | `float \| None` | RSI indicator |
+| `sma(period)` | `float \| None` | SMA indicator |
+| `ema(period)` | `float \| None` | EMA indicator |
+
 ### Binance Market Data (`ctx.binance`)
 
 Pulls OHLCV data from the free Binance REST API for external technical analysis (MACD, RSI, price momentum, etc.). Auto-refreshes once per candle — no redundant API calls.

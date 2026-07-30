@@ -110,6 +110,62 @@ client.paper.resolve(market, outcome="UP")
 
 See [`examples/paper.py`](./examples/paper.py) and [`examples/advanced_orders.py`](./examples/advanced_orders.py).
 
+---
+
+## Calculations library
+
+Unified calculation functions for market data analysis across all data sources (Chainlink, Binance, Coinbase).
+
+```python
+from polyalpha.calculations import MarketCalculations, VolumeCalculations
+
+# Universal price calculations (all data sources)
+MarketCalculations.change_pct(data, period=1)     # % change over N periods
+MarketCalculations.change_abs(data, period=1)     # absolute price change
+MarketCalculations.rate_of_change(data, period=1) # speed of change per second
+MarketCalculations.trend(data, period=1)          # UP/DOWN/NEUTRAL
+MarketCalculations.direction(data, period=1)       # "up"/"down"/"flat"
+MarketCalculations.volatility(data, period=10)     # price volatility
+MarketCalculations.high(data, period=10)          # highest price
+MarketCalculations.low(data, period=10)           # lowest price
+MarketCalculations.range(data, period=10)         # price range
+
+# Volume calculations (Binance/Coinbase only)
+VolumeCalculations.vol_ratio(data, period=10)      # current / avg volume
+VolumeCalculations.volume_trend(data, period=5)    # INCREASING/DECREASING/STABLE
+VolumeCalculations.volume_surge(data, multiplier=2.0) # detect volume spikes
+VolumeCalculations.avg_volume(data, period=10)    # average volume
+VolumeCalculations.volume_momentum(data, period=5) # volume % change
+VolumeCalculations.relative_volume(data, percentile=0.75) # percentile-based
+```
+
+### Data source accessors
+
+Source-specific accessors that integrate calculations with live data:
+
+```python
+from polyalpha.calculations import ChainlinkAccessor
+from polyalpha.windows import TimeWindow
+
+# Chainlink accessor (price calculations only)
+window = TimeWindow(max_age=120)
+cl_accessor = ChainlinkAccessor(window)
+cl_accessor.update(67850.0)  # Update with Chainlink price
+cl_accessor.change_pct(30)    # % change over 30 seconds
+cl_accessor.trend(60)         # trend direction
+cl_accessor.is_rising(30)     # convenience method
+cl_accessor.is_falling(30)    # convenience method
+```
+
+**Source availability:**
+- **Chainlink**: Price calculations only (no volume data)
+- **Binance**: Price + volume calculations
+- **Coinbase**: Price + volume calculations (future)
+
+See [`src/polyalpha/calculations/`](./src/polyalpha/calculations/) for implementation details.
+
+---
+
 ### Paper config & presets
 
 Tune realism: fee model, slippage, fill probability, execution delay, risk limits.
@@ -196,8 +252,15 @@ ctx.cl.value                    # latest Chainlink price
 ctx.cl.change_pct(30)           # % change over 30 seconds
 ctx.cl.change_pct(60)           # % change over 60 seconds
 ctx.cl.age_s                    # seconds since last CL update
+ctx.cl.trend(60)               # trend direction (UP/DOWN/NEUTRAL)
+ctx.cl.direction(30)           # simple direction ("up"/"down"/"flat")
+ctx.cl.volatility(120)         # price volatility
 ctx.binance.macd(12, 26, 9)     # MACD from Binance data
 ctx.binance.price_change(3)     # BTC price change over 3 candles
+ctx.binance.change_pct(3)       # % price change over 3 candles
+ctx.binance.vol_ratio(10)       # current volume / avg of last 10 candles
+ctx.binance.volume_trend(5)     # volume trend (increasing/decreasing/stable)
+ctx.binance.volume_surge(2.0)    # detect volume spikes
 ctx.buy("UP", 20)               # market buy
 ctx.limit("UP", 0.92, 25)       # limit order
 ctx.close_position("UP")        # close position
