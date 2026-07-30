@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable, Set
@@ -153,6 +154,10 @@ class TradeDatabase:
     # --- Public API: Trade CRUD ---
 
     def save_trade(self, *args, **kwargs):
+        warnings.warn(
+            "save_trade() is deprecated, use buy_trade() / sell_trade() instead",
+            DeprecationWarning, stacklevel=2,
+        )
         kwargs.setdefault("user_id", self._security.current_user_id)
         if self._security.is_encryption_enabled() and args:
             args = list(args)
@@ -194,6 +199,140 @@ class TradeDatabase:
 
     def clear_all_trades(self):
         self._repo.clear_all_trades()
+
+    # --- New High-Level API: buy / sell / portfolio ---
+
+    def buy_trade(
+        self,
+        market_slug: str,
+        market_id: str,
+        side: str,
+        price: float,
+        amount: float,
+        shares: Optional[float] = None,
+        fee: float = 0.0,
+        market_session: Optional[str] = None,
+        user_id: Optional[int] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> int:
+        if shares is None:
+            shares = round(amount / price, 10) if price > 0 else 0.0
+        if timestamp is None:
+            timestamp = datetime.now(timezone.utc)
+        return self._repo.save_trade(
+            market_slug=market_slug,
+            market_id=market_id,
+            side=side,
+            entry_price=price,
+            exit_price=None,
+            amount=amount,
+            shares=shares,
+            fee=fee,
+            outcome=None,
+            pnl=0.0,
+            timestamp=timestamp,
+            market_session=market_session,
+            order_id=None,
+            status="open",
+            user_id=user_id or self._security.current_user_id,
+            check_duplicates=False,
+        )
+
+    def sell_trade(
+        self,
+        trade_id: int,
+        exit_price: float,
+        pnl: Optional[float] = None,
+        outcome: Optional[str] = None,
+    ) -> bool:
+        trade = self._repo.get_trade(trade_id)
+        if trade is None:
+            raise ValueError(f"Trade with id={trade_id} not found")
+        if pnl is None:
+            pnl = (exit_price - trade.entry_price) * trade.shares
+        if outcome is None:
+            outcome = "WON" if pnl >= 0 else "LOST"
+        return self._repo.update_trade(
+            trade_id,
+            exit_price=exit_price,
+            pnl=pnl,
+            outcome=outcome,
+            status="closed",
+        )
+
+    def get_portfolio(self) -> Dict[str, Any]:
+        trades = self.load_all_trades()
+        closed = [t for t in trades if t.outcome is not None]
+        open_ = [t for t in trades if t.outcome is None]
+        wins = [t for t in closed if t.outcome == "WON"]
+        losses = [t for t in closed if t.outcome == "LOST"]
+        total_invested = sum(t.amount for t in trades)
+        total_pnl = sum(t.pnl for t in trades)
+        closed_pnl = sum(t.pnl for t in closed)
+
+        best = max(closed, key=lambda t: t.pnl) if closed else None
+        worst = min(closed, key=lambda t: t.pnl) if closed else None
+
+        return {
+            "trades": [t.to_dict() for t in trades],
+            "summary": {
+                "total_trades": len(trades),
+                "closed_trades": len(closed),
+                "open_trades": len(open_),
+                "wins": len(wins),
+                "losses": len(losses),
+                "win_rate": (len(wins) / len(closed) * 100) if closed else 0.0,
+                "total_invested": total_invested,
+                "total_pnl": total_pnl,
+                "closed_pnl": closed_pnl,
+                "avg_pnl": total_pnl / len(trades) if trades else 0.0,
+                "best_trade": {"market": best.market_slug, "pnl": best.pnl} if best else None,
+                "worst_trade": {"market": worst.market_slug, "pnl": worst.pnl} if worst else None,
+            },
+        }
+
+    def portfolio(self) -> None:
+        from ..core import SUMMARY_DIV_WIDTH
+
+        data = self.get_portfolio()
+        trades = data["trades"]
+        s = data["summary"]
+        div = "─" * SUMMARY_DIV_WIDTH
+
+        print(div)
+        print("  POLYALPHA — TRADE PORTFOLIO")
+        print(div)
+
+        if trades:
+            header = f"  {'ID':<4} {'MARKET':<30} {'SIDE':<5} {'ENTRY':>7} {'EXIT':>7} {'AMOUNT':>8} {'P&L':>9} {'RESULT':<6}"
+            sep =   f"  {'─'*4} {'─'*30} {'─'*5} {'─'*7} {'─'*7} {'─'*8} {'─'*9} {'─'*6}"
+            print(header)
+            print(sep)
+            for t in trades:
+                label = t["market_slug"][:30] if len(t["market_slug"]) > 30 else t["market_slug"]
+                exit_str = f"{t['exit_price']:.4f}" if t["exit_price"] is not None else "—"
+                pnl_str = f"${t['pnl']:>+7.2f}" if t["outcome"] is not None else "  +0.00"
+                result = t["outcome"] or "OPEN"
+                print(f"  {t['id']:<4} {label:<30} {t['side']:<5} {t['entry_price']:>7.4f} {exit_str:>7} {t['amount']:>8.2f} {pnl_str:>9} {result:<6}")
+
+        print(div)
+        print("  SUMMARY")
+        print(div)
+        print(f"  {'Total trades':<22} {s['total_trades']}")
+        print(f"  {'Closed trades':<22} {s['closed_trades']}")
+        print(f"  {'Open trades':<22} {s['open_trades']}")
+        print(f"  {'Wins':<22} {s['wins']}")
+        print(f"  {'Losses':<22} {s['losses']}")
+        print(f"  {'Win rate':<22} {s['win_rate']:.1f}%")
+        print(f"  {'Total invested':<22} ${s['total_invested']:>8.2f}")
+        print(f"  {'Total P&L':<22} ${s['total_pnl']:>+8.2f}")
+        print(f"  {'Closed P&L':<22} ${s['closed_pnl']:>+8.2f}")
+        print(f"  {'Avg P&L / trade':<22} ${s['avg_pnl']:>+8.2f}")
+        if s.get("best_trade"):
+            print(f"  {'Best trade':<22} ${s['best_trade']['pnl']:>+7.2f}  ({s['best_trade']['market']})")
+        if s.get("worst_trade"):
+            print(f"  {'Worst trade':<22} ${s['worst_trade']['pnl']:>+7.2f}  ({s['worst_trade']['market']})")
+        print(div)
 
     # --- Public API: Trade Queries ---
 

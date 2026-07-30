@@ -671,6 +671,42 @@ class TradeRepository:
                 }
             return summary
 
+    ALLOWED_UPDATE_FIELDS = {
+        "exit_price", "pnl", "outcome", "fee", "status",
+        "market_session", "side", "entry_price", "amount", "shares",
+    }
+
+    def get_trade(self, trade_id: int) -> Optional[TradeRecord]:
+        with self._conn._connection_ctx() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, market_slug, market_id, side, entry_price, exit_price,
+                       amount, shares, fee, outcome, pnl, timestamp, market_session, user_id
+                FROM trades WHERE id = ?
+            """, (trade_id,))
+            row = cursor.fetchone()
+            return row_to_trade_record(row) if row else None
+
+    def update_trade(self, trade_id: int, **fields) -> bool:
+        updates = {k: v for k, v in fields.items() if k in self.ALLOWED_UPDATE_FIELDS}
+        if not updates:
+            return False
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [trade_id]
+        with self._conn._connection_ctx() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(f"UPDATE trades SET {set_clause} WHERE id = ?", values)
+                conn.commit()
+                if cursor.rowcount > 0:
+                    self._on_cache_invalidate()
+                    return True
+                return False
+            except Exception:
+                conn.rollback()
+                log.exception("Failed to update trade ID=%d", trade_id)
+                return False
+
     def execute_parallel_queries(
         self,
         queries: List[str],
