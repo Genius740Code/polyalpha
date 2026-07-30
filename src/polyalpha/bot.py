@@ -75,6 +75,11 @@ try:
 except ImportError:
     ChainlinkStreamer = None
 
+try:
+    from .windows import TimeWindow
+except ImportError:
+    TimeWindow = None  # type: ignore[assignment]
+
 
 # ── Price Snapshot ─────────────────────────────────────────────────────────────
 
@@ -113,6 +118,10 @@ class TickContext:
     binance : BinanceAccessor | None
         Binance BTC market data: ``ctx.binance.close``, ``ctx.binance.macd()``,
         ``ctx.binance.price_change(30)``, ``ctx.binance.price_up()``.
+    cl : TimeWindow | None
+        Chainlink price window with change percentage helpers.
+        ``ctx.cl.value`` for latest CL price, ``ctx.cl.change_pct(30)`` for
+        % change over 30 seconds, ``ctx.cl.age_s`` for seconds since last update.
     rsi : float | None
         RSI indicator (legacy — prefer ``.indicators.rsi(14)``).
     sma : float | None
@@ -135,6 +144,7 @@ class TickContext:
         self._cross_state: dict[int, float] = {}
         self._cached_series = None
         self._indicators: Optional[IndicatorAccessor] = IndicatorAccessor(self._get_price_series) if IndicatorAccessor is not None else None  # type: ignore[arg-type]
+        self._cl_window: Optional[TimeWindow] = TimeWindow(max_age=120) if TimeWindow is not None else None
 
     # ── Prices ──────────────────────────────────────────────────────────────
 
@@ -342,6 +352,30 @@ class TickContext:
         """
         return self._bot._binance
 
+    @property
+    def cl(self):
+        """Chainlink price window with change percentage helpers.
+
+        Provides a rolling window of Chainlink BTC prices with convenient
+        methods for calculating percentage changes over custom time periods.
+
+        Returns ``None`` if TimeWindow is not available.
+
+        Examples
+        --------
+        >>> ctx.cl.value
+        67850.23
+        >>> ctx.cl.change_pct(30)
+        0.12
+        >>> ctx.cl.change_pct(60)
+        0.08
+        >>> ctx.cl.change_pct(90)
+        0.05
+        >>> ctx.cl.age_s
+        0.5
+        """
+        return self._cl_window
+
     # ── Indicators (optional — requires analysis deps) ──────────────────────
 
     def _get_price_series(self):
@@ -518,6 +552,12 @@ class Bot:
                 cl = ChainlinkStreamer()
                 cl.start(asset, background=True)
                 self._chainlink = cl
+                # Set up callback to update CL window when prices arrive
+                if self._ctx and self._ctx._cl_window:
+                    @cl.on("price")
+                    def on_cl_price(symbol: str, price: float, timestamp):
+                        if self._ctx and self._ctx._cl_window:
+                            self._ctx._cl_window.update(price)
             except Exception as exc:
                 self._log.warning("Chainlink streamer init failed: %s", exc)
 
@@ -746,6 +786,13 @@ class Bot:
 
         # Create the context
         self._ctx = TickContext(self)
+        
+        # Set up Chainlink callback to update CL window
+        if self._chainlink and self._ctx._cl_window:
+            @self._chainlink.on("price")
+            def on_cl_price(symbol: str, price: float, timestamp):
+                if self._ctx and self._ctx._cl_window:
+                    self._ctx._cl_window.update(price)
 
         # Register handlers
         @self._stream.on("price")
@@ -790,6 +837,13 @@ class Bot:
         self._stream = self._client.stream(self._market)
         self._client.paper.attach_stream(self._stream, self._market)
         self._ctx = TickContext(self)
+        
+        # Set up Chainlink callback to update CL window
+        if self._chainlink and self._ctx._cl_window:
+            @self._chainlink.on("price")
+            def on_cl_price(symbol: str, price: float, timestamp):
+                if self._ctx and self._ctx._cl_window:
+                    self._ctx._cl_window.update(price)
 
         @self._stream.on("price")
         def on_price(up: float, down: float):

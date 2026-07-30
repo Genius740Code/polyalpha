@@ -96,6 +96,11 @@ try:
 except ImportError:
     TelegramNotifier = None  # type: ignore[assignment]
 
+try:
+    from .windows import TimeWindow
+except ImportError:
+    TimeWindow = None  # type: ignore[assignment]
+
 MACDResult = namedtuple("MACDResult", ["macd", "signal", "histogram"])
 BBResult = namedtuple("BBResult", ["upper", "mid", "lower"])
 DonchianResult = namedtuple("DonchianResult", ["upper", "mid", "lower"])
@@ -544,6 +549,10 @@ class StrategyContext:
         First-class indicator access: ``.indicators.rsi(14)``,
         ``.indicators.macd(12, 26, 9)``,
         ``.indicators.bollinger_bands(20, 2)``, etc.
+    cl : TimeWindow | None
+        Chainlink price window with change percentage helpers.
+        ``ctx.cl.value`` for latest CL price, ``ctx.cl.change_pct(30)`` for
+        % change over 30 seconds, ``ctx.cl.age_s`` for seconds since last update.
     rsi, sma_20, ema_12 : float | None
         Legacy indicators (prefer ``ctx.indicators.rsi(14)``, etc.).
 
@@ -566,6 +575,7 @@ class StrategyContext:
         chainlink_cache: Optional[object] = None,
         chainlink: Optional[object] = None,
         binance: Optional[BinanceAccessor] = None,
+        cl_window: Optional[TimeWindow] = None,
         get_candle_open=None,
         get_seconds_in=None,
         get_candle_id=None,
@@ -590,6 +600,7 @@ class StrategyContext:
         self._cached_series = None
         self._indicators: IndicatorAccessor = IndicatorAccessor(self._get_price_series)
         self._orderbook: Optional[OrderBookAccessor] = None
+        self._cl_window: Optional[TimeWindow] = cl_window if cl_window is not None else (TimeWindow(max_age=120) if TimeWindow is not None else None)
 
     # ── Prices ──────────────────────────────────────────────────────────────
 
@@ -627,6 +638,30 @@ class StrategyContext:
         Returns ``None`` if not available in this context.
         """
         return self._binance
+
+    @property
+    def cl(self):
+        """Chainlink price window with change percentage helpers.
+
+        Provides a rolling window of Chainlink BTC prices with convenient
+        methods for calculating percentage changes over custom time periods.
+
+        Returns ``None`` if TimeWindow is not available.
+
+        Examples
+        --------
+        >>> ctx.cl.value
+        67850.23
+        >>> ctx.cl.change_pct(30)
+        0.12
+        >>> ctx.cl.change_pct(60)
+        0.08
+        >>> ctx.cl.change_pct(90)
+        0.05
+        >>> ctx.cl.age_s
+        0.5
+        """
+        return self._cl_window
 
     @property
     def candle_open(self) -> Optional[float]:
@@ -985,11 +1020,18 @@ class BotHub:
 
         # Initialize Chainlink streamer (live BTC spot from Polymarket)
         self._chainlink: Optional[object] = None
+        self._shared_cl_window: Optional[TimeWindow] = TimeWindow(max_age=120) if TimeWindow is not None else None
         try:
             from .analysis.streaming import ChainlinkStreamer
             cl = ChainlinkStreamer()
             cl.start(asset, background=True)
             self._chainlink = cl
+            # Set up callback to update shared CL window when prices arrive
+            if self._shared_cl_window:
+                @cl.on("price")
+                def on_cl_price(symbol: str, price: float, timestamp):
+                    if self._shared_cl_window:
+                        self._shared_cl_window.update(price)
         except Exception as exc:
             self._log.debug("Chainlink streamer not available: %s", exc)
 
@@ -1386,6 +1428,7 @@ class BotHub:
                 chainlink_cache=self._chainlink_cache,
                 chainlink=self._chainlink,
                 binance=self._binance,
+                cl_window=self._shared_cl_window,
                 get_candle_open=lambda: self._candle_open_price,
                 get_seconds_in=lambda: max(0.0, time.time() - self._candle_start_time),
                 get_candle_id=lambda: self._candle_id,

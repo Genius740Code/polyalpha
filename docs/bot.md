@@ -327,6 +327,39 @@ def strategy(ctx):
 | `price_change(candles=1)` | `float \| None` | BTC close price change over N candles |
 | `price_change_percent(candles=1)` | `float \| None` | BTC percent change over N candles |
 | `price_up(candles=1)` | `bool` | Close higher than N candles ago |
+| `price_above_by(amount=50)` | `bool` | Close at least $amount higher than N candles ago |
+
+### Chainlink Price Window (`ctx.cl`)
+
+Provides a rolling window of Chainlink BTC prices with convenient methods for calculating percentage changes over custom time periods. This eliminates the need for manual deque management in strategies.
+
+```python
+@bot.on_tick
+def strategy(ctx):
+    # Latest Chainlink price
+    price = ctx.cl.value                     # float | None — latest CL price
+    
+    # Percentage change over custom time periods
+    change_30s = ctx.cl.change_pct(30)       # float | None — % change over 30 seconds
+    change_60s = ctx.cl.change_pct(60)       # float | None — % change over 60 seconds
+    change_90s = ctx.cl.change_pct(90)       # float | None — % change over 90 seconds
+    
+    # Time since last update
+    age = ctx.cl.age_s                       # float — seconds since last CL price update
+    
+    # Example strategy: buy UP when BTC jumps > 8% in 30 seconds
+    if change_30s and change_30s > 0.08 and ctx.price.up < 0.60:
+        ctx.buy("UP", 20)
+```
+
+| Property / Method | Returns | Description |
+|-------------------|---------|-------------|
+| `value` | `float \| None` | Latest Chainlink BTC price |
+| `change_pct(seconds)` | `float \| None` | Percentage change over the given time period (in seconds) |
+| `age_s` | `float` | Seconds since the last price update (∞ if no data) |
+| `get_value_at(seconds_ago)` | `float \| None` | Price at a specific time in the past |
+
+**Note:** Returns `None` if insufficient data is available (e.g., requesting change over 60 seconds when only 10 seconds of data exists).
 | `price_above_by(min_change)` | `bool` | Close moved up by at least `min_change` USD |
 
 Returns `None` on indicator methods when insufficient data.
@@ -646,6 +679,11 @@ Same public API as `TickContext` plus Chainlink/candle/orderbook properties and 
 def strategy(ctx):
     # Chainlink spot price (requires chainlink=True)
     spot = ctx.chainlink.last_price
+    
+    # Chainlink price window with change helpers
+    cl_price = ctx.cl.value                     # latest CL price
+    change_30s = ctx.cl.change_pct(30)         # % change over 30 seconds
+    cl_age = ctx.cl.age_s                      # seconds since last update
 
     # Binance BTC market data (auto-started for all BotHub instances)
     macd = ctx.binance.macd(12, 26, 9)
@@ -684,6 +722,7 @@ def strategy(ctx):
 | `candle_id` | `int` | Current candle identifier (increments on each new candle) |
 | `indicators` | `IndicatorAccessor` | Parameterized indicators — see below |
 | `orderbook` | `OrderBookAccessor \| None` | Live order book for the current market (auto-attached) |
+| `cl` | `TimeWindow \| None` | Chainlink price window with change percentage helpers |
 | `rsi` | `float \| None` | RSI(14) — legacy, prefer `ctx.indicators.rsi(14)` |
 | `sma_20` | `float \| None` | SMA(20) — legacy, prefer `ctx.indicators.sma(20)` |
 | `ema_12` | `float \| None` | EMA(12) — legacy, prefer `ctx.indicators.ema(12)` |

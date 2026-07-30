@@ -192,6 +192,10 @@ ctx.pnl                         # realised P&L
 ctx.rsi / ctx.sma_20 / ctx.ema_12   # indicators (requires pandas)
 ctx.tick_count / ctx.trade_count
 ctx.chainlink.last_price        # BTC spot from Chainlink oracle
+ctx.cl.value                    # latest Chainlink price
+ctx.cl.change_pct(30)           # % change over 30 seconds
+ctx.cl.change_pct(60)           # % change over 60 seconds
+ctx.cl.age_s                    # seconds since last CL update
 ctx.binance.macd(12, 26, 9)     # MACD from Binance data
 ctx.binance.price_change(3)     # BTC price change over 3 candles
 ctx.buy("UP", 20)               # market buy
