@@ -155,6 +155,20 @@ See [Logging](./logging.md) for full usage.
 
 ---
 
+## Strategy Framework
+
+| Symbol | Source | Description |
+|--------|--------|-------------|
+| `Strategy` | `strategy/base.py` | Declarative strategy ABC — override `signal()` only |
+| `ConfigurableStrategy` | `strategy/base.py` | Parameter-only strategy (`from_config()`) |
+| `Signal` | `strategy/base.py` | Dataclass: `side` — trigger a trade at configured order size |
+| `SignalResult` | `strategy/base.py` | Dataclass: optional `amount_pct` / `limit_price` overrides |
+| `StrategySuite` | `strategy/suite.py` | Run N strategies on one shared stream |
+
+See [Strategies](strategies.md).
+
+---
+
 ## Conditions
 
 | Symbol | Source | Description |

@@ -12,8 +12,13 @@ src/polyalpha/
 ├── client.py             # Client — top-level entry point, wires all modules
 ├── stream.py             # Stream — WebSocket price streaming
 ├── bot.py                # Bot — declarative trading bot framework
+├── bot_hub.py            # BotHub — multi-strategy hub: one WebSocket, N paper engines
 ├── markets.py            # MarketClient — market discovery REST API
 ├── conditions.py         # Condition protocol + 11 condition classes + combinators
+│
+├── strategy/             # Declarative strategy framework (wraps BotHub)
+│   ├── base.py           #   Strategy ABC, ConfigurableStrategy, Signal, SignalResult
+│   └── suite.py          #   StrategySuite — run N strategies on one shared stream
 │
 ├── core/                 # Foundational types and constants
 │   ├── __init__.py       #   Re-exports from all sub-modules
