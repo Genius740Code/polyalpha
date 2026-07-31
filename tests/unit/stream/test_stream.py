@@ -777,3 +777,65 @@ def test_stream_pong_updates_quality_poor(monkeypatch):
     
     # Quality should be lower
     assert stream.connection_quality < 0.9
+
+
+@pytest.mark.unit
+def test_stream_price_jump_no_revert():
+    """Test that a large price jump (0.40 -> 0.80) updates prices immediately without reverting."""
+    market = make_market(prices=[0.40, 0.60], tokens=["tok_up", "tok_down"])
+    stream = Stream(market, price_threshold=0.01)
+
+    published = []
+
+    @stream.on("price")
+    def on_price(up, down):
+        published.append((up, down))
+
+    # Simulate price_change event for UP token jumping to 0.80
+    msg = {
+        "event_type": "price_change",
+        "price_changes": [
+            {
+                "asset_id": "tok_up",
+                "best_bid": "0.79",
+                "best_ask": "0.81",
+                "price": "0.80"
+            }
+        ]
+    }
+
+    stream._dispatch(msg)
+
+    assert stream.up == 0.80
+    assert stream.down == 0.20
+    assert len(published) == 1
+    assert published[0] == (0.80, 0.20)
+
+
+@pytest.mark.unit
+def test_stream_single_sided_update():
+    """Test that single-sided token updates propagate instantly with complementary price."""
+    market = make_market(prices=[0.50, 0.50], tokens=["tok_up", "tok_down"])
+    stream = Stream(market, price_threshold=0.01)
+
+    published = []
+
+    @stream.on("price")
+    def on_price(up, down):
+        published.append((up, down))
+
+    # Single-sided best_bid_ask update for DOWN token
+    msg = {
+        "event_type": "best_bid_ask",
+        "asset_id": "tok_down",
+        "best_bid": "0.74",
+        "best_ask": "0.76"
+    }
+
+    stream._dispatch(msg)
+
+    assert stream.down == 0.75
+    assert stream.up == 0.25
+    assert len(published) == 1
+    assert published[0] == (0.25, 0.75)
+

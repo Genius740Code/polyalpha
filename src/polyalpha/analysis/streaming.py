@@ -342,20 +342,21 @@ class ChainlinkStreamer:
                     except json.JSONDecodeError:
                         continue
 
-                    payload = msg.get("payload", {})
-                    if payload.get("symbol") == ws_symbol:
-                        self._last_price_time = time.time()  # 1.5: track price time
-                        # 1.5: reset stale warning on fresh data
+                    payload = msg.get("payload") or msg.get("data") or (msg if isinstance(msg, dict) else {})
+                    msg_symbol = str(payload.get("symbol", "")).lower()
+                    if msg_symbol == ws_symbol.lower():
+                        self._last_price_time = time.time()
                         self._stale_warned = False
-                        timestamp = datetime.fromtimestamp(
-                            payload["timestamp"] / 1000,
-                            tz=timezone.utc
-                        )
-                        price = float(payload["value"])
-                        self.last_price = price
-                        self.last_update = timestamp
-                        self.last_symbol = symbol
-                        self._emit("price", symbol, price, timestamp)
+                        raw_ts = payload.get("timestamp") or msg.get("timestamp") or (time.time() * 1000)
+                        ts_val = float(raw_ts) / 1000.0 if float(raw_ts) > 1e11 else float(raw_ts)
+                        timestamp = datetime.fromtimestamp(ts_val, tz=timezone.utc)
+                        raw_price = payload.get("value") if payload.get("value") is not None else payload.get("price")
+                        if raw_price is not None:
+                            price = float(raw_price)
+                            self.last_price = price
+                            self.last_update = timestamp
+                            self.last_symbol = symbol
+                            self._emit("price", symbol, price, timestamp)
 
                     # 1.5: check stale data on every message
                     self._check_stale_data()

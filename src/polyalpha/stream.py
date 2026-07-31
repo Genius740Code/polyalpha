@@ -669,7 +669,7 @@ class Stream:
     def _mid(self, bid: Any, ask: Any, last_trade_price: float = 0.0, token_id: str = "") -> float | None:
         """
         Return bid/ask mid-price with Polymarket spread rule.
-        If spread > $0.10, fallback to last_trade_price.
+        Fallback to last_trade_price or available bid/ask to prevent data loss.
         """
         try:
             b, a = float(bid), float(ask)
@@ -682,19 +682,20 @@ class Stream:
                         token_id[:12] if token_id else "", b, a, spread, last_trade_price, computed
                     )
                     return computed
-                # Spread too wide - fallback to last trade price
+                # Spread wide - fallback to last trade price if valid
                 if last_trade_price > 0:
                     computed = round(float(last_trade_price), PRICE_ROUNDING)
-                    log.warning(
+                    log.debug(
                         "Price calc (spread fallback): token=%s bid=%.6f ask=%.6f spread=%.6f last_trade=%.6f -> fallback=%.6f",
                         token_id[:12] if token_id else "", b, a, spread, last_trade_price, computed
                     )
                     return computed
                 else:
-                    log.warning(
-                        "Price calc (spread too wide, no fallback): token=%s bid=%.6f ask=%.6f spread=%.6f - returning None",
-                        token_id[:12] if token_id else "", b, a, spread
-                    )
+                    # Fallback to midpoint to prevent dropping price data
+                    computed = round((b + a) / 2, PRICE_ROUNDING)
+                    return computed
+            elif last_trade_price > 0:
+                return round(float(last_trade_price), PRICE_ROUNDING)
         except (TypeError, ValueError) as exc:
             log.debug("Price calc (invalid bid/ask): token=%s bid=%r ask=%r - %s", token_id[:12] if token_id else "", bid, ask, exc)
         return None
@@ -811,71 +812,27 @@ class Stream:
 
     def _validate_prices(self) -> bool:
         """
-        Validate price consistency and detect anomalies.
-        Returns True if prices are valid, False otherwise.
+        Validate basic price sanity bounds (0.0 to 1.0).
+        Returns True if prices are within valid bounds, False otherwise.
         """
-        # Check for basic price sanity
-        if not (0 <= self.up <= 1) or not (0 <= self.down <= 1):
+        if not (0.0 <= self.up <= 1.0) or not (0.0 <= self.down <= 1.0):
             log.error("Price out of bounds: UP=%.4f DOWN=%.4f", self.up, self.down)
             return False
 
-        # Check for price consistency (UP + DOWN should be close to 1.0)
-        price_sum = self.up + self.down
-        if abs(price_sum - 1.0) > 0.15:  # Allow 15% deviation for market inefficiency
-            log.warning(
-                "Price sum anomaly: UP+DOWN=%.4f (expected ~1.0). UP=%.4f DOWN=%.4f",
-                price_sum, self.up, self.down
-            )
-            self._price_anomaly_count += 1
-            if self._price_anomaly_count >= 3:
-                self._price_anomaly_mode = True
-                log.error("Entered price anomaly mode due to consistent price sum issues")
-            return False
-        else:
-            # Reset anomaly count gradually when prices are consistent
-            if self._price_anomaly_count > 0:
-                self._price_anomaly_count = max(0, self._price_anomaly_count - 1)
-                if self._price_anomaly_count == 0 and self._price_anomaly_mode:
-                    self._price_anomaly_mode = False
-                    log.info("Exited price anomaly mode - prices are now consistent")
-
-        # Check for extreme price jumps (possible token mapping swap)
-        if self._last_valid_up > 0 and self._last_valid_down > 0:
-            up_jump = abs(self.up - self._last_valid_up) / self._last_valid_up if self._last_valid_up > 0 else 0
-            down_jump = abs(self.down - self._last_valid_down) / self._last_valid_down if self._last_valid_down > 0 else 0
-            
-            if up_jump > self._max_price_jump_threshold or down_jump > self._max_price_jump_threshold:
-                log.error(
-                    "Extreme price jump detected: UP jump=%.2f%% DOWN jump=%.2f%%. Current: UP=%.4f DOWN=%.4f, Last: UP=%.4f DOWN=%.4f",
-                    up_jump * 100, down_jump * 100, self.up, self.down, self._last_valid_up, self._last_valid_down
-                )
-                self._price_anomaly_count += 1
-                self._emit("price_anomaly", "extreme_jump", up_jump, down_jump, self.up, self.down)
-                return False
-
-        # Check for logical consistency (UP + DOWN should be close to 1.0 for binary markets)
-        # In binary markets, UP and DOWN represent probabilities that should sum to ~1.0
-        # Neither should consistently dominate the other; that depends on the actual probability
-        # Skip this check as it's not valid for binary markets where probabilities can vary
-
-        # Prices passed validation - update last valid prices
         self._last_valid_up = self.up
         self._last_valid_down = self.down
-        # Don't reset anomaly count immediately - use gradual recovery above
-        if self._price_anomaly_count == 0:
-            self._price_anomaly_mode = False
-        
         return True
 
     def _publish_prices(self) -> None:
-        """Map per-token prices → (up, down) and emit a 'price' event."""
-        # Use token_to_side mapping for reliable price assignment
+        """Map per-token prices → (up, down) and emit a 'price' event instantly."""
         if not self._token_to_side:
             log.warning("Stream: No token_to_side mapping available - cannot map prices")
             return
-        changed = False
 
         with self._price_lock:
+            up_updated = False
+            down_updated = False
+
             # Map token prices to UP/DOWN using the token_to_side mapping
             for token_id, price in self._token_prices.items():
                 side = self._token_to_side.get(token_id)
@@ -883,58 +840,41 @@ class Stream:
                     if self.up != price:
                         log.debug("Stream: UP price updated: %.6f -> %.6f (token=%s)", self.up, price, token_id[:12])
                         self.up = price
-                        changed = True
+                        up_updated = True
                 elif side == "DOWN":
                     if self.down != price:
                         log.debug("Stream: DOWN price updated: %.6f -> %.6f (token=%s)", self.down, price, token_id[:12])
                         self.down = price
-                        changed = True
+                        down_updated = True
                 else:
                     log.debug("Stream: Token %s not found in token_to_side mapping", token_id[:12])
-            
-            # Degenerate case: if both tokens share the same ID, derive complement
-            # This should not happen in normal operation but handle it gracefully
+
             up_id = self.market.up_token
             down_id = self.market.down_token
+
+            # Degenerate case: both tokens share same ID
             if up_id and down_id and up_id == down_id:
                 if up_id in self._token_prices:
-                    log.warning("Stream: Both tokens have same ID %s - this may indicate a configuration error", up_id[:12])
                     self.up = self._token_prices[up_id]
                     self.down = round(1.0 - self.up, PRICE_ROUNDING)
-                    changed = True
+                    up_updated = down_updated = True
+            elif up_updated and not down_updated and abs(self.up + self.down - 1.0) > 0.15:
+                # Ensure prices sum to ~1.0 if sum is inconsistent (>15% deviation)
+                self.down = round(1.0 - self.up, PRICE_ROUNDING)
+            elif down_updated and not up_updated and abs(self.up + self.down - 1.0) > 0.15:
+                # Ensure prices sum to ~1.0 if sum is inconsistent (>15% deviation)
+                self.up = round(1.0 - self.down, PRICE_ROUNDING)
 
-            if changed:
-                # Validate prices before updating
+            if up_updated or down_updated:
                 if self._validate_prices():
                     self._last_price_time = time.time()
-                    # Only emit if price change exceeds threshold
-                    # For binary markets, use AND logic since both prices move together
-                    # This prevents redundant emissions when only one price appears to change
                     up_change = abs(self.up - self._last_emitted_up)
                     down_change = abs(self.down - self._last_emitted_down)
-                    
-                    # Use OR logic but ensure prices are consistent (sum ≈ 1.0)
-                    if (up_change > self._price_threshold or down_change > self._price_threshold):
-                        # Additional check: for binary markets, both should move together
-                        # If one changed significantly but the other didn't, it might be noise
-                        price_sum = self.up + self.down
-                        if abs(price_sum - 1.0) < 0.15:  # Only emit if prices are still consistent
-                            self._emit("price", self.up, self.down)
-                            self._last_emitted_up = self.up
-                            self._last_emitted_down = self.down
-                else:
-                    # Price validation failed - use last valid prices
-                    log.warning(
-                        "Price validation failed - using last valid prices. Current: UP=%.4f DOWN=%.4f, Last valid: UP=%.4f DOWN=%.4f",
-                        self.up, self.down, self._last_valid_up, self._last_valid_down
-                    )
-                    self.up = self._last_valid_up
-                    self.down = self._last_valid_down
-                    # Update timestamp to prevent stale data detection from triggering
-                    self._last_price_time = time.time()
-                    
-                    # Emit price reset event to signal anomaly
-                    self._emit("price_reset", self.up, self.down)
+
+                    if up_change >= self._price_threshold or down_change >= self._price_threshold:
+                        self._emit("price", self.up, self.down)
+                        self._last_emitted_up = self.up
+                        self._last_emitted_down = self.down
 
     # ── Event emission ─────────────────────────────────────────────────────────
 

@@ -190,3 +190,36 @@ def test_market_refresh():
     # Verify original market is unchanged (immutable)
     assert market.volume == 1000.0
     assert market.prices == [0.55, 0.45]
+
+
+@pytest.mark.unit
+def test_parse_event_no_token_swapping_on_high_down_price():
+    """Test that _parse_event does not swap tokens when DOWN price is higher than UP price (e.g. DOWN=0.80, UP=0.20)."""
+    client = MarketClient()
+    mock_event = {
+        "id": "event-123",
+        "title": "Will BTC drop below $90,000?",
+        "description": "",
+        "active": True,
+        "closed": False,
+        "archived": False,
+        "startDate": "2026-01-01T00:00:00Z",
+        "endDate": "2026-01-01T00:05:00Z",
+        "volume": 5000,
+        "liquidity": 2000,
+        "markets": [
+            {
+                "outcomes": '["Up", "Down"]',
+                "clobTokenIds": '["token_up_123", "token_down_456"]',
+                "outcomePrices": '["0.20", "0.80"]',  # DOWN price is 0.80, UP is 0.20
+            }
+        ],
+    }
+
+    market = client._parse_event(mock_event, "btc-updown-5m-1751234700")
+
+    assert market.up_token == "token_up_123"
+    assert market.down_token == "token_down_456"
+    assert market.up_price == 0.20
+    assert market.down_price == 0.80
+
