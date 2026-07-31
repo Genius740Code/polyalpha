@@ -22,7 +22,7 @@ New strategies in **< 30 lines** — just the signal logic, nothing else.
 
 ---
 
-## Implemented
+## 
 
 ### 1. `Strategy` Base Class —  (`strategy/base.py`)
 

@@ -35,6 +35,9 @@ Sniper bot with advanced time window features: multiple disjoint windows, burst 
 ### `bot_hub.py`
 BotHub — multi-strategy hub running multiple strategies from a single WebSocket connection.
 
+### `strategy_framework.py`
+Declarative strategy framework — custom `Strategy` subclass, parameter-only strategies via `ConfigurableStrategy.from_config`, and multiple strategies on one shared stream via `StrategySuite`. See also [Strategies](strategies.md).
+
 ### `multi_arb_bot.py`
 Multi-arbitrage bot monitoring and executing across different markets.
 
