@@ -9,7 +9,7 @@ Priority: HIGH
 
 Status:
 - [x] 1. CLOB book stream (done in `src/polyalpha/orderbook/tracker.py`)
-- [ ] 2. favourite() + spread metrics
+- [x] 2. favourite() + spread metrics (done in `src/polyalpha/orderbook/tracker.py`)
 - [ ] 3. sweep() trade-burst detection
 - [ ] 4. CVDTracker in `src/polyalpha/analysis/delta.py`
 - [ ] 5. Shared Globals / one-connection-many-strategies refactor
@@ -180,7 +180,7 @@ Pattern to reproduce (bot main/watch_market):
 ## Implementation order
 
 1. ~~CLOB book stream~~ (done)
-2. favourite + spread_expansion
+2. ~~favourite + spread_expansion~~ (done)
 3. sweep()
 4. CVD in delta.py
 5. Shared Globals refactor

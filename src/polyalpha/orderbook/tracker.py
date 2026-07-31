@@ -23,7 +23,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import statistics
 import time
+from collections import deque
 from dataclasses import dataclass
 
 import httpx
@@ -79,6 +81,11 @@ class TokenPairTracker:
         self.best_ask: dict[str, float | None] = {up_id: None, down_id: None}
         self._last_update: float = 0.0
 
+        self.spread_history: dict[str, deque] = {
+            up_id: deque(maxlen=120),
+            down_id: deque(maxlen=120),
+        }
+
         self._stop = False
         self._task: asyncio.Task | None = None
         self._ping_task: asyncio.Task | None = None
@@ -106,6 +113,80 @@ class TokenPairTracker:
     @property
     def down_mid(self) -> float | None:
         return self.mid(self.down_id)
+
+    # ── Favourite + spread metrics ────────────────────────────────────────────
+
+    def favourite(self) -> tuple[str | None, float | None]:
+        """Which leg is currently favoured: ``("UP", mid)`` or ``("DOWN", mid)``.
+
+        Returns ``(None, None)`` when either mid is missing/stale or the two
+        mids tie exactly (never bias toward either side).
+        """
+        u, d = self.up_mid, self.down_mid
+        if u is None or d is None:
+            return (None, None)
+        if u > d:
+            return ("UP", u)
+        if d > u:
+            return ("DOWN", d)
+        return (None, None)
+
+    def _record_spread(self, tid: str) -> None:
+        """Append a spread sample for *tid* when both sides of the book exist."""
+        bid, ask = self.best_bid.get(tid), self.best_ask.get(tid)
+        if bid is None or ask is None:
+            return
+        self.spread_history[tid].append(
+            {
+                "ts": time.time(),
+                "spread": ask - bid,
+                "bid": bid,
+                "ask": ask,
+            }
+        )
+
+    def spread_stats(self, tid: str) -> tuple[float, float] | None:
+        """``(mean, std)`` of the spread samples for *tid*, ``None`` if ``< 10``."""
+        hist = self.spread_history.get(tid)
+        if hist is None or len(hist) < 10:
+            return None
+        spreads = [s["spread"] for s in hist]
+        return (statistics.mean(spreads), statistics.pstdev(spreads))
+
+    def spread_expansion(
+        self,
+        tid: str,
+        z: float = 2.0,
+        lookback_samples: int = 6,
+    ) -> dict | None:
+        """Detect an abnormal spread widening and which side moved.
+
+        Needs ``>= 10`` spread samples and a current spread beyond
+        ``mean + z*std``; otherwise ``None``. Returns
+        ``{"spread", "mean", "std", "side_pulled"}`` where ``side_pulled`` is
+        ``"ask"`` when the ask pulled back (rising) — bullish pressure — or
+        ``"bid"`` when the bid pulled back (falling) — bearish pressure.
+        """
+        hist = self.spread_history.get(tid)
+        if hist is None or len(hist) < 10:
+            return None
+        stats = self.spread_stats(tid)
+        if stats is None:
+            return None
+        mean, std = stats
+        cur = hist[-1]
+        if std <= 0 or cur["spread"] <= mean + z * std:
+            return None
+        baseline = hist[-lookback_samples] if len(hist) >= lookback_samples else hist[0]
+        ask_move = cur["ask"] - baseline["ask"]
+        bid_move = baseline["bid"] - cur["bid"]
+        side_pulled = "ask" if ask_move > bid_move else "bid"
+        return {
+            "spread": cur["spread"],
+            "mean": mean,
+            "std": std,
+            "side_pulled": side_pulled,
+        }
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -217,6 +298,7 @@ class TokenPairTracker:
         if ev.get("asks"):
             self.best_ask[tid] = float(ev["asks"][-1]["price"])
         self._last_update = time.time()
+        self._record_spread(tid)
 
     def _handle_price_change(self, ev: dict) -> None:
         for pc in ev.get("price_changes", []):
@@ -228,3 +310,4 @@ class TokenPairTracker:
             if pc.get("best_ask") is not None:
                 self.best_ask[tid] = float(pc["best_ask"])
             self._last_update = time.time()
+            self._record_spread(tid)

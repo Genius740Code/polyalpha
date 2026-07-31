@@ -5,6 +5,7 @@ TokenPairTracker tests — run with: pytest tests/unit/orderbook/test_tracker.py
 import asyncio
 import inspect
 import json
+import statistics
 from contextlib import suppress
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -217,6 +218,155 @@ class TestHandleEdgeCases:
             tracker._handle(raw)
         assert tracker.best_bid[UP_ID] == 0.60
         assert tracker.best_bid[DOWN_ID] == 0.35
+
+
+def _feed_quotes(tracker, tid, quotes, t0=100.0):
+    """Drive book events with the given ``(bid, ask)`` pairs at increasing ts."""
+    for i, (bid, ask) in enumerate(quotes):
+        raw = json.dumps({
+            "event_type": "book",
+            "asset_id": tid,
+            "bids": [{"price": str(bid)}],
+            "asks": [{"price": str(ask)}],
+        })
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=t0 + i):
+            tracker._handle(raw)
+
+
+@pytest.mark.unit
+class TestFavourite:
+    def test_prefers_higher_mid(self, tracker):
+        _feed_quotes(tracker, UP_ID, [(0.55, 0.60)])
+        _feed_quotes(tracker, DOWN_ID, [(0.35, 0.40)])
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0):
+            assert tracker.favourite() == ("UP", pytest.approx(0.575))
+
+    def test_prefers_down_when_higher(self, tracker):
+        _feed_quotes(tracker, UP_ID, [(0.35, 0.40)])
+        _feed_quotes(tracker, DOWN_ID, [(0.55, 0.60)])
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0):
+            assert tracker.favourite() == ("DOWN", pytest.approx(0.575))
+
+    def test_exact_tie_returns_none(self, tracker):
+        _feed_quotes(tracker, UP_ID, [(0.50, 0.60)])
+        _feed_quotes(tracker, DOWN_ID, [(0.50, 0.60)])
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0):
+            assert tracker.favourite() == (None, None)
+
+    def test_missing_side_returns_none(self, tracker):
+        _feed_quotes(tracker, UP_ID, [(0.55, 0.60)])
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0):
+            assert tracker.favourite() == (None, None)
+
+
+@pytest.mark.unit
+class TestSpreadHistory:
+    def test_book_event_records_spread(self, tracker):
+        _feed_quotes(tracker, UP_ID, [(0.50, 0.60)])
+        assert len(tracker.spread_history[UP_ID]) == 1
+        s = tracker.spread_history[UP_ID][-1]
+        assert s["spread"] == pytest.approx(0.10)
+        assert s["bid"] == 0.50
+        assert s["ask"] == 0.60
+
+    def test_price_change_records_spread(self, tracker):
+        tracker.best_bid[UP_ID] = 0.58
+        raw = json.dumps({
+            "event_type": "price_change",
+            "price_changes": [{"asset_id": UP_ID, "best_ask": "0.61"}],
+        })
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=200.0):
+            tracker._handle(raw)
+        assert len(tracker.spread_history[UP_ID]) == 1
+
+    def test_missing_side_not_recorded(self, tracker):
+        tracker.best_ask[UP_ID] = 0.60
+        raw = json.dumps({
+            "event_type": "book",
+            "asset_id": UP_ID,
+            "asks": [{"price": "0.60"}],
+        })
+        tracker._handle(raw)
+        assert len(tracker.spread_history[UP_ID]) == 0
+
+    def test_history_capped_at_120(self, tracker):
+        _feed_quotes(tracker, UP_ID, [(0.50, 0.60)] * 150)
+        assert len(tracker.spread_history[UP_ID]) == 120
+
+
+@pytest.mark.unit
+class TestSpreadStats:
+    def test_needs_ten_samples(self, tracker):
+        _feed_quotes(tracker, UP_ID, [(0.50, 0.60)] * 9)
+        assert tracker.spread_stats(UP_ID) is None
+
+    def test_mean_and_std(self, tracker):
+        spreads = [0.10, 0.12, 0.08, 0.11, 0.09, 0.13, 0.07, 0.12, 0.10, 0.11]
+        _feed_quotes(tracker, UP_ID, [(0.50, 0.50 + s) for s in spreads])
+        mean, std = tracker.spread_stats(UP_ID)
+        assert mean == pytest.approx(sum(spreads) / len(spreads))
+        assert std == pytest.approx(statistics.pstdev(spreads))
+
+    def test_unknown_token_returns_none(self, tracker):
+        assert tracker.spread_stats("nope") is None
+
+
+@pytest.mark.unit
+class TestSpreadExpansion:
+    def _populate(self, tracker, tid, spreads):
+        # stable spread of 0.10, then a final jump to `spreads[-1]`
+        _feed_quotes(tracker, tid, [(0.50, 0.60)] * 12)
+        last = spreads[-1]
+        _feed_quotes(tracker, tid, [(0.50, 0.50 + last)])
+
+    def test_needs_ten_samples(self, tracker):
+        _feed_quotes(tracker, UP_ID, [(0.50, 0.60)] * 9)
+        assert tracker.spread_expansion(UP_ID) is None
+
+    def test_no_expansion_returns_none(self, tracker):
+        self._populate(tracker, UP_ID, [0.10])
+        assert tracker.spread_expansion(UP_ID) is None
+
+    def test_zero_std_returns_none(self, tracker):
+        # constant spread => std == 0, never a widening
+        _feed_quotes(tracker, UP_ID, [(0.50, 0.60)] * 13)
+        assert tracker.spread_expansion(UP_ID) is None
+
+    def test_ask_pull_returns_ask(self, tracker):
+        # widen via a rising ask: baseline ask 0.60 -> cur ask 0.70
+        self._populate(tracker, UP_ID, [0.20])
+        result = tracker.spread_expansion(UP_ID)
+        assert result is not None
+        assert result["side_pulled"] == "ask"
+        assert result["spread"] == pytest.approx(0.20)
+        assert result["mean"] == pytest.approx((12 * 0.10 + 0.20) / 13)
+        assert result["std"] > 0
+
+    def test_bid_pull_returns_bid(self, tracker):
+        # widen via a falling bid: baseline bid 0.50 -> cur bid 0.40
+        for i in range(12):
+            raw = json.dumps({
+                "event_type": "book",
+                "asset_id": UP_ID,
+                "bids": [{"price": "0.50"}],
+                "asks": [{"price": "0.60"}],
+            })
+            with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0 + i):
+                tracker._handle(raw)
+        raw = json.dumps({
+            "event_type": "book",
+            "asset_id": UP_ID,
+            "bids": [{"price": "0.40"}],
+            "asks": [{"price": "0.60"}],
+        })
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=112.0):
+            tracker._handle(raw)
+        result = tracker.spread_expansion(UP_ID)
+        assert result is not None
+        assert result["side_pulled"] == "bid"
+
+    def test_unknown_token_returns_none(self, tracker):
+        assert tracker.spread_expansion("nope") is None
 
 
 @pytest.mark.unit
