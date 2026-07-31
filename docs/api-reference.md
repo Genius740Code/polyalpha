@@ -95,6 +95,8 @@ Concise reference of every symbol exported from `polyalpha.__init__`, grouped by
 | Symbol | Source | Description |
 |--------|--------|-------------|
 | `ClobBookClient` | `orderbook/clob.py` | REST client for Polymarket CLOB endpoints |
+| `TokenPairTracker` | `orderbook/tracker.py` | Live CLOB stream for one UP/DOWN pair: mids, favourite, spread metrics |
+| `TokenPairTrackerConfig` | `orderbook/tracker.py` | Configuration for `TokenPairTracker` |
 | `OrderBookFeed` | `orderbook/feed.py` | Live order book (REST snapshots + WebSocket) |
 | `OrderBookManager` | `orderbook/manager.py` | In-memory book state with subscribers |
 | `OrderBookSnapshot` | `orderbook/models.py` | Snapshot dataclass: bids, asks, spread, mid, imbalance |
@@ -238,6 +240,7 @@ PaperEngine, PaperConfig, AutoRedeemConfig,
 RealTradingEngine, RealTradingConfig, RealOrder, RealPosition, WalletManager,
 ReportPreset, ComparisonReport, VariantResult, TradeDatabase,
 ClobBookClient, OrderBookFeed, OrderBookManager, OrderBookSnapshot,
+  TokenPairTracker, TokenPairTrackerConfig,
   MarketOrderBook, BookLevel, BookSide, FillEstimate, BookTrade,
   Strategy, ImbalanceStrategy, SpreadStrategy, MomentumStrategy,
   BacktestEngine, RiskManager, estimate_fill, book_summary,

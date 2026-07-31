@@ -10,6 +10,7 @@ The `polyalpha.orderbook` module provides real-time and historical access to Pol
 |-----------|------|---------|
 | Models | `models.py` | Dataclasses and enums for book levels, orders, trades, snapshots, positions, portfolios |
 | CLOB Client | `clob.py` | REST client for Polymarket CLOB endpoints |
+| Tracker | `tracker.py` | Live CLOB WebSocket feed for one UP/DOWN pair + favourite/spread metrics |
 | Feed | `feed.py` | Live order book via REST snapshots + WebSocket |
 | Manager | `manager.py` | In-memory book state management with subscriber notifications |
 | Strategy | `strategy.py` | Abstract strategy base + 3 concrete implementations |
@@ -174,6 +175,93 @@ Supports context manager: `with ClobBookClient() as client:`
 | `get_spread(token_id) -> float` | Bid-ask spread |
 | `get_last_trade_price(token_id) -> dict` | Last trade price data |
 | `clear_cache()` | Clear cached snapshots |
+
+---
+
+## Live CLOB Tracker (`TokenPairTracker`)
+
+Streams the best bid/ask for both legs of one Polymarket market over a single
+CLOB WebSocket. Seeds from the REST book on connect, drops quotes once they go
+stale, and tracks favourite + spread-expansion metrics for signal generation.
+
+```python
+from polyalpha.orderbook import TokenPairTracker
+
+tracker = TokenPairTracker(up_token_id, down_token_id)
+tracker.start()          # background asyncio task, auto-reconnects
+
+mid = tracker.up_mid     # None once stale (no update in 20s)
+side, price = tracker.favourite()  # ("UP", 0.625) / ("DOWN", ...) / (None, None)
+
+tracker.stop()
+```
+
+Constructor params:
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `up_id` | — | UP token ID |
+| `down_id` | — | DOWN token ID |
+| `config` | `None` | Optional `TokenPairTrackerConfig` |
+
+### `TokenPairTrackerConfig`
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `ws_url` | `wss://ws-subscriptions-clob.polymarket.com/ws/market` | CLOB WebSocket endpoint |
+| `clob_api` | `https://clob.polymarket.com` | CLOB REST base URL (book seed) |
+| `max_age` | `20` | Seconds without a best-bid/ask update before `fresh()` is `False` |
+| `ping_interval` | `10.0` | Seconds between text `PING` keepalives |
+| `reconnect_delay` | `3.0` | Delay between reconnect attempts on WS drop |
+| `http_timeout` | `10.0` | Timeout for the REST book-seed request |
+
+### Quote access
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `fresh() -> bool` | `bool` | True if best bid/ask updated within `max_age` seconds |
+| `mid(tid) -> float \| None` | `float` | Mid of best bid/ask for a token, `None` when stale or a side is missing |
+| `up_mid` | `float \| None` | Mid of the UP leg |
+| `down_mid` | `float \| None` | Mid of the DOWN leg |
+
+### Favourite + spread metrics
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `favourite() -> (str \| None, float \| None)` | `("UP", mid)` | Higher mid wins; `(None, None)` when a mid is stale/missing or the two tie exactly (never biased) |
+| `spread_stats(tid) -> (float, float) \| None` | `(mean, std)` | Mean/std of the last spreads; `None` until `< 10` samples collected |
+| `spread_expansion(tid, z=2.0, lookback_samples=6) -> dict \| None` | `dict` | Flags abnormal spread widening |
+
+`spread_history` (per-token `deque` capped at 120) records a sample on every
+`book` / `price_change` event where both sides exist:
+
+```python
+{"ts": <epoch>, "spread": ask - bid, "bid": b, "ask": a}
+```
+
+`spread_expansion()` needs `>= 10` samples and returns `None` unless the current
+spread exceeds `mean + z*std` (with `std > 0`). It then compares the latest quote
+to the `hist[-lookback_samples]` baseline:
+
+| Field | Meaning |
+|-------|---------|
+| `spread` | Current spread |
+| `mean` | Mean spread over the history |
+| `std` | Std of the spread over the history |
+| `side_pulled` | `"ask"` if `cur.ask - baseline.ask > baseline.bid - cur.bid`, else `"bid"` |
+
+Interpretation: the ask pulling back (rising) is bullish pressure; the bid
+pulling back (falling) is bearish pressure.
+
+### Lifecycle
+
+| Member | Description |
+|--------|-------------|
+| `start()` | Start the background reconnect loop (no-op if running) |
+| `stop()` | Stop the loop, cancel keepalive, close the HTTP client |
+
+Each tracker owns one WebSocket connection; multiple trackers can run
+independently (one per market).
 
 ---
 
