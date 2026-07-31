@@ -7,6 +7,9 @@ GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_API  = "https://clob.polymarket.com"
 CLOB_WS   = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 
+# Max age of a CLOB best-bid/ask before it is considered stale and dropped.
+CLOB_MAX_AGE_S = 20
+
 # ── Timeframes ─────────────────────────────────────────────────────────────────
 
 TIMEFRAME_SECONDS: dict[str, int] = {

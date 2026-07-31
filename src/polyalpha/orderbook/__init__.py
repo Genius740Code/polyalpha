@@ -30,6 +30,7 @@ from .models import (
 )
 from .risk import RiskManager
 from .strategy import ImbalanceStrategy, MomentumStrategy, SpreadStrategy, Strategy
+from .tracker import TokenPairTracker, TokenPairTrackerConfig
 
 __all__ = [
     "BookLevel",
@@ -47,6 +48,8 @@ __all__ = [
     "OrderBookFeed",
     "OrderBookManager",
     "SimulatedOrderBookManager",
+    "TokenPairTracker",
+    "TokenPairTrackerConfig",
     "BacktestEngine",
     "RiskManager",
     "Strategy",

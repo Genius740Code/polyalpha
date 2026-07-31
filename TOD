@@ -19,6 +19,8 @@ Finish telegram bot
     send total pl and wallet blance every X minutes
 ONLY READ ONLY
 
+if running mutliple bots, dont have 10 db, put but  all 10 db in 1 db
+
 
 verify max btc change feature
 
