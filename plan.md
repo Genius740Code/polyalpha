@@ -10,7 +10,7 @@ Priority: HIGH
 Status:
 - [x] 1. CLOB book stream (done in `src/polyalpha/orderbook/tracker.py`)
 - [x] 2. favourite() + spread metrics (done in `src/polyalpha/orderbook/tracker.py`)
-- [ ] 3. sweep() trade-burst detection
+- [x] 3. sweep() trade-burst detection (done in `src/polyalpha/orderbook/tracker.py`)
 - [ ] 4. CVDTracker in `src/polyalpha/analysis/delta.py`
 - [ ] 5. Shared Globals / one-connection-many-strategies refactor
 - [ ] 6. LiquidationTracker
@@ -181,7 +181,7 @@ Pattern to reproduce (bot main/watch_market):
 
 1. ~~CLOB book stream~~ (done)
 2. ~~favourite + spread_expansion~~ (done)
-3. sweep()
+3. ~~sweep()~~ (done)
 4. CVD in delta.py
 5. Shared Globals refactor
 6. LiquidationTracker

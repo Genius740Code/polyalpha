@@ -10,7 +10,7 @@ The `polyalpha.orderbook` module provides real-time and historical access to Pol
 |-----------|------|---------|
 | Models | `models.py` | Dataclasses and enums for book levels, orders, trades, snapshots, positions, portfolios |
 | CLOB Client | `clob.py` | REST client for Polymarket CLOB endpoints |
-| Tracker | `tracker.py` | Live CLOB WebSocket feed for one UP/DOWN pair + favourite/spread metrics |
+| Tracker | `tracker.py` | Live CLOB WebSocket feed for one UP/DOWN pair + favourite/spread/trade-sweep metrics |
 | Feed | `feed.py` | Live order book via REST snapshots + WebSocket |
 | Manager | `manager.py` | In-memory book state management with subscriber notifications |
 | Strategy | `strategy.py` | Abstract strategy base + 3 concrete implementations |
@@ -180,9 +180,10 @@ Supports context manager: `with ClobBookClient() as client:`
 
 ## Live CLOB Tracker (`TokenPairTracker`)
 
-Streams the best bid/ask for both legs of one Polymarket market over a single
-CLOB WebSocket. Seeds from the REST book on connect, drops quotes once they go
-stale, and tracks favourite + spread-expansion metrics for signal generation.
+Streams the best bid/ask and last-trade tape for both legs of one Polymarket
+market over a single CLOB WebSocket. Seeds from the REST book on connect, drops
+quotes once they go stale, and tracks favourite, spread-expansion, and
+trade-sweep (trade-burst) metrics for signal generation.
 
 ```python
 from polyalpha.orderbook import TokenPairTracker
@@ -192,6 +193,9 @@ tracker.start()          # background asyncio task, auto-reconnects
 
 mid = tracker.up_mid     # None once stale (no update in 20s)
 side, price = tracker.favourite()  # ("UP", 0.625) / ("DOWN", ...) / (None, None)
+
+# Trade-burst signal: {"direction": "UP"/"DOWN", "side", "count", "notional"}
+signal = tracker.trade_sweep()
 
 tracker.stop()
 ```
@@ -252,6 +256,44 @@ to the `hist[-lookback_samples]` baseline:
 
 Interpretation: the ask pulling back (rising) is bullish pressure; the bid
 pulling back (falling) is bearish pressure.
+
+### Trade-burst / sweep detection
+
+`trade_tape` (per-token `deque` capped at 200) is fed by every
+`last_trade_price` event. Samples look like:
+
+```python
+{"ts": <epoch>, "price": p, "size": s, "side": "BUY" | "SELL"}
+```
+
+The `side` field is the taker/aggressor side as reported by the CLOB stream.
+**Verify it against the live stream before trusting the direction
+interpretation below** — if it is actually the maker side, the direction of
+every signal is inverted.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `sweep(tid, window_s=15, min_count=4, min_notional=0.0) -> dict \| None` | `{"side", "count", "notional"}` | One-sided trade burst on one token within the window |
+| `trade_sweep(window_s=15, min_count=4, min_notional=0.0) -> dict \| None` | `{"direction", "side", "count", "notional"}` | Combined UP/DOWN burst → directional signal |
+
+`sweep()` splits the trades in the last `window_s` seconds by side; the
+dominant side is the one with count `>=` the other (tie → `"BUY"`). It returns
+`None` unless the window holds `>= min_count` trades, the dominant side alone
+holds `>= min_count`, and its `notional` (`price * size` summed) is
+`>= min_notional`.
+
+`trade_sweep()` maps each leg's sweep onto a direction:
+
+| Sweep | Direction | Meaning |
+|-------|-----------|---------|
+| BUY on UP token | `"UP"` | bullish |
+| SELL on UP token | `"DOWN"` | bearish |
+| BUY on DOWN token | `"DOWN"` | bearish |
+| SELL on DOWN token | `"UP"` | bullish |
+
+When both legs sweep, the larger-notional candidate wins. The signal is only
+emitted if the chosen direction's token mid is present (`up_mid` for `"UP"`,
+`down_mid` for `"DOWN"`).
 
 ### Lifecycle
 
@@ -482,6 +524,7 @@ polyalpha.orderbook
 ├── OrderBookFeed — live book (REST + WebSocket)
 ├── OrderBookManager — in-memory book state
 ├── SimulatedOrderBookManager — local matching engine
+├── TokenPairTracker — live CLOB feed: mid/favourite/spread_expansion/sweep/trade_sweep
 ├── Strategy (ABC), ImbalanceStrategy, SpreadStrategy, MomentumStrategy
 ├── RiskManager — pre-trade validation
 ├── BacktestEngine — historical replay

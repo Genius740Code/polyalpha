@@ -369,6 +369,157 @@ class TestSpreadExpansion:
         assert tracker.spread_expansion("nope") is None
 
 
+def _feed_trades(tracker, tid, trades, t0=100.0):
+    """Drive last_trade_price events with the given ``(price, size, side)`` triples."""
+    for i, (price, size, side) in enumerate(trades):
+        raw = json.dumps({
+            "event_type": "last_trade_price",
+            "asset_id": tid,
+            "price": str(price),
+            "size": str(size),
+            "side": side,
+            "timestamp": t0 + i,
+        })
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=t0 + i):
+            tracker._handle(raw)
+
+
+@pytest.mark.unit
+class TestLastTradePrice:
+    def test_appends_to_tape(self, tracker):
+        _feed_trades(tracker, UP_ID, [(0.55, 100, "BUY")], t0=100.0)
+        assert len(tracker.trade_tape[UP_ID]) == 1
+        t = tracker.trade_tape[UP_ID][-1]
+        assert t["price"] == 0.55
+        assert t["size"] == 100.0
+        assert t["side"] == "BUY"
+        assert t["ts"] == 100.0
+
+    def test_ignores_unknown_token(self, tracker):
+        _feed_trades(tracker, "stranger", [(0.55, 100, "BUY")], t0=100.0)
+        assert "stranger" not in tracker.trade_tape
+
+    def test_bad_numbers_swallowed(self, tracker):
+        raw = json.dumps({
+            "event_type": "last_trade_price",
+            "asset_id": UP_ID,
+            "price": "not-a-number",
+            "size": "100",
+            "side": "BUY",
+        })
+        tracker._handle(raw)
+        assert len(tracker.trade_tape[UP_ID]) == 0
+
+    def test_tape_capped_at_200(self, tracker):
+        _feed_trades(tracker, UP_ID, [(0.55, 100, "BUY")] * 250, t0=100.0)
+        assert len(tracker.trade_tape[UP_ID]) == 200
+
+    def test_does_not_update_book_or_freshness(self, tracker):
+        _feed_trades(tracker, UP_ID, [(0.55, 100, "BUY")], t0=100.0)
+        assert tracker.best_bid[UP_ID] is None
+        assert tracker.fresh() is False
+
+
+@pytest.mark.unit
+class TestSweep:
+    def test_needs_min_count(self, tracker):
+        _feed_trades(tracker, UP_ID, [(0.55, 100, "BUY")] * 3, t0=100.0)
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0):
+            assert tracker.sweep(UP_ID) is None
+
+    def test_ignores_trades_outside_window(self, tracker):
+        _feed_trades(tracker, UP_ID, [(0.55, 100, "BUY")] * 5, t0=100.0)
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=200.0):
+            assert tracker.sweep(UP_ID) is None
+
+    def test_buy_dominant(self, tracker):
+        _feed_trades(tracker, UP_ID, [(0.55, 100, "BUY")] * 5 + [(0.55, 100, "SELL")], t0=100.0)
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0):
+            res = tracker.sweep(UP_ID)
+        assert res == {"side": "BUY", "count": 5, "notional": pytest.approx(0.55 * 100 * 5)}
+
+    def test_sell_dominant(self, tracker):
+        _feed_trades(tracker, UP_ID, [(0.55, 100, "SELL")] * 5 + [(0.55, 100, "BUY")], t0=100.0)
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0):
+            res = tracker.sweep(UP_ID)
+        assert res == {"side": "SELL", "count": 5, "notional": pytest.approx(0.55 * 100 * 5)}
+
+    def test_tie_favours_buy(self, tracker):
+        _feed_trades(tracker, UP_ID, [(0.55, 100, "BUY")] * 4 + [(0.55, 100, "SELL")] * 4, t0=100.0)
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0):
+            res = tracker.sweep(UP_ID)
+        assert res["side"] == "BUY"
+        assert res["count"] == 4
+
+    def test_dom_side_needs_min_count(self, tracker):
+        _feed_trades(tracker, UP_ID, [(0.55, 100, "BUY")] * 2 + [(0.55, 100, "SELL")] * 3, t0=100.0)
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0):
+            assert tracker.sweep(UP_ID) is None
+
+    def test_min_notional(self, tracker):
+        _feed_trades(tracker, UP_ID, [(0.55, 1, "BUY")] * 5, t0=100.0)
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0):
+            assert tracker.sweep(UP_ID, min_notional=5.0) is None
+            assert tracker.sweep(UP_ID, min_notional=1.0) is not None
+
+    def test_unknown_token_returns_none(self, tracker):
+        assert tracker.sweep("nope") is None
+
+
+@pytest.mark.unit
+class TestTradeSweep:
+    def test_buy_up_token_direction_up(self, tracker):
+        _feed_quotes(tracker, UP_ID, [(0.55, 0.60)])
+        _feed_trades(tracker, UP_ID, [(0.55, 100, "BUY")] * 5, t0=100.0)
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0):
+            res = tracker.trade_sweep()
+        assert res is not None
+        assert res["direction"] == "UP"
+        assert res["side"] == "BUY"
+
+    def test_sell_up_token_direction_down(self, tracker):
+        _feed_quotes(tracker, UP_ID, [(0.55, 0.60)])
+        _feed_quotes(tracker, DOWN_ID, [(0.35, 0.40)])
+        _feed_trades(tracker, UP_ID, [(0.55, 100, "SELL")] * 5, t0=100.0)
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0):
+            res = tracker.trade_sweep()
+        assert res["direction"] == "DOWN"
+
+    def test_buy_down_token_direction_down(self, tracker):
+        _feed_quotes(tracker, DOWN_ID, [(0.35, 0.40)])
+        _feed_trades(tracker, DOWN_ID, [(0.35, 100, "BUY")] * 5, t0=100.0)
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0):
+            res = tracker.trade_sweep()
+        assert res["direction"] == "DOWN"
+
+    def test_sell_down_token_direction_up(self, tracker):
+        _feed_quotes(tracker, UP_ID, [(0.55, 0.60)])
+        _feed_quotes(tracker, DOWN_ID, [(0.35, 0.40)])
+        _feed_trades(tracker, DOWN_ID, [(0.35, 100, "SELL")] * 5, t0=100.0)
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0):
+            res = tracker.trade_sweep()
+        assert res["direction"] == "UP"
+
+    def test_both_sweep_picks_larger_notional(self, tracker):
+        _feed_quotes(tracker, UP_ID, [(0.55, 0.60)])
+        _feed_quotes(tracker, DOWN_ID, [(0.35, 0.40)])
+        _feed_trades(tracker, UP_ID, [(0.55, 10, "BUY")] * 5, t0=100.0)
+        _feed_trades(tracker, DOWN_ID, [(0.35, 1000, "BUY")] * 5, t0=100.0)
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0):
+            res = tracker.trade_sweep()
+        assert res is not None
+        assert res["direction"] == "DOWN"
+        assert res["notional"] == pytest.approx(0.35 * 1000 * 5)
+
+    def test_requires_direction_mid(self, tracker):
+        _feed_trades(tracker, UP_ID, [(0.55, 100, "BUY")] * 5, t0=100.0)
+        with patch("polyalpha.orderbook.tracker.time.time", return_value=100.0):
+            assert tracker.trade_sweep() is None
+
+    def test_no_sweep_returns_none(self, tracker):
+        assert tracker.trade_sweep() is None
+
+
 @pytest.mark.unit
 class TestSeedFromRest:
     def test_seeds_both_tokens(self, tracker):

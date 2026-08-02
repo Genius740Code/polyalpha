@@ -86,6 +86,11 @@ class TokenPairTracker:
             down_id: deque(maxlen=120),
         }
 
+        self.trade_tape: dict[str, deque] = {
+            up_id: deque(maxlen=200),
+            down_id: deque(maxlen=200),
+        }
+
         self._stop = False
         self._task: asyncio.Task | None = None
         self._ping_task: asyncio.Task | None = None
@@ -188,6 +193,79 @@ class TokenPairTracker:
             "side_pulled": side_pulled,
         }
 
+    # ── Trade-burst / sweep detection ─────────────────────────────────────────
+
+    def sweep(
+        self,
+        tid: str,
+        window_s: float = 15,
+        min_count: int = 4,
+        min_notional: float = 0.0,
+    ) -> dict | None:
+        """Detect a one-sided trade burst on *tid* within the last ``window_s`` s.
+
+        Returns ``{"side", "count", "notional"}`` for the dominant side (tie
+        favours ``"BUY"``) or ``None`` when there are ``< min_count`` trades in
+        the window, the dominant side alone has ``< min_count``, or its notional
+        is below ``min_notional``.
+
+        ``side`` is the taker/aggressor side as reported by the CLOB's
+        ``last_trade_price`` event — verify against the live stream before
+        trusting the direction interpretation in :meth:`trade_sweep`.
+        """
+        tape = self.trade_tape.get(tid)
+        if tape is None:
+            return None
+        now = time.time()
+        recent = [t for t in tape if now - t["ts"] <= window_s]
+        if len(recent) < min_count:
+            return None
+        buys = [t for t in recent if t["side"] == "BUY"]
+        sells = [t for t in recent if t["side"] == "SELL"]
+        dom_side = "BUY" if len(buys) >= len(sells) else "SELL"
+        dom = buys if dom_side == "BUY" else sells
+        if len(dom) < min_count:
+            return None
+        notional = sum(t["price"] * t["size"] for t in dom)
+        if notional < min_notional:
+            return None
+        return {"side": dom_side, "count": len(dom), "notional": notional}
+
+    def trade_sweep(
+        self,
+        window_s: float = 15,
+        min_count: int = 4,
+        min_notional: float = 0.0,
+    ) -> dict | None:
+        """Combined UP/DOWN sweep → directional signal.
+
+        Interprets each leg's :meth:`sweep`: a BUY sweep on the UP token is
+        bullish (``"UP"``), a SELL sweep on the UP token bearish (``"DOWN"``),
+        and the DOWN token inverts that. When both legs sweep, the larger-
+        notional candidate wins. Returns ``{"direction", "side", "count",
+        "notional"}`` or ``None`` when no leg sweeps or the chosen direction's
+        token mid is missing/stale.
+        """
+        up = self.sweep(self.up_id, window_s, min_count, min_notional)
+        down = self.sweep(self.down_id, window_s, min_count, min_notional)
+        candidates: list[tuple[float, str, dict]] = []
+        if up is not None:
+            candidates.append((up["notional"], "UP" if up["side"] == "BUY" else "DOWN", up))
+        if down is not None:
+            candidates.append((down["notional"], "DOWN" if down["side"] == "BUY" else "UP", down))
+        if not candidates:
+            return None
+        _, direction, res = max(candidates, key=lambda c: c[0])
+        mid = self.up_mid if direction == "UP" else self.down_mid
+        if mid is None:
+            return None
+        return {
+            "direction": direction,
+            "side": res["side"],
+            "count": res["count"],
+            "notional": res["notional"],
+        }
+
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -288,6 +366,8 @@ class TokenPairTracker:
                 self._handle_book(ev)
             elif et == "price_change":
                 self._handle_price_change(ev)
+            elif et == "last_trade_price":
+                self._handle_last_trade_price(ev)
 
     def _handle_book(self, ev: dict) -> None:
         tid = ev.get("asset_id")
@@ -311,3 +391,19 @@ class TokenPairTracker:
                 self.best_ask[tid] = float(pc["best_ask"])
             self._last_update = time.time()
             self._record_spread(tid)
+
+    def _handle_last_trade_price(self, ev: dict) -> None:
+        tid = ev.get("asset_id")
+        if tid not in self.trade_tape:
+            return
+        try:
+            self.trade_tape[tid].append(
+                {
+                    "ts": time.time(),
+                    "price": float(ev["price"]),
+                    "size": float(ev["size"]),
+                    "side": ev["side"],
+                }
+            )
+        except (TypeError, ValueError):
+            return
