@@ -156,6 +156,7 @@ from .report import ReportPreset
 from .report.comparison import ComparisonReport, VariantResult
 from .bots import Sniper, Tracker
 from .analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator, ChainlinkStreamer, ChainlinkStreamerConfig
+from .globals import Globals, MarketCtx, default_globals, watch_market
 from .database import TradeDatabase
 from .orderbook import (
     BacktestEngine,
@@ -277,6 +278,11 @@ __all__ = [
     "SignalGenerator",
     "ChainlinkStreamer",
     "ChainlinkStreamerConfig",
+    # Shared globals (one connection, many strategies)
+    "Globals",
+    "MarketCtx",
+    "watch_market",
+    "default_globals",
     # AI
     "OpenRouterClient",
     "MarketAnalysis",

@@ -58,6 +58,12 @@ class StrategySuite:
         Default starting paper balance per strategy (default 100.0).
     mode : str
         Fee/execution template: ``"simple"``, ``"realistic"``, ``"custom"``.
+    globals : Globals, optional
+        Shared feeds created once in ``main()`` (see
+        :mod:`polyalpha.globals`). Every strategy reads the same instances —
+        adding a strategy costs 0 extra connections. The caller owns the
+        lifecycle (``globals.start()`` / ``globals.stop()``); the suite only
+        reads it.
     **kwargs
         Extra keyword arguments forwarded to ``BotHub`` (and ``Client``).
     """
@@ -68,13 +74,16 @@ class StrategySuite:
         timeframe: str = "5m",
         balance: float = 100.0,
         mode: str = "simple",
+        globals: Optional[object] = None,
         **kwargs,
     ):
         self._asset = asset
         self._timeframe = timeframe
         self._balance = balance
+        self._globals = globals
         self._hub = BotHub(
-            asset=asset, timeframe=timeframe, default_balance=balance, mode=mode, **kwargs
+            asset=asset, timeframe=timeframe, default_balance=balance, mode=mode,
+            globals=globals, **kwargs
         )
         self._strategies = {}
         self._log = logging.getLogger("polyalpha.StrategySuite")
@@ -169,6 +178,15 @@ class StrategySuite:
     def strategies(self) -> dict[str, Strategy]:
         """Read-only view of registered strategies."""
         return dict(self._strategies)
+
+    @property
+    def globals(self):
+        """The shared :class:`~polyalpha.globals.Globals`, or *None*.
+
+        Every strategy reads the same feeds via ``ctx.globals`` — adding a
+        strategy costs 0 extra connections.
+        """
+        return self._globals
 
     def _make_tick_handler(self, strategy: Strategy):
         """Build a BotHub-compatible tick handler from a Strategy."""

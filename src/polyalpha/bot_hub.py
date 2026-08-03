@@ -799,6 +799,7 @@ class StrategyContext:
         chainlink: Optional[object] = None,
         binance: Optional[BinanceAccessor] = None,
         cl_window: Optional[TimeWindow] = None,
+        globals: Optional[object] = None,
         get_candle_open=None,
         get_seconds_in=None,
         get_candle_id=None,
@@ -816,6 +817,7 @@ class StrategyContext:
         self._chainlink = chainlink
         self._binance = binance
         self._hub = hub  # Reference to BotHub for Telegram notifications
+        self._globals = globals  # Shared feeds (Globals) — one connection, many strategies
         self._get_candle_open = get_candle_open or (lambda: None)
         self._get_seconds_in = get_seconds_in or (lambda: 0.0)
         self._get_candle_id: Callable[[], int] = get_candle_id or (lambda: 0)
@@ -861,6 +863,16 @@ class StrategyContext:
         Returns ``None`` if not available in this context.
         """
         return self._binance
+
+    @property
+    def globals(self):
+        """The shared :class:`~polyalpha.globals.Globals` instance, if any.
+
+        Every strategy reads the same feeds (``ctx.globals.cvd``,
+        ``ctx.globals.price_feed``, …) so adding a strategy costs 0 extra
+        connections. Returns ``None`` when the hub was not given one.
+        """
+        return self._globals
 
     @property
     def cl(self):
@@ -1175,6 +1187,7 @@ class BotHub:
         paper_config: Optional[PaperConfig] = None,
         chainlink: bool = True,
         log_dir: Optional[str] = None,
+        globals: Optional[object] = None,
         **kwargs,
     ):
         asset = asset.upper()
@@ -1193,6 +1206,7 @@ class BotHub:
         self.default_balance = default_balance
         self.mode = mode
         self._log_dir = log_dir
+        self._globals = globals  # Shared feeds — one connection, many strategies
 
         from .trading.paper_config import get_paper_config_from_preset
 
@@ -1241,13 +1255,18 @@ class BotHub:
         if TelegramNotifier is not None:
             self._telegram = TelegramNotifier()
 
-        # Initialize Chainlink streamer (live BTC spot from Polymarket)
+        # Initialize Chainlink streamer (live BTC spot from Polymarket).
+        # Reuse the shared globals.price_feed when one is provided so we do
+        # NOT open a second oracle connection — the caller owns its lifecycle.
         self._chainlink: Optional[object] = None
         self._shared_cl_window: Optional[TimeWindow] = TimeWindow(max_age=120) if TimeWindow is not None else None
         try:
             from .analysis.streaming import ChainlinkStreamer
-            cl = ChainlinkStreamer()
-            cl.start(asset, background=True)
+            shared = getattr(self._globals, "price_feed", None) if self._globals is not None else None
+            cl = shared if isinstance(shared, ChainlinkStreamer) else None
+            if cl is None:
+                cl = ChainlinkStreamer()
+                cl.start(asset, background=True)
             self._chainlink = cl
             # Set up callback to update shared CL window when prices arrive
             if self._shared_cl_window:
@@ -1652,6 +1671,7 @@ class BotHub:
                 chainlink=self._chainlink,
                 binance=self._binance,
                 cl_window=self._shared_cl_window,
+                globals=self._globals,
                 get_candle_open=lambda: self._candle_open_price,
                 get_seconds_in=lambda: max(0.0, time.time() - self._candle_start_time),
                 get_candle_id=lambda: self._candle_id,

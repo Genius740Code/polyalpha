@@ -12,7 +12,7 @@ Status:
 - [x] 2. favourite() + spread metrics (done in `src/polyalpha/orderbook/tracker.py`)
 - [x] 3. sweep() trade-burst detection (done in `src/polyalpha/orderbook/tracker.py`)
 - [ ] 4. CVDTracker in `src/polyalpha/analysis/delta.py`
-- [ ] 5. Shared Globals / one-connection-many-strategies refactor
+- [x] 5. Shared Globals / one-connection-many-strategies refactor
 - [ ] 6. LiquidationTracker
 
 ---
@@ -120,28 +120,36 @@ Binance aggTrade feed.
     `(hist[-1]-hist[-2]) - (hist[-2]-hist[-3])`.
 - Reconnect: on drop, log warning + sleep 3s, loop forever.
 
-## 5. Shared Globals / one-connection-many-strategies
+## 5. Shared Globals / one-connection-many-strategies — DONE
 
-Refactor polyalpha so all continuously-running feeds are created once and every
-strategy/signal reads the same instances — adding a strategy costs 0 extra
-connections. Today `src/polyalpha/analysis/signals/` spin up separate data.
+Implemented in `src/polyalpha/globals.py` (exported from the package root):
 
-Pattern to reproduce (bot main/watch_market):
+- `Globals` dataclass mirroring the bot's field set: `price_feed`,
+  `klines`, `cvd`, `obi_cache`, `futures`, `liq`, `db` + optional
+  `eth_feed`, `klines_15m`, `klines_1h`. Out-of-scope feeds (Binance
+  klines/OBI/futures, trade DB) stay `None` and are skipped by lifecycle.
+  `Globals.defaults(asset, *, price_feed=True, cvd=True, liq=False)` builds
+  the in-scope feeds; `start()` (idempotent, price_feed via
+  `background=True`) / `stop()` (reverse order) manage them all.
+- `MarketCtx` per-market scope wrapping a `TokenPairTracker`:
+  holds `globals`, `tracker`, `open_price`, `end_time`; exposes
+  `remaining`, `price()`, `favourite()`, `spread(side)`, `trade_sweep(side)`.
+- `watch_market(globals, market, tick, interval=2.0)`: creates + starts the
+  per-market `TokenPairTracker`, ticks `tick(ctx)` every 2s until
+  `remaining <= 0`, `tracker.stop()` in `finally`.
+- Wired into `strategy/suite.py` / `bot_hub.py` / `StrategyContext`: an
+  optional `globals=` is shared by every strategy (`ctx.globals.cvd`, ...);
+  `BotHub` reuses `globals.price_feed` instead of opening a second Chainlink
+  connection. Caller owns the `Globals` lifecycle per the main/finally
+  pattern above.
 
-- `Globals` dataclass holding every global feed:
-  `price_feed` (BTC spot), `klines` (BTC 1m), `cvd`, `obi_cache`, `futures`,
-  `liq`, `db`, plus optional `eth_feed`, `klines_15m`, `klines_1h`.
-- Construct + `.start()` every feed once in `main()`; `.stop()` them all in the
-  `finally` of `main`.
-- Per-market scope is ONLY the market-specific data: create a
-  `TokenPairTracker(up_id, down_id)`, `.start()` it, wrap everything in a per-
-  market `Ctx` (holds `globals`, `tracker`, `open_price`, `end_time`; exposes
-  `remaining`, `price()`, `favourite()`, `spread(side)`, `trade_sweep(side)`),
-  tick strategies every 2s until `remaining <= 0`, then `tracker.stop()` in
-  `finally`.
-- Relevant polyalpha surface to audit: `src/polyalpha/analysis/signals/`,
-  `src/polyalpha/strategy/suite.py`, `src/polyalpha/bot_hub.py`,
-  `src/polyalpha/bot.py`.
+Audit results:
+- `src/polyalpha/analysis/signals/` — computes from a caller-supplied
+  `IndicatorCalculator` DataFrame; the per-call duplication lives in
+  `DataFeed.fetch()` (Binance REST), which is the "klines" feed — tracked
+  separately under TOD, not this plan.
+- `src/polyalpha/bot.py` — single-strategy runner, already one shared
+  connection; unchanged.
 
 ## 6. LiquidationTracker — target `src/polyalpha/analysis/`
 
