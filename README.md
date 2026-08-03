@@ -550,6 +550,8 @@ Sniper(SniperConfig(
 )).run()
 ```
 
+`timeframe` is **required** (one of `5m`, `15m`, `1h`, `4h`, `24h` — no silent 5m default). By default each bot buys only **once per market** (`buy_once_per_market=True`); set it to `False` on the config to allow multiple entries within the same market.
+
 See [`examples/sniper.py`](./examples/sniper.py), [`examples/sniper_minimal.py`](./examples/sniper_minimal.py), [`examples/sniper_ta.py`](./examples/sniper_ta.py), and [`docs/bots.md`](./docs/bots.md#advanced-time-windows).
 
 ---

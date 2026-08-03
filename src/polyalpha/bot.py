@@ -206,8 +206,17 @@ class TickContext:
         -------
         PaperOrder
         """
+        if self._bot.buy_once_per_market and self._bot._bought_this_market:
+            return None
+        order = self._place_buy(side, amount)
+        if order:
+            self._bot._bought_this_market = True
+        return order
+
+    def _place_buy(self, side: str, amount: float):
+        """Place the order and fire Telegram notifications (bypasses guards)."""
         order = self._client.paper.buy(market=self._market, side=side, amount=amount)
-        
+
         # Send Telegram notification if configured
         if self._bot._telegram and order:
             price = getattr(self._bot._stream, side.lower(), None) or (self.price.up if side == "UP" else self.price.down)
@@ -217,7 +226,7 @@ class TickContext:
                 amount=amount,
                 price=price
             )
-        
+
         return order
 
     def limit(self, side: str, price: float, amount: float):
@@ -298,7 +307,7 @@ class TickContext:
         side = side.upper()
         if side in sides:
             return
-        result = self.buy(side, amount)
+        result = self._place_buy(side, amount)
         sides.add(side)
         return result
 
@@ -449,9 +458,9 @@ class Bot:
     Parameters
     ----------
     asset : str
-        BTC, ETH, SOL, XRP, DOGE (default "BTC").
+        BTC, ETH, SOL, XRP, DOGE.
     timeframe : str
-        5m, 15m, 1h, 4h, 24h (default "5m").
+        5m, 15m, 1h, 4h, 24h.
     balance : float
         Starting paper-trading balance (default 100.0).
     paper : bool
@@ -482,13 +491,14 @@ class Bot:
 
     def __init__(
         self,
-        asset: str = "BTC",
-        timeframe: str = "5m",
+        asset: str,
+        timeframe: str,
         balance: float = 100.0,
         paper: bool = True,
         mode: str = "simple",
         paper_config: Optional[PaperConfig] = None,
         log_dir: Optional[str] = None,
+        buy_once_per_market: bool = True,
         **kwargs,
     ):
         asset = asset.upper()
@@ -502,6 +512,8 @@ class Bot:
         self.asset = asset
         self.timeframe = timeframe
         self.paper_mode = paper
+        self.buy_once_per_market = buy_once_per_market
+        self._bought_this_market = False
 
         from .trading.paper_config import get_paper_config_from_preset
 
@@ -920,6 +932,7 @@ class Bot:
         self._ctx = None
         self._candle_id = 0
         self._bought_this_candle = {}
+        self._bought_this_market = False
         self._log.info("Rolling over to next market...")
         await self._asleep(2)
 
@@ -963,6 +976,7 @@ class Bot:
         self._ctx = None
         self._candle_id = 0
         self._bought_this_candle = {}
+        self._bought_this_market = False
         self._log.info("Rolling over to next market...")
         self._sleep(2)
 

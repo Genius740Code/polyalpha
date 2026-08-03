@@ -8,5 +8,5 @@ import polyalpha
 from polyalpha.bots import Sniper
 
 client = polyalpha.Client(balance=100)
-sniper = Sniper(client=client, asset="BTC", side="UP", amount=10.0)
+sniper = Sniper(client=client, asset="BTC", timeframe="5m", side="UP", amount=10.0)
 sniper.run()

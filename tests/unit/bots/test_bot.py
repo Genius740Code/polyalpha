@@ -57,3 +57,32 @@ class TestTickContextClosePosition:
         ctx = TickContext(fake_bot)
         result = ctx.close_position("UP")
         assert result.status == "filled"
+
+
+@pytest.mark.unit
+class TestTickContextBuyOncePerMarket:
+    def test_blocks_after_first_buy_by_default(self):
+        fake_bot = FakeBot()
+        fake_bot.buy_once_per_market = True
+        fake_bot._bought_this_market = True
+        ctx = TickContext(fake_bot)
+        order = ctx.buy("UP", 10)
+        assert order is None
+        fake_bot._client.paper.buy.assert_not_called()
+
+    def test_sets_flag_after_first_buy(self):
+        fake_bot = FakeBot()
+        fake_bot.buy_once_per_market = True
+        fake_bot._bought_this_market = False
+        ctx = TickContext(fake_bot)
+        ctx.buy("UP", 10)
+        assert fake_bot._bought_this_market is True
+
+    def test_allows_multiple_buys_when_disabled(self):
+        fake_bot = FakeBot()
+        fake_bot.buy_once_per_market = False
+        fake_bot._bought_this_market = False
+        ctx = TickContext(fake_bot)
+        ctx.buy("UP", 10)
+        ctx.buy("UP", 10)
+        assert fake_bot._client.paper.buy.call_count == 2

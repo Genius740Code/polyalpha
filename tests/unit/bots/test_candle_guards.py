@@ -43,6 +43,8 @@ class FakeBot:
         self._candle_open_price = 0.5
         self._candle_id = 1
         self._bought_this_candle = {1: set()}
+        self.buy_once_per_market = True
+        self._bought_this_market = False
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────

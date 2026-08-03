@@ -32,6 +32,65 @@ def test_sniper_config_defaults():
 
 
 @pytest.mark.unit
+def test_sniper_config_requires_timeframe():
+    """timeframe must be explicitly provided — no silent 5m default."""
+    with pytest.raises(TypeError):
+        SniperConfig(asset="BTC")
+
+    with pytest.raises(TypeError):
+        SniperConfig()
+
+
+@pytest.mark.unit
+def test_sniper_config_buy_once_per_market_default():
+    """buy_once_per_market defaults to True (one buy per market)."""
+    config = SniperConfig(asset="BTC", timeframe="5m")
+    assert config.buy_once_per_market is True
+
+
+@pytest.mark.unit
+def test_sniper_config_buy_once_per_market_override():
+    """buy_once_per_market can be disabled for multiple buys per market."""
+    config = SniperConfig(asset="BTC", timeframe="5m", buy_once_per_market=False)
+    assert config.buy_once_per_market is False
+
+
+def _make_sniper_armed(buy_once_per_market=True):
+    """Build an ARMED sniper with a fake stream + mocked paper engine."""
+    from unittest.mock import MagicMock
+    client = polyalpha.Client(balance=100.0)
+    config = SniperConfig(
+        asset="BTC", timeframe="5m", buy_once_per_market=buy_once_per_market,
+    )
+    sniper = Sniper(client, config)
+    sniper._market = _make_market()
+    sniper._stream = MagicMock(up=0.95, down=0.45, running=True)
+    sniper._set_state(sniper.STATE_ARMED)
+    order = MagicMock(side="UP", price=0.95, amount=20.0, id="order-1")
+    order.status = "pending"
+    client.paper.limit = MagicMock(return_value=order)
+    return sniper
+
+
+@pytest.mark.unit
+def test_sniper_buy_once_per_market_blocks_second_entry():
+    """Default (True): no second order once the market has a fill."""
+    sniper = _make_sniper_armed(buy_once_per_market=True)
+    sniper._filled_order = object()  # already filled this market
+    sniper._on_price_update(0.95, 0.45)
+    assert sniper._pending_order is None
+
+
+@pytest.mark.unit
+def test_sniper_buy_once_per_market_false_allows_reentry():
+    """False: another order can be placed after a fill."""
+    sniper = _make_sniper_armed(buy_once_per_market=False)
+    sniper._filled_order = object()  # already filled this market
+    sniper._on_price_update(0.95, 0.45)
+    assert sniper._pending_order is not None
+
+
+@pytest.mark.unit
 def test_sniper_trade_record():
     record = TradeRecord(
         market_slug="btc-updown-5m-123",

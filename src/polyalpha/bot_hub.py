@@ -956,8 +956,17 @@ class StrategyContext:
 
     def buy(self, side: str, amount: float):
         """Place a market buy order against this strategy's paper engine."""
+        if self._hub is not None and self._hub.buy_once_per_market and self._hub._bought_this_market.get(self.name, False):
+            return None
+        order = self._place_buy(side, amount)
+        if self._hub is not None and order:
+            self._hub._bought_this_market[self.name] = True
+        return order
+
+    def _place_buy(self, side: str, amount: float):
+        """Place the order and fire Telegram notifications (bypasses guards)."""
         order = self._paper.buy(market=self._market, side=side, amount=amount)
-        
+
         # Send Telegram notification if configured
         if self._hub is not None and self._hub._telegram and order:
             price = getattr(self._stream, side.lower(), None) or self.price.up if side == "UP" else self.price.down
@@ -968,7 +977,7 @@ class StrategyContext:
                 price=price,
                 strategy_name=self.name
             )
-        
+
         return order
 
     def limit(self, side: str, price: float, amount: float):
@@ -1016,7 +1025,7 @@ class StrategyContext:
         side = side.upper()
         if side in sides:
             return
-        result = self.buy(side, amount)
+        result = self._place_buy(side, amount)
         sides.add(side)
         return result
 
@@ -1037,7 +1046,7 @@ class StrategyContext:
         """
         secs = self.seconds_in
         if min_seconds <= secs <= max_seconds:
-            return self.buy(side, amount)
+            return self._place_buy(side, amount)
 
     # ── Indicators (shared price history) ──────────────────────────────────
 
@@ -1147,9 +1156,9 @@ class BotHub:
     Parameters
     ----------
     asset : str
-        BTC, ETH, SOL, XRP, DOGE, HYPE, BNB (default "BTC").
+        BTC, ETH, SOL, XRP, DOGE, HYPE, BNB.
     timeframe : str
-        5m, 15m, 1h, 4h, 24h (default "5m").
+        5m, 15m, 1h, 4h, 24h.
     default_balance : float
         Default starting paper balance per strategy (default 100.0).
     mode : str
@@ -1180,14 +1189,15 @@ class BotHub:
 
     def __init__(
         self,
-        asset: str = "BTC",
-        timeframe: str = "5m",
+        asset: str,
+        timeframe: str,
         default_balance: float = 100.0,
         mode: str = "simple",
         paper_config: Optional[PaperConfig] = None,
         chainlink: bool = True,
         log_dir: Optional[str] = None,
         globals: Optional[object] = None,
+        buy_once_per_market: bool = True,
         **kwargs,
     ):
         asset = asset.upper()
@@ -1205,6 +1215,8 @@ class BotHub:
         self.timeframe = timeframe
         self.default_balance = default_balance
         self.mode = mode
+        self.buy_once_per_market = buy_once_per_market
+        self._bought_this_market: dict[str, bool] = {}
         self._log_dir = log_dir
         self._globals = globals  # Shared feeds — one connection, many strategies
 
@@ -1846,6 +1858,7 @@ class BotHub:
         self._market = None
         self._candle_id = 0
         self._bought_this_candle = {}
+        self._bought_this_market = {}
         for s in self._active_tickers():
             s.ctx = None
         self._log.info("Rolling over to next market...")
@@ -1861,6 +1874,7 @@ class BotHub:
         self._market = None
         self._candle_id = 0
         self._bought_this_candle = {}
+        self._bought_this_market = {}
         for s in self._active_tickers():
             s.ctx = None
         self._log.info("Rolling over to next market...")

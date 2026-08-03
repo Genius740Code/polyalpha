@@ -111,7 +111,7 @@ config = SniperConfig(
 | Field | Default | Description |
 |-------|---------|-------------|
 | `asset` | `"BTC"` | Trading asset |
-| `timeframe` | `"5m"` | Market timeframe |
+| `timeframe` | *(required)* | Market timeframe. One of: 5m, 15m, 1h, 4h, 24h |
 | `side` | `"UP"` | `"UP"` or `"DOWN"` |
 | `entry_price` | `0.92` | Entry price threshold (0–1) |
 | `entry_price_max` | `None` | Maximum entry price for price range (must be > entry) |
@@ -122,6 +122,7 @@ config = SniperConfig(
 | `conditional_windows` | `None` | Indicator-based conditional windows (list of `ConditionalWindow` objects) |
 | `time_filter` | `None` | Day/hour filtering (`TimeFilter` object) |
 | `amount` | `20.0` | USDC amount per trade |
+| `buy_once_per_market` | `True` | Buy only once per market. Set `False` to keep buying as long as entry conditions are met within the same market. |
 | `max_position_size` | `None` | Maximum position exposure |
 | `max_consecutive_losses` | `3` | Stop after this many consecutive losses |
 | `max_trades` | `None` | Maximum total trades before stopping |
@@ -140,6 +141,35 @@ config = SniperConfig(
 | `btc_change_periods` | `5` | Lookback periods for BTC change calculation |
 
 All parameters are validated on initialization. Invalid values raise `ValueError` with descriptive messages.
+
+#### `timeframe` is required
+
+`timeframe` has **no default** — you must always pass it explicitly (e.g. `"5m"`, `"15m"`, `"1h"`, `"4h"`, `"24h"`). Omitting it raises `TypeError`.
+
+```python
+SniperConfig(asset="BTC")                 # ❌ TypeError: timeframe required
+SniperConfig(asset="BTC", timeframe="1h") # ✅
+```
+
+#### `buy_once_per_market`
+
+Controls how many entries the sniper makes within a single market:
+
+| Value | Behavior |
+|-------|----------|
+| `True` (default) | Buys at most **once** per market. After the first fill, no further entries are attempted until the next market. |
+| `False` | Keeps placing entries whenever the entry conditions are met during the trading window, until the window closes. |
+
+```python
+config = SniperConfig(
+    asset="BTC",
+    timeframe="1h",
+    side="UP",
+    entry_price=0.92,
+    amount=20.0,
+    buy_once_per_market=False,  # allow multiple entries in the same market
+)
+```
 
 ### Market Session Filtering
 

@@ -51,9 +51,9 @@ class StrategySuite:
     Parameters
     ----------
     asset : str
-        BTC, ETH, SOL, XRP, DOGE (default "BTC").
+        BTC, ETH, SOL, XRP, DOGE.
     timeframe : str
-        5m, 15m, 1h, 4h, 24h (default "5m").
+        5m, 15m, 1h, 4h, 24h.
     balance : float
         Default starting paper balance per strategy (default 100.0).
     mode : str
@@ -70,8 +70,8 @@ class StrategySuite:
 
     def __init__(
         self,
-        asset: str = "BTC",
-        timeframe: str = "5m",
+        asset: str,
+        timeframe: str,
         balance: float = 100.0,
         mode: str = "simple",
         globals: Optional[object] = None,

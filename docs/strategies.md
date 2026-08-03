@@ -90,11 +90,12 @@ strategy does not stop the others.
 
 ```python
 suite = StrategySuite(
-    asset="BTC",          # BTC, ETH, SOL, XRP, DOGE
-    timeframe="5m",       # 5m, 15m, 1h, 4h, 24h
-    balance=100.0,        # default starting paper balance per strategy
-    mode="simple",        # "simple", "realistic", or "custom"
-    **kwargs,             # forwarded to BotHub (and Client)
+    asset="BTC",              # required: BTC, ETH, SOL, XRP, DOGE, HYPE, BNB
+    timeframe="5m",           # required: 5m, 15m, 1h, 4h, 24h
+    balance=100.0,            # default starting paper balance per strategy
+    mode="simple",            # "simple", "realistic", or "custom"
+    buy_once_per_market=True, # buy only once per market, per strategy
+    **kwargs,                 # forwarded to BotHub (and Client)
 )
 ```
 

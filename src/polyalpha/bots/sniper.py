@@ -388,8 +388,8 @@ class SniperConfig:
     """
 
     # Market parameters
+    timeframe: str
     asset: str = "BTC"
-    timeframe: str = "5m"
     side: str = "UP"
 
     # Trading parameters
@@ -400,6 +400,7 @@ class SniperConfig:
     excluded_price_ranges: Optional[List[tuple[float, float]]] = None  # List of (min, max) ranges to exclude
     window_seconds: int = DEFAULT_WINDOW_SECONDS
     amount: float = 20.0
+    buy_once_per_market: bool = True
 
     # Advanced time windows (optional - overrides window_seconds if provided)
     time_windows: Optional[List[TimeWindow]] = None  # Multiple time windows
@@ -1255,7 +1256,9 @@ class Sniper:
                                           current_price, min_price, max_price)
                         break
 
-            if price_in_range and not price_excluded and not self._pending_order and not self._filled_order:
+            if price_in_range and not price_excluded and not self._pending_order:
+                if self._filled_order and self.config.buy_once_per_market:
+                    return
                 max_str = f"-{self.config.entry_price_max:.4f}" if self.config.entry_price_max else ""
                 self._log.info("Entry threshold triggered: %.4f >= %.4f%s",
                               current_price, self.config.entry_price, max_str)
@@ -1572,13 +1575,17 @@ class Sniper:
             if self._pending_order and self._pending_order.status == "filled":
                 self._filled_order = self._pending_order
                 self._pending_order = None
-                self._set_state(self.STATE_FILLED)
                 self._emit("entry", self._filled_order)
 
                 if self.config.log_trades:
                     self._log.info("Order filled: %.4f shares @ %.4f",
                                   self._filled_order.shares, self._filled_order.price)
-                return
+
+                if self.config.buy_once_per_market:
+                    self._set_state(self.STATE_FILLED)
+                    return
+                # buy_once_per_market=False: stay ARMED and keep buying
+                # until the window closes.
 
             # Check for timeout
             elapsed = time.time() - start

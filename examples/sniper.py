@@ -12,6 +12,7 @@ client = polyalpha.Client(balance=100)
 sniper = Sniper(
     client=client,
     asset="BTC",
+    timeframe="5m",
     side="UP",
     entry_price=0.92,
     exit_price=0.88,

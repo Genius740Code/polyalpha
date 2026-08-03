@@ -22,14 +22,15 @@ bot.run()
 
 ```python
 bot = polyalpha.Bot(
-    asset="BTC",           # BTC, ETH, SOL, XRP, DOGE
-    timeframe="5m",        # 5m, 15m, 1h, 4h, 24h
-    balance=100.0,         # starting paper balance
-    paper=True,            # True → paper trade, False → real trade
-    mode="simple",         # "simple", "realistic", or "custom"
-    paper_config=None,     # PaperConfig for mode="custom"
-    log_dir=None,          # directory for rotating log files
-    **kwargs,              # forwarded to polyalpha.Client
+    asset="BTC",              # required: BTC, ETH, SOL, XRP, DOGE, HYPE, BNB
+    timeframe="5m",           # required: 5m, 15m, 1h, 4h, 24h
+    balance=100.0,            # starting paper balance
+    paper=True,               # True → paper trade, False → real trade
+    mode="simple",            # "simple", "realistic", or "custom"
+    paper_config=None,        # PaperConfig for mode="custom"
+    log_dir=None,             # directory for rotating log files
+    buy_once_per_market=True, # buy only once per market
+    **kwargs,                 # forwarded to polyalpha.Client
 )
 ```
 
@@ -37,13 +38,14 @@ bot = polyalpha.Bot(
 
 | Param | Default | Description |
 |-------|---------|-------------|
-| `asset` | `"BTC"` | Trading asset. One of: BTC, ETH, SOL, XRP, DOGE |
-| `timeframe` | `"5m"` | Market timeframe. One of: 5m, 15m, 1h, 4h, 24h |
+| `asset` | *(required)* | Trading asset. One of: BTC, ETH, SOL, XRP, DOGE, HYPE, BNB |
+| `timeframe` | *(required)* | Market timeframe. One of: 5m, 15m, 1h, 4h, 24h |
 | `balance` | `100.0` | Starting paper-trading balance in USDC |
 | `paper` | `True` | `True` for paper trading, `False` for real trading |
 | `mode` | `"simple"` | Execution template: `"simple"`, `"realistic"`, or `"custom"` |
 | `paper_config` | `None` | `PaperConfig` instance (only used when `mode="custom"`) |
 | `log_dir` | `None` | Directory for rotating per-bot log files (5 MB max, 3 backups) |
+| `buy_once_per_market` | `True` | Buy only once per market. Set `False` to allow multiple buys within a market. |
 | `**kwargs` | — | Extra keyword arguments forwarded to `polyalpha.Client` |
 
 Raises `ValueError` if the asset or timeframe is unsupported.
@@ -685,26 +687,28 @@ With 20 separate `Bot` instances on the same asset/timeframe, each opens its own
 
 ```python
 hub = polyalpha.BotHub(
-    asset="BTC",              # BTC, ETH, SOL, XRP, DOGE, HYPE, BNB
-    timeframe="5m",           # 5m, 15m, 1h, 4h, 24h
+    asset="BTC",              # required: BTC, ETH, SOL, XRP, DOGE, HYPE, BNB
+    timeframe="5m",           # required: 5m, 15m, 1h, 4h, 24h
     default_balance=100.0,    # default starting balance per strategy
     mode="simple",            # "simple", "realistic", or "custom"
     paper_config=None,        # PaperConfig for mode="custom"
     chainlink=True,           # enable Chainlink oracle price feed (also starts Binance TA stream)
     log_dir=None,             # directory for per-strategy rotating log files
+    buy_once_per_market=True, # buy only once per market, per strategy
     **kwargs,                 # forwarded to polyalpha.Client
 )
 ```
 
 | Param | Default | Description |
 |-------|---------|-------------|
-| `asset` | `"BTC"` | Trading asset |
-| `timeframe` | `"5m"` | Market timeframe |
+| `asset` | *(required)* | Trading asset |
+| `timeframe` | *(required)* | Market timeframe |
 | `default_balance` | `100.0` | Default starting balance per strategy/variant |
 | `mode` | `"simple"` | Fee/execution template |
 | `paper_config` | `None` | `PaperConfig` for `mode="custom"` |
 | `chainlink` | `True` | Enable background Chainlink oracle price feed (`ctx.spot_price`) |
 | `log_dir` | `None` | Directory for per-strategy rotating log files (5 MB max, 3 backups) |
+| `buy_once_per_market` | `True` | Each strategy buys only once per market. Set `False` to allow multiple buys. |
 
 ### Registration
 
