@@ -10,6 +10,9 @@ CLOB_WS   = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 # Max age of a CLOB best-bid/ask before it is considered stale and dropped.
 CLOB_MAX_AGE_S = 20
 
+# Binance spot aggregate-trades stream (BTC/USDT) — feeds CVDTracker.
+BINANCE_WS_AGGTRADE = "wss://stream.binance.com:9443/ws/btcusdt@aggTrade"
+
 # ── Timeframes ─────────────────────────────────────────────────────────────────
 
 TIMEFRAME_SECONDS: dict[str, int] = {

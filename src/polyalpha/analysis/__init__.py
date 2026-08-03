@@ -56,7 +56,7 @@ For best accuracy, use Chainlink data when available.
 """
 
 from .data_feed import DataFeed, DataFeedConfig
-from .delta import DeltaCalculator
+from .delta import CVDTracker, CVDTrackerConfig, DeltaCalculator
 from .indicators import IndicatorCalculator
 from .signals import SignalGenerator
 from .streaming import ChainlinkStreamer, ChainlinkStreamerConfig
@@ -64,6 +64,8 @@ from .streaming import ChainlinkStreamer, ChainlinkStreamerConfig
 __all__ = [
     "DataFeed",
     "DataFeedConfig",
+    "CVDTracker",
+    "CVDTrackerConfig",
     "DeltaCalculator",
     "IndicatorCalculator",
     "SignalGenerator",
