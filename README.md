@@ -435,6 +435,28 @@ sig.summary()  # all signals at once
 
 **Data sources:** `binance` (default), `chainlink`, `coingecko`, `custom`.
 
+**Live Binance feeds** (`polyalpha.analysis`): `CVDTracker` streams spot
+aggTrades for cumulative volume delta (`cvd`, `z`, `velocity`, …), and
+`LiquidationTracker` streams futures `forceOrder` events for one-sided
+liquidation clusters (`cluster()`). Both run their own connection and
+reconnect forever.
+
+```python
+from polyalpha.analysis import CVDTracker, LiquidationTracker
+
+cvd = CVDTracker(); cvd.start()
+liq = LiquidationTracker(); liq.start()
+
+cvd.z()                       # CVD z-score, or None
+liq.cluster()                 # {"direction", "notional", "count"} or None
+```
+
+**Shared Globals** (`polyalpha.Globals`): one instance of every
+continuously-running feed, shared by all strategies so adding one costs zero
+extra connections. `default_globals("BTC", cvd=True, liq=True)` builds the
+feeds; `.start()` / `.stop()` manage them all. Per-market scope is
+`MarketCtx` / `watch_market()`.
+
 See [`examples/analysis.py`](./examples/analysis.py) and [`examples/price_change_signals.py`](./examples/price_change_signals.py).
 
 ---

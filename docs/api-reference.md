@@ -187,6 +187,14 @@ See [Strategies](strategies.md).
 | `DataFeedConfig` | `analysis/data_feed.py` | Data feed configuration |
 | `IndicatorCalculator` | `analysis/indicators.py` | 28 technical indicators (+ supertrend, psar, ichimoku, donchian) |
 | `SignalGenerator` | `analysis/signals.py` | 55+ trading signal methods (+ EMA cross, BB squeeze, supertrend, psar, ichimoku, donchian) |
+| `CVDTracker` | `analysis/delta.py` | Binance BTC spot cumulative volume delta (aggTrade stream): `cvd`, `z`, `decelerating`, `velocity`, `acceleration` |
+| `CVDTrackerConfig` | `analysis/delta.py` | Configuration for `CVDTracker` |
+| `LiquidationTracker` | `analysis/liquidations.py` | Binance futures liquidation clusters (forceOrder stream): `cluster()` |
+| `LiquidationTrackerConfig` | `analysis/liquidations.py` | Configuration for `LiquidationTracker` |
+| `Globals` | `globals.py` | One instance of every continuously-running feed, shared by all strategies (`defaults`, `start`, `stop`) |
+| `MarketCtx` | `globals.py` | Per-market scope: `remaining`, `price()`, `favourite()`, `spread()`, `trade_sweep()` |
+| `watch_market` | `globals.py` | Async per-market loop: creates/stops a `TokenPairTracker`, ticks a handler every interval |
+| `default_globals` | `globals.py` | Alias for `Globals.defaults(asset, **kwargs)` |
 
 ---
 
@@ -247,6 +255,8 @@ ClobBookClient, OrderBookFeed, OrderBookManager, OrderBookSnapshot,
 Sniper, Tracker,
 DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator,
   ChainlinkStreamer, ChainlinkStreamerConfig,
+  CVDTracker, CVDTrackerConfig, LiquidationTracker, LiquidationTrackerConfig,
+Globals, MarketCtx, watch_market, default_globals,
 IndicatorAccessor, MACDResult, BBResult, DonchianResult,
 OpenRouterClient, MarketAnalysis, TradingSignal,
 conditions,
