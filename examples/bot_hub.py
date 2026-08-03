@@ -33,10 +33,10 @@ def mean_revert(ctx):
 _ticks = 0
 
 @hub.on("tick")
-def on_tick(price):
+def on_tick(up, down):
     global _ticks
     _ticks += 1
     if _ticks % 30 == 0:
-        print(f"[Timer] Price: UP={price.up:.4f} DOWN={price.down:.4f}")
+        print(f"[Timer] Price: UP={up:.4f} DOWN={down:.4f}")
 
 hub.run()

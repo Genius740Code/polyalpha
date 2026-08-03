@@ -7,8 +7,12 @@ Usage:
 import time
 
 import polyalpha
+from polyalpha.trading.paper_config import get_paper_config_from_preset
 
-client = polyalpha.Client(balance=200, paper_mode="realistic")
+config = get_paper_config_from_preset("REALISTIC")
+config.max_positions_per_market = 10
+
+client = polyalpha.Client(balance=200, paper_config=config)
 market = client.markets.latest("BTC", "5m")
 print(f"Trading: {market}")
 
@@ -28,10 +32,10 @@ time.sleep(5)
 positions = client.paper.positions()
 print(f"\nOpen positions ({len(positions)}):")
 for p in positions:
-    print(f"  {p.side} size={p.size:.2f} entry={p.entry_price:.4f}")
+    print(f"  {p.side} shares={p.shares:.2f} entry={p.avg_price:.4f}")
 
 if positions:
-    closed = client.paper.sell_position(market, positions[0].side, amount=positions[0].size)
+    closed = client.paper.sell_position(market, positions[0].side)
     print(f"\nClosed: {closed}")
 
 print(f"\nBalance: {client.paper.balance:.2f}")

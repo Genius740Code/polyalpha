@@ -21,10 +21,16 @@ THRESHOLD_PCT = 1.0
 for name, feed in feeds.items():
     feed.refresh()
     book = feed.book
-    spread = (book.best_ask - book.best_bid) / book.mid_price * 100
-    print(f"{name}: bid={book.best_bid:.4f} ask={book.best_ask:.4f} spread={spread:.2f}%")
+    up = book.up
+    down = book.down
+    if up is None or up.best_bid <= 0:
+        print(f"{name}: book unavailable")
+        continue
+    spread = (up.best_ask - up.best_bid) / up.best_bid * 100
+    print(f"{name}: bid={up.best_bid:.4f} ask={up.best_ask:.4f} spread={spread:.2f}% "
+          f"(DOWN mid={down.mid_price if down else 0.0:.4f})")
 
-btc_eth_sum = feeds["BTC"].book.mid_price + feeds["ETH"].book.mid_price
+btc_eth_sum = feeds["BTC"].book.up_mid + feeds["ETH"].book.up_mid
 deviation = abs(btc_eth_sum - FAIR_SUM) / FAIR_SUM * 100
 
 if deviation > THRESHOLD_PCT:

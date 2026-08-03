@@ -1,19 +1,34 @@
 """
-Risk management — daily loss limit, position size cap, pre-trade checks.
+Risk management — position size cap, daily loss limit, pre-trade checks.
+
+Demonstrates the orderbook RiskManager against a simulated portfolio.
 
 Usage:
     python examples/risk_management.py
 """
-import polyalpha
-from polyalpha.orderbook import RiskManager
+import asyncio
 
-client = polyalpha.Client(balance=200)
-market = client.markets.latest("BTC", "5m")
+from polyalpha.orderbook import (
+    BookSide,
+    Order,
+    OrderStatus,
+    OrderType,
+    Portfolio,
+    Position,
+    RiskManager,
+)
 
 risk = RiskManager(
-    daily_loss_limit=50.0,
+    max_order_size=25.0,
     max_position_size=30.0,
-    max_positions=3,
+    max_daily_loss=0.05,
+)
+
+portfolio = Portfolio(
+    user_id="demo",
+    positions={},
+    cash_balance=200.0,
+    total_value=200.0,
 )
 
 trades = [
@@ -24,18 +39,37 @@ trades = [
     ("UP", 15),
 ]
 
-for side, amount in trades:
-    can_trade, reason = risk.can_trade(client.paper)
-    valid_order, order_reason = risk.validate_order(amount)
 
-    if not can_trade:
-        print(f"SKIP ({side}, {amount}): {reason}")
-    elif not valid_order:
-        print(f"REJECT ({side}, {amount}): {order_reason}")
-    else:
-        order = client.paper.buy(market, side=side, amount=amount)
-        print(f"EXECUTED ({side}, {amount}): {order}")
-        risk.capture_trade(amount)
+async def main():
+    for i, (side, amount) in enumerate(trades):
+        order = Order(
+            id=f"order-{i}",
+            user_id="demo",
+            side=BookSide.BUY if side == "UP" else BookSide.SELL,
+            order_type=OrderType.MARKET,
+            price=0.50,
+            quantity=amount,
+            status=OrderStatus.FILLED,
+        )
 
-print(f"\nRisk stats: {risk.stats()}")
-client.paper.summary()
+        valid, reason = await risk.validate_order(order, portfolio)
+
+        if not valid:
+            print(f"REJECT ({side}, {amount}): {reason}")
+            continue
+
+        # Simulate a fill: track the position and accrue daily P&L.
+        symbol = order.side.value
+        current = portfolio.positions.get(symbol, Position(symbol=symbol, quantity=0.0, average_price=0.50))
+        current.quantity += amount if order.side == BookSide.BUY else -amount
+        portfolio.positions[symbol] = current
+        risk.update_daily_pnl(2.5 if side == "UP" else -1.5)
+        print(f"EXECUTED ({side}, {amount}): validated")
+
+    print(f"\nDaily P&L: ${risk.daily_pnl:.2f} | trades: {risk.daily_trades}")
+    risk.reset_daily_limits()
+    print(f"Limits reset — daily P&L: ${risk.daily_pnl:.2f}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

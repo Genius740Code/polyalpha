@@ -3,50 +3,51 @@ Declarative Conditions API — every condition builder and combinator.
 
 Demonstrates:
   - and_, or_, not_ combinators
-  - rsi_above, price_above, crossed_above
-  - sma_above, macd_above, bb_upper
-  - volume, ADX, stochastic conditions
+  - rsi_above, rsi_below, price_above, price_below
+  - crossed_above, crossed_below
+  - ema_above, ema_below, ema_crossed_above
+  - supertrend, PSAR, Donchian, Ichimoku
+  - MACD + price-change conditions (from Binance data via ctx.binance)
   - custom when() wrapper
   - Operator shortcuts: &, |, ~
 
 Usage:
     python examples/conditions.py
 """
+from collections import namedtuple
+
+import pandas as pd
+
 from polyalpha.conditions import (
-    adx_above,
     always,
     and_,
-    bb_lower,
-    bb_upper,
     crossed_below,
     ema_above,
-    macd_above,
-    macd_cross_above,
-    macd_cross_below,
+    ema_crossed_above,
+    ichimoku_bullish_breakout,
+    macd_above_zero,
+    macd_bullish_crossover,
     never,
     not_,
     or_,
     price_above,
+    price_above_dc_upper,
     price_below,
-    price_changed_pct,
+    price_change_below,
     price_down,
+    price_in_range,
     price_up,
+    psar_uptrend,
     rsi_above,
     rsi_below,
-    sma_above,
-    sma_below,
-    stoch_cross_above,
-    stoch_overbought,
-    stoch_oversold,
-    volume_above,
-    volume_below,
+    supertrend_up,
     when,
 )
 
 entry_condition = and_(
     rsi_above(50),
     price_above("UP", 0.85),
-    or_(macd_cross_above("UP"), adx_above(25)),
+    or_(macd_bullish_crossover(), supertrend_up(7, 3.0)),
 )
 
 exit_condition = or_(
@@ -56,21 +57,16 @@ exit_condition = or_(
 )
 
 momentum_condition = and_(
-    price_up("UP"),
-    volume_above(1000),
-    sma_above("UP", 20),
+    price_up(1),
+    ema_above("UP", 20),
 )
 
-bb_squeeze = and_(
-    bb_lower("UP"),
-    bb_upper("UP"),
-    not_(adx_above(25)),
+price_band = and_(
+    price_in_range("UP", 0.40, 0.60),
+    not_(price_below("DOWN", 0.10)),
 )
 
-stoch_condition = and_(
-    stoch_oversold("k"),
-    stoch_cross_above(),
-)
+ichimoku_condition = ichimoku_bullish_breakout("UP", 9, 26, 52)
 
 def custom_balance_check(ctx):
     return ctx.balance > 50 and ctx.trade_count < 10
@@ -86,51 +82,72 @@ conditions = [
     ("Entry (function style)", entry_condition),
     ("Exit", exit_condition),
     ("Momentum", momentum_condition),
-    ("BB squeeze", bb_squeeze),
-    ("Stochastic oversold + cross", stoch_condition),
+    ("Price band", price_band),
+    ("Ichimoku breakout", ichimoku_condition),
     ("Custom when()", custom),
     ("Operator style (&, |, ~)", operator_style),
     ("always()", always()),
     ("never()", never()),
-    ("price_changed_pct > 2%", price_changed_pct("UP", 2.0)),
+    ("price_up(1)", price_up(1)),
+    ("price_down(1)", price_down(1)),
+    ("price_change_below(2.0)", price_change_below(2.0)),
     ("ema_above('DOWN', 20)", ema_above("DOWN", 20)),
-    ("macd_above('UP')", macd_above("UP")),
-    ("macd_cross_below('DOWN')", macd_cross_below("DOWN")),
-    ("volume_below(500)", volume_below(500)),
-    ("stoch_overbought('d')", stoch_overbought("d")),
-    ("sma_below('UP', 50)", sma_below("UP", 50)),
-    ("price_down('DOWN')", price_down("DOWN")),
+    ("ema_crossed_above(9, 21)", ema_crossed_above(9, 21)),
+    ("macd_bullish_crossover()", macd_bullish_crossover()),
+    ("macd_above_zero()", macd_above_zero()),
+    ("psar_uptrend()", psar_uptrend()),
+    ("price_above_dc_upper('UP', 20)", price_above_dc_upper("UP", 20)),
 ]
 
 
 class _FakeIndicators:
     @staticmethod
-    def rsi(period=14):
-        return 55.0
-
-    @staticmethod
-    def sma(period=20):
-        return 0.82
-
-    @staticmethod
-    def ema(period=12):
+    def ema(period=20):
         return 0.83
 
     @staticmethod
-    def macd(fast=12, slow=26, signal=9):
-        from collections import namedtuple
-        M = namedtuple("MACDResult", ["macd", "signal", "histogram"])
-        return M(0.02, 0.015, 0.005)
+    def supertrend(period=7, multiplier=3.0):
+        return pd.DataFrame({"direction": [1, 1, 1]})
 
     @staticmethod
-    def bollinger_bands(period=20, std=2.0):
-        from collections import namedtuple
-        B = namedtuple("BBResult", ["upper", "mid", "lower"])
-        return B(0.95, 0.85, 0.75)
+    def psar(af=0.02, af_max=0.2):
+        return pd.DataFrame({"trend": [1, 1, 1]})
 
     @staticmethod
-    def roc(period=12):
-        return 2.0
+    def donchian(length=20):
+        D = namedtuple("DonchianResult", ["upper", "mid", "lower"])
+        return D(0.95, 0.85, 0.75)
+
+    @staticmethod
+    def ichimoku(tenkan=9, kijun=26, senkou=52):
+        return {
+            "tenkan": pd.Series([0.88, 0.87, 0.89]),
+            "kijun": pd.Series([0.85, 0.84, 0.86]),
+            "cloud": {
+                "top": pd.Series([0.86, 0.86, 0.87]),
+                "bottom": pd.Series([0.80, 0.81, 0.82]),
+            },
+        }
+
+    @staticmethod
+    def get_latest_value(series):
+        return float(series.iloc[-1]) if hasattr(series, "iloc") else float(series)
+
+
+class _FakeBinance:
+    M = namedtuple("MACDResult", ["macd", "signal", "histogram"])
+
+    def macd(self, fast=12, slow=26, signal=9):
+        return self.M(0.02, 0.015, 0.005)
+
+    def price_above_by(self, min_change, candles_back=1):
+        return True
+
+    def price_change(self, candles_back=1):
+        return 3.0
+
+    def price_up(self, candles_back=1):
+        return True
 
 
 class _FakePrice:
@@ -141,8 +158,11 @@ class _FakePrice:
 class FakeContext:
     balance = 100
     trade_count = 5
+    rsi = 55.0
     price = _FakePrice()
     indicators = _FakeIndicators()
+    binance = _FakeBinance()
+    _cross_state = {}
     seconds_in = 120
     candle_id = 42
 
@@ -161,6 +181,6 @@ print("\nChained example:")
 chained = and_(
     rsi_above(50),
     price_above("UP", 0.85),
-    or_(macd_cross_above("UP"), adx_above(25)),
+    or_(macd_bullish_crossover(), psar_uptrend()),
 )
-print(f"  rsi_above(50) & price_above('UP', 0.85) & (macd_cross_above | adx_above(25)) => {chained(ctx)}")
+print(f"  rsi_above(50) & price_above('UP', 0.85) & (macd_bullish_crossover | psar_uptrend) => {chained(ctx)}")

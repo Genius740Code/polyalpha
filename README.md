@@ -658,14 +658,12 @@ client = polyalpha.Client(
 | [`examples/sniper.py`](./examples/sniper.py) | Sniper time-window bot |
 | [`examples/sniper_minimal.py`](./examples/sniper_minimal.py) | Minimal Sniper bot (~10 lines) |
 | [`examples/sniper_ta.py`](./examples/sniper_ta.py) | Sniper + technical analysis |
-| [`examples/sniper_advanced_windows.py`](./examples/sniper_advanced_windows.py) | Sniper with advanced time windows |
 | [`examples/analysis.py`](./examples/analysis.py) | TA data feed, indicators, signals |
 | [`examples/multi_wallet_paper.py`](./examples/multi_wallet_paper.py) | Multi-wallet paper trading |
 | [`examples/risk_management.py`](./examples/risk_management.py) | Risk limits and controls |
 | [`examples/pairsum_arb.py`](./examples/pairsum_arb.py) | Arbitrage example |
 | [`examples/price_change_signals.py`](./examples/price_change_signals.py) | Price change detection signals |
 | [`examples/chainlink_btc_scraper.py`](./examples/chainlink_btc_scraper.py) | Chainlink BTC data scraper |
-| [`examples/m42_flb.py`](./examples/m42_flb.py) | M42 FLB strategy |
 | [`examples/multi_arb_bot.py`](./examples/multi_arb_bot.py) | Multi-arbitrage bot |
 | [`examples/telegram_notifications.py`](./examples/telegram_notifications.py) | Telegram notification integration |
 
