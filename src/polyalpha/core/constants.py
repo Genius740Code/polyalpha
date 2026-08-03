@@ -13,6 +13,10 @@ CLOB_MAX_AGE_S = 20
 # Binance spot aggregate-trades stream (BTC/USDT) — feeds CVDTracker.
 BINANCE_WS_AGGTRADE = "wss://stream.binance.com:9443/ws/btcusdt@aggTrade"
 
+# Binance USDT-M futures force-order stream (BTC/USDT) — feeds
+# LiquidationTracker. Only pushes when a position is force-liquidated.
+BINANCE_WS_FORCE_ORDER = "wss://fstream.binance.com/ws/btcusdt@forceOrder"
+
 # ── Timeframes ─────────────────────────────────────────────────────────────────
 
 TIMEFRAME_SECONDS: dict[str, int] = {

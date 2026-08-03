@@ -111,8 +111,8 @@ class Globals:
         """Build the standard in-scope shared feeds.
 
         Constructs (but does not start) a ``ChainlinkStreamer`` as
-        ``price_feed`` and a ``CVDTracker`` as ``cvd``. The
-        ``LiquidationTracker`` (plan item 6) is only built when ``liq=True``.
+        ``price_feed``, a ``CVDTracker`` as ``cvd`` and a
+        ``LiquidationTracker`` as ``liq`` (when ``liq=True``).
 
         Returns
         -------
@@ -129,12 +129,9 @@ class Globals:
 
             g.cvd = CVDTracker()
         if liq:
-            try:
-                from .analysis.liquidations import LiquidationTracker
+            from .analysis.liquidations import LiquidationTracker
 
-                g.liq = LiquidationTracker()
-            except ImportError:  # plan item 6 not built yet — leave as None
-                log.debug("LiquidationTracker unavailable — liq left None")
+            g.liq = LiquidationTracker()
         return g
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────

@@ -109,11 +109,11 @@ class TestGlobalsDefaults:
         assert g.liq is None
         assert g.klines is None
 
-    def test_defaults_with_liq_degrades_when_unavailable(self):
-        # LiquidationTracker is plan item 6 — until it ships, liq=True
-        # gracefully leaves the feed None instead of raising.
+    def test_defaults_with_liq(self):
+        from polyalpha.analysis.liquidations import LiquidationTracker
+
         g = Globals.defaults("BTC", liq=True)
-        assert g.liq is None
+        assert isinstance(g.liq, LiquidationTracker)
 
 
 @pytest.mark.unit

@@ -13,7 +13,7 @@ Status:
 - [x] 3. sweep() trade-burst detection (done in `src/polyalpha/orderbook/tracker.py`)
 - [ ] 4. CVDTracker in `src/polyalpha/analysis/delta.py`
 - [x] 5. Shared Globals / one-connection-many-strategies refactor
-- [ ] 6. LiquidationTracker
+- [x] 6. LiquidationTracker
 
 ---
 
@@ -151,23 +151,24 @@ Audit results:
 - `src/polyalpha/bot.py` — single-strategy runner, already one shared
   connection; unchanged.
 
-## 6. LiquidationTracker — target `src/polyalpha/analysis/`
+## 6. LiquidationTracker — DONE (`src/polyalpha/analysis/liquidations.py`)
 
-- Endpoint: `wss://fstream.binance.com/ws/btcusdt@forceOrder`
-  (connect with `ping_interval=20`).
-- Message: `{"o": {"S": "SELL"|"BUY", "q": qty, "p": price}}` →
-  append `(time.time(), side, notional=qty*price)` to `events` (deque maxlen=500).
-- `cluster(window_s=20, min_count=3, notional_mult=2.0)`:
-  - `recent` = events within `window_s`; `< min_count` → None.
-  - `side` = the LAST event's side; `same` = events with that side;
-    `len(same) < min_count` → None.
-  - `notional = sum(same)`; hourly avg = mean notional over events within 3600s;
-    if hourly avg exists and `notional < avg * notional_mult` → None.
-  - return `{"direction": "DOWN" if side == "SELL" else "UP",
-    "notional": notional, "count": len(same)}`.
-- Semantics: a SELL liquidation closes a long (bearish pressure); a BUY
-  liquidation closes a short (bullish pressure).
-- Reconnect: on drop, log warning + sleep 3s, loop forever.
+`LiquidationTracker` streams Binance USDT-M `btcusdt@forceOrder`
+(`BINANCE_WS_FORCE_ORDER` in `core/constants.py`, `ping_interval=20`,
+reconnect forever on drop) and keeps `events` as a `deque(maxlen=500)` of
+`(ts, side, notional)`.
+
+`cluster(window_s=20, min_count=3, notional_mult=2.0)`:
+- `recent` = events within `window_s`; `< min_count` → `None`.
+- `side` = the LAST event's side; `same` = events with that side;
+  `len(same) < min_count` → `None`.
+- `notional = sum(same)`; hourly avg = mean notional over events within
+  3600s; if that exists and `notional < avg * notional_mult` → `None`.
+- returns `{"direction": "DOWN" if side == "SELL" else "UP",
+  "notional": notional, "count": len(same)}`.
+
+Wired into `Globals.defaults(..., liq=True)` (its `start()`/`stop()` join the
+shared lifecycle) and exported from `polyalpha.analysis` + the package root.
 
 ---
 
