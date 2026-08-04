@@ -1113,6 +1113,117 @@ class StrategyContext:
         except Exception:
             return None
 
+    # ── Strategy Helper Methods ────────────────────────────────────────────────
+
+    def bollinger_pctile(self, period: int = 20, std_dev: float = 2.0, avg_period: int = 50) -> tuple[Optional[float], Optional[dict]]:
+        """Calculate Bollinger band width percentile and current band values.
+
+        Returns the percentile of current band width relative to historical average,
+        along with the current upper, lower, and close values.
+
+        Parameters
+        ----------
+        period : int
+            BB period (default: 20).
+        std_dev : float
+            Standard deviation multiplier (default: 2.0).
+        avg_period : int
+            Rolling average period for width comparison (default: 50).
+
+        Returns
+        -------
+        tuple (pctile, bb_dict)
+            pctile : float or None
+                Width percentile (0-100) based on historical average.
+            bb_dict : dict or None
+                Dictionary with 'upper', 'lower', 'close' values.
+        """
+        series = self._get_price_series()
+        if series is None or _bbands is None:
+            return None, None
+
+        try:
+            bb_df = _bbands(series, period, float(std_dev))
+            upper = float(bb_df.iloc[-1, 2])
+            lower = float(bb_df.iloc[-1, 0])
+            close = float(series.iloc[-1])
+
+            if pd.isna(upper) or pd.isna(lower) or pd.isna(close):
+                return None, None
+
+            # Calculate width and historical average
+            width = upper - lower
+            if len(series) < avg_period:
+                return None, None
+
+            # Calculate historical widths
+            historical_widths = []
+            for i in range(avg_period, len(series)):
+                if i >= period:
+                    slice_series = series.iloc[i-period:i]
+                    slice_bb = _bbands(slice_series, period, float(std_dev))
+                    if not pd.isna(slice_bb.iloc[-1, 2]) and not pd.isna(slice_bb.iloc[-1, 0]):
+                        hist_width = float(slice_bb.iloc[-1, 2]) - float(slice_bb.iloc[-1, 0])
+                        historical_widths.append(hist_width)
+
+            if not historical_widths:
+                return None, None
+
+            avg_width = sum(historical_widths) / len(historical_widths)
+            if avg_width == 0:
+                return None, None
+
+            # Calculate percentile (where current width falls in distribution)
+            pctile = (width / avg_width) * 100
+
+            bb_dict = {
+                "upper": upper,
+                "lower": lower,
+                "close": close
+            }
+
+            return pctile, bb_dict
+
+        except Exception:
+            return None, None
+
+    def vol_ratio(self, period: int = 10) -> Optional[float]:
+        """Get volume ratio from Binance data.
+
+        Parameters
+        ----------
+        period : int
+            Period for volume ratio calculation (default: 10).
+
+        Returns
+        -------
+        float or None
+            Volume ratio value.
+        """
+        if self._binance is None:
+            return None
+        return self._binance.vol_ratio(period)
+
+    def side_price(self, direction: str) -> Optional[float]:
+        """Get the current price for a specific direction.
+
+        Parameters
+        ----------
+        direction : str
+            "UP" or "DOWN".
+
+        Returns
+        -------
+        float or None
+            Current price for the specified direction.
+        """
+        direction = direction.upper()
+        if direction == "UP":
+            return self.price.up
+        elif direction == "DOWN":
+            return self.price.down
+        return None
+
 
 # ── Registered strategy ────────────────────────────────────────────────────────
 

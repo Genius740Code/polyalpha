@@ -59,7 +59,6 @@ class OrderBookFeed:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stream: Stream | None = None
         self._orig_dispatch: Callable | None = None
-        self._orig_on_open: Callable | None = None
 
     @property
     def manager(self) -> OrderBookManager:
@@ -144,7 +143,6 @@ class OrderBookFeed:
 
         self._stream = stream
         self._orig_dispatch = stream._dispatch
-        self._orig_on_open = stream._on_open
 
         def patched_dispatch(msg: dict[str, Any]) -> None:
             self._orig_dispatch(msg)
@@ -154,13 +152,13 @@ class OrderBookFeed:
 
         stream._dispatch = patched_dispatch  # type: ignore[method-assign]
         self._attached = True
-        self._emit("connect")
 
-        # Clear book state on stream reconnect
-        def patched_on_open(ws, token_ids: list[str]) -> None:
-            self._orig_on_open(ws, token_ids)
+        # Clear book state on stream reconnect (works for both sync and async paths)
+        @stream.on("connect")
+        def on_connect() -> None:
             self._manager.clear_state()
-        stream._on_open = patched_on_open  # type: ignore[method-assign]
+
+        self._emit("connect")
 
     def _run_async(self, coro: Any) -> Any:
         try:
@@ -177,11 +175,8 @@ class OrderBookFeed:
         if self._stream is not None:
             if self._orig_dispatch is not None:
                 self._stream._dispatch = self._orig_dispatch  # type: ignore[method-assign]
-            if self._orig_on_open is not None:
-                self._stream._on_open = self._orig_on_open  # type: ignore[method-assign]
             self._stream = None
             self._orig_dispatch = None
-            self._orig_on_open = None
             self._attached = False
         if self._owns_clob:
             self._clob.close()

@@ -55,6 +55,7 @@ from .utils.logging_utils import mask_transaction_hash
 from .core import (
     WS_MAX_RETRIES,
     WS_PING_INTERVAL,
+    WS_PING_TIMEOUT,
     WS_RETRY_DELAY,
     WS_BACKOFF_FACTOR,
     WS_JITTER,

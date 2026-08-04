@@ -38,9 +38,21 @@ class Signal:
     Returned by :meth:`Strategy.signal` to tell the framework to
     execute a trade.  The suite reads ``side`` and fills in the
     amount from the strategy's ``order_size_pct``.
+    
+    Parameters
+    ----------
+    side : str
+        "UP" or "DOWN" direction.
+    metadata : dict, optional
+        Additional signal metadata for logging/analysis.
     """
 
     side: str
+    metadata: dict = None
+
+    def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = {}
 
 
 @dataclass
