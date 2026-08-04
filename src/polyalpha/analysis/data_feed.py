@@ -783,6 +783,13 @@ class DataFeed:
                             # 2.2: recv timed out — still within session, keep waiting
                             continue
 
+                        # Handle text-level PING/PONG (same as ChainlinkStreamer)
+                        if raw == "PING":
+                            await ws.send("PONG")
+                            continue
+                        if raw == "PONG":
+                            continue
+
                         try:
                             msg = json.loads(raw)
                         except json.JSONDecodeError:
