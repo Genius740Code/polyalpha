@@ -26,7 +26,7 @@ config = DataFeedConfig(
 
 | Source | Description |
 |--------|-------------|
-| `"binance"` | Free Binance API with extensive historical data (default fallback) |
+| `"binance"` | Free Binance API with extensive historical data (fallback when scraping/chainlink unavailable) |
 | `"chainlink"` | Chainlink oracle data — matches Polymarket. Falls back to Binance if web3 not installed |
 | `"scraping"` | Polymarket WebSocket with configurable delay — collects live prices directly |
 | `"custom"` | User-provided API with optional auth key |

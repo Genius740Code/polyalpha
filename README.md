@@ -1,9 +1,9 @@
 # polyalpha
 
-Python SDK for [Polymarket](https://polymarket.com) — discover prediction markets, stream live prices, trade paper or real, run bots with composable strategy conditions, analyse with 20+ TA indicators and AI signals, track P&L with full reporting, and manage wallets.
+Python SDK for [Polymarket](https://polymarket.com) — discover prediction markets, stream live prices, trade paper or real, run bots with composable strategy conditions, analyse with 19 TA indicators and AI signals, track P&L with full reporting, and manage wallets.
 
 ```bash
-git clone https://github.com/your-org/polyalpha.git
+git clone https://github.com/Genius740Code/polyalpha.git
 cd polyalpha
 pip install -e .
 ```
@@ -408,7 +408,7 @@ See `docs/orderbook.md` for the full order book API.
 
 ## Technical analysis
 
-Multi-source data feed and 20+ TA indicators.
+Multi-source data feed and 19 TA indicators.
 
 ```python
 from polyalpha.analysis import DataFeed, IndicatorCalculator, SignalGenerator
@@ -433,7 +433,7 @@ sig.macd_bullish_crossover()
 sig.summary()  # all signals at once
 ```
 
-**Data sources:** `binance` (default), `chainlink`, `coingecko`, `custom`.
+**Data sources:** `scraping` (default), `binance`, `chainlink`, `custom`, `websocket`.
 
 **Live Binance feeds** (`polyalpha.analysis`): `CVDTracker` streams spot
 aggTrades for cumulative volume delta (`cvd`, `z`, `velocity`, …), and
@@ -509,8 +509,9 @@ SQLite-backed trade persistence with optional encryption.
 client = polyalpha.Client(db_path="./trades.db")
 
 db = client.paper.database
-db.get_statistics(start_date="2026-01-01", end_date="2026-07-22")
-db.get_trades(market_slug="btc-updown-*")
+db.get_statistics()                                   # aggregate stats (no args)
+db.load_trades(filters={"asset": "btc"})              # filtered trades
+db.load_trades_by_market("btc-updown-5m-1751234700")  # trades for one market
 db.export_json("trades.json")
 db.export_csv("trades.csv")
 ```
@@ -684,7 +685,7 @@ src/polyalpha/
 ├── core/                Constants, errors, market models, env
 ├── trading/             PaperEngine, RealTradingEngine, auto-redeem, retry
 ├── orderbook/           REST + WS book, manager, strategies, backtest
-├── analysis/            DataFeed, 20+ indicators, 30+ signals
+├── analysis/            DataFeed, 19 indicators, 30+ signals
 ├── ai/                  OpenRouterClient, MarketAnalysis, TradingSignal
 ├── report/              ReportEngine, metrics (30+), charts (12), HTML
 ├── bots/                Sniper, Tracker

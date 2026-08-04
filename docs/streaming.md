@@ -17,8 +17,12 @@ stream = client.stream(market)
 | `market` | `Market` | — | The market to subscribe to |
 | `retries` | `int` | `10` | Maximum reconnect attempts |
 | `retry_delay` | `float` | `3.0` | Base back-off delay in seconds |
-| `price_threshold` | `float` | `0.0001` | Minimum price change to emit a `price` event |
+| `price_threshold` | `float` | `0.0` | Minimum price change to emit a `price` event (0 = any change) |
 | `enable_circuit_breaker` | `bool` | `True` | Enable circuit breaker for cascading failure protection |
+
+> **Note:** `client.stream(market)` only accepts `(market, retries=None)`. When `retries` is
+> omitted, it uses the `Client` retry count (default `3`). To set `price_threshold` or other
+> `Stream` options, construct a `Stream` directly (`polyalpha.Stream(market, ...)`).
 
 ## Events
 
@@ -30,6 +34,8 @@ stream = client.stream(market)
 | `"close"` | `()` | Market resolved — stream closes cleanly |
 | `"error"` | `(exc: Exception)` | Unrecoverable error |
 | `"connect"` | `()` | Fired on every successful connect |
+| `"price_reset"` | `(up: float, down: float)` | Prices reset due to validation failure or reconnect |
+| `"price_anomaly"` | `(type: str, ...)` | Price anomaly detected (e.g. a jump or stale mid-price) |
 
 ## Registering Handlers
 
@@ -94,7 +100,7 @@ Requires `pip install websockets` (the async variant uses the `websockets` libra
 The stream auto-reconnects on unexpected disconnects:
 
 1. **Exponential backoff** — delay = `retry_delay * 2^(attempt-1)` plus ±20% random jitter
-2. **Max retries** — defaults to 10 attempts; emits `error` and stops after exhausting the budget
+2. **Max retries** — defaults to 10 attempts for a direct `Stream(...)`; emits `error` and stops after exhausting the budget
 3. **High-retry warning** — logged when >50% of retry budget is consumed
 4. **Stale data check** — warns if no price update for 30 seconds
 
@@ -117,7 +123,7 @@ When enabled (default), the circuit breaker opens after 5 consecutive failures a
 
 ## Price Threshold
 
-A `price` event is only emitted when the price change exceeds `price_threshold` (default 0.0001). This reduces noise when the market is flat. The `up` and `down` properties always reflect the latest tick regardless of the threshold.
+A `price` event is only emitted when the price change exceeds `price_threshold` (default 0.0 — any change). This reduces noise when the market is flat. The `up` and `down` properties always reflect the latest tick regardless of the threshold.
 
 ## Example: Full Stream Lifecycle
 
@@ -129,7 +135,7 @@ polyalpha.load_env_file()
 client = polyalpha.Client(balance=100.0)
 
 market = client.markets.latest("BTC", "5m")
-stream = client.stream(market, price_threshold=0.0005)
+stream = polyalpha.Stream(market, price_threshold=0.0005)
 
 @stream.on("price")
 def on_price(up, down):

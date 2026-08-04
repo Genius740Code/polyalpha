@@ -27,7 +27,7 @@ if stream.connection_quality < 0.5:
     print("Poor connection quality")
 ```
 
-The stream automatically reconnects with exponential backoff (starting at 1s, doubling, with jitter). If retries are exhausted, `StreamDisconnected` is raised.
+The stream automatically reconnects with exponential backoff (starting at 3s, doubling, with jitter). If retries are exhausted, `StreamDisconnected` is raised.
 
 ---
 

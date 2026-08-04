@@ -92,14 +92,14 @@ RESOLUTION_CHECK_INTERVAL = 0.5  # Seconds between resolution checks
 
 # ── Slug helpers ───────────────────────────────────────────────────────────────
 
-def build_slug(asset: str, timeframe: str, window_end_ts: int) -> str:
+def build_slug(asset: str, timeframe: str, window_start_ts: int) -> str:
     """Return the deterministic Gamma event slug for an asset/timeframe window."""
     asset_upper = asset.upper()
     asset_lower = asset.lower()
     full_name = ASSET_NAMES.get(asset_upper, asset_lower)
 
     if timeframe in ("1h", "24h"):
-        dt_utc = datetime.datetime.fromtimestamp(window_end_ts, tz=datetime.timezone.utc)
+        dt_utc = datetime.datetime.fromtimestamp(window_start_ts, tz=datetime.timezone.utc)
         tz_et = zoneinfo.ZoneInfo("America/New_York")
         dt_et = dt_utc.astimezone(tz_et)
         
@@ -114,7 +114,7 @@ def build_slug(asset: str, timeframe: str, window_end_ts: int) -> str:
         elif timeframe == "24h":
             return f"what-price-will-{full_name}-hit-on-{month_name}-{day}"
             
-    return f"{asset_lower}-updown-{timeframe}-{window_end_ts}"
+    return f"{asset_lower}-updown-{timeframe}-{window_start_ts}"
 
 def build_tweet_slug(subject: str, start_ts: int, end_ts: int | None = None, monthly: bool = False) -> str:
     """Return the Gamma event slug for a tweet market window."""

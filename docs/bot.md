@@ -85,6 +85,26 @@ def strategy(ctx):
     ...
 ```
 
+#### `onresolve(fn)`
+
+Decorator that registers a resolve callback. The function receives a `PaperPosition` for each resolved position.
+
+```python
+@bot.onresolve
+def on_resolve(pos):
+    print(f"{pos.side} {pos.outcome} pnl=${pos.pnl:.2f}")
+```
+
+#### `on_price_anomaly(fn)`
+
+Decorator that registers a price anomaly callback. The function receives anomaly details when price validation fails.
+
+```python
+@bot.on_price_anomaly
+def handle_anomaly(anomaly_type: str, *args):
+    print(f"Price anomaly: {anomaly_type}")
+```
+
 #### `when(condition)`
 
 Declarative API — sets a `Condition` that triggers a trade. Chain with `.buy()`.
@@ -229,6 +249,7 @@ def strategy(ctx):
 | `ema_12` | `float \| None` | EMA(12) — legacy, prefer `ctx.indicators.ema(12)` |
 | `chainlink` | `ChainlinkStreamer \| None` | Latest BTC/USD spot price from Polymarket's Chainlink oracle — see below |
 | `binance` | `BinanceAccessor \| None` | Binance BTC market data for external TA (MACD, price change, RSI, etc.) — see below |
+| `cl` | `TimeWindow` | Rolling window of Chainlink BTC prices with `value`, `age_s`, `change_pct`, `get_value_at` — see below |
 
 ### IndicatorAccessor (`ctx.indicators`)
 
@@ -278,137 +299,54 @@ Exposes the live BTC/USD spot price from Polymarket's Chainlink oracle WebSocket
 @bot.on_tick
 def strategy(ctx):
     spot = ctx.chainlink.last_price       # float | None — latest BTC/USD spot
-    updated = ctx.chainlink.last_update    # float | None — timestamp
+    updated = ctx.chainlink.last_update    # datetime | None — timestamp
     symbol = ctx.chainlink.last_symbol     # str — e.g. "BTC/USD"
 ```
 
 | Property | Returns | Description |
 |----------|---------|-------------|
 | `last_price` | `float \| None` | Latest BTC/USD spot price from the Chainlink oracle |
-| `last_update` | `float \| None` | Unix timestamp of the last price update |
+| `last_update` | `datetime \| None` | Timestamp of the last price update |
 | `last_symbol` | `str \| None` | Symbol string (e.g. `"BTC/USD"`) |
 
 Returns `None` if no price has been received yet (initial connect may take a few seconds).
 
-### Chainlink Calculations (`ctx.cl`)
-
-Enhanced Chainlink price window with calculation methods for price analysis.
-
-```python
-@bot.on_tick
-def strategy(ctx):
-    # Basic price window access
-    latest = ctx.cl.value              # latest Chainlink price
-    age = ctx.cl.age_s                # seconds since last update
-    
-    # Price change calculations
-    change_30s = ctx.cl.change_pct(30)   # % change over 30 seconds
-    change_60s = ctx.cl.change_pct(60)   # % change over 60 seconds
-    change_abs = ctx.cl.change_abs(30)    # absolute price change
-    
-    # Trend analysis
-    trend = ctx.cl.trend(60)              # UP/DOWN/NEUTRAL
-    direction = ctx.cl.direction(30)      # "up"/"down"/"flat"
-    
-    # Volatility
-    volatility = ctx.cl.volatility(120)   # price volatility
-    
-    # Price range
-    high = ctx.cl.high(60)               # highest price in period
-    low = ctx.cl.low(60)                # lowest price in period
-    price_range = ctx.cl.range(60)       # price range (high - low)
-```
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `value` | `float \| None` | Latest Chainlink price |
-| `age_s` | `float` | Seconds since last update |
-| `change_pct(seconds)` | `float \| None` | Percentage change over time period |
-| `change_abs(seconds)` | `float \| None` | Absolute price change over time period |
-| `trend(seconds, threshold=0.0)` | `TrendDirection` | UP/DOWN/NEUTRAL trend direction |
-| `direction(seconds)` | `str \| None` | Simple direction: "up"/"down"/"flat" |
-| `volatility(seconds)` | `float \| None` | Price volatility (standard deviation) |
-| `high(seconds)` | `float \| None` | Highest price in time period |
-| `low(seconds)` | `float \| None` | Lowest price in time period |
-| `range(seconds)` | `float \| None` | Price range (high - low) |
-
 ### Binance Accessor (`ctx.binance`)
 
-Enhanced Binance market data accessor with calculation library integration.
-
-```python
-@bot.on_tick
-def strategy(ctx):
-    # Basic Binance data
-    close = ctx.binance.close          # latest Binance close price
-    high = ctx.binance.high            # latest high
-    low = ctx.binance.low             # latest low
-    volume = ctx.binance.volume        # latest volume
-    
-    # Price calculations (using calculation library)
-    change_pct = ctx.binance.change_pct(3)    # % change over 3 candles
-    change_abs = ctx.binance.change_abs(3)    # absolute change over 3 candles
-    trend = ctx.binance.trend(3)              # trend direction
-    direction = ctx.binance.direction(3)      # "up"/"down"/"flat"
-    volatility = ctx.binance.volatility(10)   # price volatility
-    
-    # Volume calculations (Binance has volume data)
-    vol_ratio = ctx.binance.vol_ratio(10)          # current / avg volume
-    volume_trend = ctx.binance.volume_trend(5)    # INCREASING/DECREASING/STABLE
-    volume_surge = ctx.binance.volume_surge(2.0)  # detect volume spikes
-    avg_volume = ctx.binance.avg_volume(10)        # average volume
-    
-    # Technical indicators (existing functionality)
-    macd = ctx.binance.macd(12, 26, 9)    # MACD from Binance data
-    rsi = ctx.binance.rsi(14)              # RSI from Binance data
-    sma = ctx.binance.sma(20)              # SMA from Binance data
-    ema = ctx.binance.ema(12)              # EMA from Binance data
-```
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `close` | `float \| None` | Latest Binance close price |
-| `high` | `float \| None` | Latest high price |
-| `low` | `float \| None` | Latest low price |
-| `volume` | `float \| None` | Latest volume |
-| `change_pct(candles_back)` | `float \| None` | % price change over N candles |
-| `change_abs(candles_back)` | `float \| None` | Absolute price change over N candles |
-| `trend(candles_back, threshold=0.0)` | `str \| None` | Trend direction: "up"/"down"/"neutral" |
-| `direction(candles_back)` | `str \| None` | Simple direction: "up"/"down"/"flat" |
-| `volatility(candles_back)` | `float \| None` | Price volatility |
-| `vol_ratio(period)` | `float \| None` | Current volume / average volume |
-| `volume_trend(period, threshold=0.1)` | `str \| None` | Volume trend: "increasing"/"decreasing"/"stable" |
-| `volume_surge(multiplier, period)` | `bool \| None` | True if volume surge detected |
-| `avg_volume(period)` | `float \| None` | Average volume over period |
-| `macd(fast, slow, signal)` | `MACDResult \| None` | MACD indicator |
-| `rsi(period)` | `float \| None` | RSI indicator |
-| `sma(period)` | `float \| None` | SMA indicator |
-| `ema(period)` | `float \| None` | EMA indicator |
-
-### Binance Market Data (`ctx.binance`)
-
-Pulls OHLCV data from the free Binance REST API for external technical analysis (MACD, RSI, price momentum, etc.). Auto-refreshes once per candle — no redundant API calls.
+Pulls OHLCV data from the free Binance REST API for external technical analysis. Auto-refreshes once per candle — no redundant API calls. Combines raw market data, price-movement helpers, calculation-library methods, and indicators.
 
 ```python
 @bot.on_tick
 def strategy(ctx):
     # Raw market data
-    close = ctx.binance.close             # float — latest close price
-    high = ctx.binance.high               # float — current candle high
-    low = ctx.binance.low                 # float — current candle low
-    volume = ctx.binance.volume           # float — current candle volume
+    close = ctx.binance.close          # float | None — latest close price
+    high = ctx.binance.high            # float | None — current candle high
+    low = ctx.binance.low              # float | None — current candle low
+    volume = ctx.binance.volume        # float | None — current candle volume
 
-    # Indicators (computed from Binance OHLCV data)
+    # Price movement helpers
+    change = ctx.binance.price_change(3)               # absolute change over last 3 candles
+    change_pct = ctx.binance.price_change_percent(3)   # percent change over last 3 candles
+    up = ctx.binance.price_up(2)                       # bool — close higher than 2 candles ago?
+    jumped = ctx.binance.price_above_by(50)            # bool — moved up at least $50?
+
+    # Calculation library (price analysis)
+    pct = ctx.binance.change_pct(3)          # % change over 3 candles
+    abs = ctx.binance.change_abs(3)          # absolute change over 3 candles
+    trend = ctx.binance.trend(3)             # "up"/"down"/"neutral"
+    direction = ctx.binance.direction(3)     # "up"/"down"/"flat"
+    volatility = ctx.binance.volatility(10)  # price volatility
+
+    # Volume calculations (Binance has volume data)
+    vol_ratio = ctx.binance.vol_ratio(10)          # current / avg volume
+    volume_trend = ctx.binance.volume_trend(5)     # "increasing"/"decreasing"/"stable"
+    volume_surge = ctx.binance.volume_surge(2.0)   # detect volume spikes
+
+    # Technical indicators
     macd = ctx.binance.macd(12, 26, 9)    # MACDResult(macd, signal, histogram)
     rsi = ctx.binance.rsi(14)             # float | None
     sma = ctx.binance.sma(20)             # float | None
     ema = ctx.binance.ema(12)             # float | None
-
-    # Price movement helpers
-    change = ctx.binance.price_change(3)           # float — BTC price change over last 3 candles
-    change_pct = ctx.binance.price_change_percent(3)  # float — percent change
-    up = ctx.binance.price_up(2)                   # bool — close higher than 2 candles ago?
-    jumped = ctx.binance.price_above_by(50)        # bool — moved up at least $50?
 ```
 
 | Property / Method | Returns | Description |
@@ -417,14 +355,22 @@ def strategy(ctx):
 | `high` | `float \| None` | Current candle high |
 | `low` | `float \| None` | Current candle low |
 | `volume` | `float \| None` | Current candle volume |
+| `price_change(candles_back=1)` | `float \| None` | BTC close price change over N candles |
+| `price_change_percent(candles_back=1)` | `float \| None` | BTC percent change over N candles |
+| `price_up(candles_back=1)` | `bool` | Close higher than N candles ago |
+| `price_above_by(min_change, candles_back=1)` | `bool` | Close at least `min_change` USD higher than N candles ago |
+| `change_pct(candles_back=1)` | `float \| None` | % price change over N candles |
+| `change_abs(candles_back=1)` | `float \| None` | Absolute price change over N candles |
+| `trend(candles_back=1, threshold=0.0)` | `str \| None` | Trend direction: "up"/"down"/"neutral" |
+| `direction(candles_back=1)` | `str \| None` | Simple direction: "up"/"down"/"flat" |
+| `volatility(candles_back=10)` | `float \| None` | Price volatility |
+| `vol_ratio(period=10)` | `float \| None` | Current volume / average volume |
+| `volume_trend(period=5, threshold=0.1)` | `str \| None` | Volume trend: "increasing"/"decreasing"/"stable" |
+| `volume_surge(multiplier=2.0, period=10)` | `bool \| None` | True if volume surge detected |
 | `macd(fast=12, slow=26, signal=9)` | `MACDResult \| None` | MACD line, signal, histogram |
 | `rsi(period=14)` | `float \| None` | Relative Strength Index |
 | `sma(period=20)` | `float \| None` | Simple Moving Average |
 | `ema(period=12)` | `float \| None` | Exponential Moving Average |
-| `price_change(candles=1)` | `float \| None` | BTC close price change over N candles |
-| `price_change_percent(candles=1)` | `float \| None` | BTC percent change over N candles |
-| `price_up(candles=1)` | `bool` | Close higher than N candles ago |
-| `price_above_by(amount=50)` | `bool` | Close at least $amount higher than N candles ago |
 
 ### Chainlink Price Window (`ctx.cl`)
 
@@ -457,9 +403,6 @@ def strategy(ctx):
 | `get_value_at(seconds_ago)` | `float \| None` | Price at a specific time in the past |
 
 **Note:** Returns `None` if insufficient data is available (e.g., requesting change over 60 seconds when only 10 seconds of data exists).
-| `price_above_by(min_change)` | `bool` | Close moved up by at least `min_change` USD |
-
-Returns `None` on indicator methods when insufficient data.
 
 ### Mixing Data Sources in One Bot
 
@@ -827,6 +770,7 @@ def strategy(ctx):
 | `ema_12` | `float \| None` | EMA(12) — legacy, prefer `ctx.indicators.ema(12)` |
 | `chainlink` | `ChainlinkStreamer \| None` | Latest BTC/USD spot price from Polymarket's Chainlink oracle — see below |
 | `binance` | `BinanceAccessor \| None` | Binance BTC market data for external TA (MACD, price change, RSI, etc.) — see below |
+| `cl` | `TimeWindow` | Rolling window of Chainlink BTC prices with `value`, `age_s`, `change_pct`, `get_value_at` — see below |
 
 Methods: `buy(side, amount)`, `limit(side, price, amount)`, `close_position(side, amount=None)`, `buy_once_per_candle(side, amount)`, `buy_in_window(side, amount, min_seconds, max_seconds)` — same signatures as `TickContext`.
 
@@ -927,10 +871,8 @@ hub.stop()
     "strategies": {
         "momentum": {"balance": 480.0, "pnl": -20.0, "open_positions": 2},
         "value":    {"balance": 520.0, "pnl": 20.0,  "open_positions": 0},
-    },
-    "variants": {
-        "rsi_70": {"balance": 510.0, "pnl": 10.0, "open_positions": 1, "params": {"threshold": 70}},
-        "rsi_30": {"balance": 490.0, "pnl": -10.0, "open_positions": 0, "params": {"threshold": 30}},
+        "rsi_70":   {"balance": 510.0, "pnl": 10.0,  "open_positions": 1, "params": {"threshold": 70}},
+        "rsi_30":   {"balance": 490.0, "pnl": -10.0, "open_positions": 0, "params": {"threshold": 30}},
     },
 }
 ```

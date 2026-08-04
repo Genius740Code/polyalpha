@@ -128,7 +128,7 @@ config = SniperConfig(
 | `max_trades` | `None` | Maximum total trades before stopping |
 | `allowed_market_sessions` | `None` | Filter by market session (e.g., `["london", "new_york"]`) |
 | `pre_window_buffer` | `5` | Seconds before window to start checking |
-| `post_window_timeout` | `30` | Seconds after window close to wait for fill |
+| `post_window_timeout` | `10` | Seconds after window close to wait for fill |
 | `log_level` | `"INFO"` | Logging level |
 | `log_trades` | `True` | Log trade details |
 | `log_prices` | `False` | Log individual price updates |
@@ -139,6 +139,7 @@ config = SniperConfig(
 | `ta_rules` | `None` | Custom TA evaluation rules |
 | `max_btc_change_pct` | `None` | Max BTC spot price change % to allow entry (e.g., `2.0` = 2%) |
 | `btc_change_periods` | `5` | Lookback periods for BTC change calculation |
+| `max_price` | `1.0` | Maximum valid price from the stream; prices above this are treated as edge cases (log + proceed) |
 
 All parameters are validated on initialization. Invalid values raise `ValueError` with descriptive messages.
 

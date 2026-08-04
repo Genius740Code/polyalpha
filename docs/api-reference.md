@@ -37,7 +37,7 @@ Concise reference of every symbol exported from `polyalpha.__init__`, grouped by
 
 | Symbol | Source | Description |
 |--------|--------|-------------|
-| `Stream` | `stream.py` | WebSocket price stream for a market. 6 events: `price`, `book`, `trade`, `close`, `error`, `connect`. |
+| `Stream` | `stream.py` | WebSocket price stream for a market. 8 events: `price`, `book`, `trade`, `close`, `error`, `connect`, `price_reset`, `price_anomaly`. |
 
 ---
 
@@ -104,7 +104,7 @@ Concise reference of every symbol exported from `polyalpha.__init__`, grouped by
 | `BookLevel` | `orderbook/models.py` | (frozen) price + size at a level |
 | `BookSide` | `orderbook/models.py` | Enum: `BUY`, `SELL` |
 | `FillEstimate` | `orderbook/models.py` | (frozen) Estimated fill: avg price, slippage, levels used |
-| `BookTrade` | `orderbook/models.py` | Trade dataclass (imported as `BookTrade` to avoid naming conflict) |
+| `Trade` | `orderbook/models.py` | Trade dataclass (exported as `BookTrade` via `polyalpha/__init__.py` to avoid naming conflict) |
 | `Strategy` | `orderbook/strategy.py` | Abstract base class for order book strategies |
 | `ImbalanceStrategy` | `orderbook/strategy.py` | Trades on order book imbalance |
 | `SpreadStrategy` | `orderbook/strategy.py` | Quotes both sides with inventory skew |
@@ -185,7 +185,7 @@ See [Strategies](strategies.md).
 |--------|--------|-------------|
 | `DataFeed` | `analysis/data_feed.py` | Market data feed with caching |
 | `DataFeedConfig` | `analysis/data_feed.py` | Data feed configuration |
-| `IndicatorCalculator` | `analysis/indicators.py` | 28 technical indicators (+ supertrend, psar, ichimoku, donchian) |
+| `IndicatorCalculator` | `analysis/indicators.py` | 19 technical indicators (+ supertrend, psar, ichimoku, donchian) |
 | `SignalGenerator` | `analysis/signals.py` | 55+ trading signal methods (+ EMA cross, BB squeeze, supertrend, psar, ichimoku, donchian) |
 | `CVDTracker` | `analysis/delta.py` | Binance BTC spot cumulative volume delta (aggTrade stream): `cvd`, `z`, `decelerating`, `velocity`, `acceleration` |
 | `CVDTrackerConfig` | `analysis/delta.py` | Configuration for `CVDTracker` |
@@ -202,7 +202,7 @@ See [Strategies](strategies.md).
 
 | Symbol | Source | Description |
 |--------|--------|-------------|
-| `OpenRouterClient` | `ai/client.py` | OpenRouter API client: 12 methods for chat, analysis, signals |
+| `OpenRouterClient` | `ai/client.py` | OpenRouter API client: 6 public methods for chat, analysis, signals |
 | `MarketAnalysis` | `ai/models.py` | AI market analysis result dataclass |
 | `TradingSignal` | `ai/models.py` | AI trading signal dataclass |
 
@@ -228,6 +228,15 @@ See [Strategies](strategies.md).
 | `PositionNotFound` | `core/errors.py` | Position not found |
 | `RiskLimitExceeded` | `core/errors.py` | Risk management limit exceeded |
 | `OrderCancelled` | `core/errors.py` | Order cancelled by user or system |
+| `CircuitBreakerOpenError` | `core/errors.py` | Circuit breaker blocking requests |
+| `ManualInterventionRequiredError` | `core/errors.py` | Requires human recovery |
+| `TransactionRollbackError` | `core/errors.py` | Transaction rollback failed |
+| `BackupError` | `core/errors.py` | Backup/restore operation failed |
+| `ConfigurationError` | `core/errors.py` | Invalid configuration |
+| `AuthenticationError` | `core/errors.py` | Authentication failed |
+| `RateLimitExceeded` | `core/errors.py` | API rate limit hit |
+| `GasEstimationError` | `core/errors.py` | Gas estimation failed |
+| `TransactionRebroadcastError` | `core/errors.py` | Transaction rebroadcast failed |
 | `AIError` | `ai/errors.py` | Base for AI-related errors |
 | `AIAuthenticationError` | `ai/errors.py` | Invalid/missing API key |
 | `AIModelNotFoundError` | `ai/errors.py` | Requested model unavailable |
@@ -264,6 +273,9 @@ PolyalphaError, MarketNotFound, MarketClosed, StreamDisconnected,
   InsufficientBalance, InsufficientAllowance, OrderNotFound,
   OrderBookError, OrderBookNotFound, OrderRejected, OrderTimeout,
   NetworkError, TransientError, PositionNotFound, RiskLimitExceeded, OrderCancelled,
+  CircuitBreakerOpenError, ManualInterventionRequiredError, TransactionRollbackError,
+  BackupError, ConfigurationError, AuthenticationError, RateLimitExceeded,
+  GasEstimationError, TransactionRebroadcastError,
 AIError, AIAuthenticationError, AIModelNotFoundError, AIQuotaExceededError,
   AIResponseError, AITimeoutError, AIConnectionError
 ```

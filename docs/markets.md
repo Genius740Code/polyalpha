@@ -142,12 +142,12 @@ market.show()
 Standard Up/Down slugs follow the pattern:
 
 ```
-{asset}-updown-{timeframe}-{unix_end_ts}
+{asset}-updown-{timeframe}-{unix_start_ts}
 ```
 
 For example: `btc-updown-5m-1751234700`
 
-The timestamp is the **end** of the prediction window. `MarketClient.latest()` probes the current window plus the next two to always find an active market.
+The timestamp is the **start** of the prediction window. `MarketClient.latest()` probes the current window plus the next two to always find an active market.
 
 For 1h and 24h timeframes the slug uses a human-readable format:
 

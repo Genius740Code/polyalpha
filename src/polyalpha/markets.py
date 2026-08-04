@@ -201,8 +201,8 @@ class MarketClient:
             )
 
         candidates = _candidate_starts(timeframe)
-        for end_ts in candidates:
-            slug = build_slug(asset, timeframe, end_ts)
+        for start_ts in candidates:
+            slug = build_slug(asset, timeframe, start_ts)
             log.debug("Trying slug: %s", slug)
             try:
                 return self._fetch_by_slug(slug)
