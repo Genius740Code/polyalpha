@@ -812,7 +812,7 @@ class DataFeed:
                 if remaining <= 0 or len(ticks) >= self.config.lookback_periods:
                     break
                 self._log.warning(
-                    "Scraping: WS disconnected — retrying (%.0fs remaining)", remaining,
+                    "Scraping: WS disconnected — retrying (%.0fs remaining): %s", remaining, exc,
                 )
                 await asyncio.sleep(1.0)
 

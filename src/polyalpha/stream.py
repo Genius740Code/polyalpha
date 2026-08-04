@@ -64,7 +64,6 @@ from .core import (
     DEFAULT_RATE_LIMIT_PERIOD,
     DEFAULT_PRICE_THRESHOLD,
     PRICE_ROUNDING,
-    FALLBACK_PRICE,
     Market,
     StreamDisconnected,
     CircuitBreakerOpenError,
