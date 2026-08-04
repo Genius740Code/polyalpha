@@ -5,8 +5,8 @@ Provides a clean interface to pandas-ta indicators including:
         - Trend indicators: SMA, EMA, MACD, ADX, SuperTrend
         - Momentum indicators: RSI, Stochastic, Williams %R, CCI
 - Volatility indicators: Bollinger Bands, ATR, Keltner Channels
-- Volume indicators: OBV, Volume SMA, Volume ROC
-- Additional: VWAP, Fair Value Gap, Pivot Points
+- Volume indicators: OBV, Volume SMA, Volume ROC, VWAP
+- Additional: Fair Value Gap, Pivot Points
 
 Usage
 -----

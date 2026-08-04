@@ -19,7 +19,7 @@ Supported Indicators
 - Trend: SMA, EMA, MACD, ADX
 - Momentum: RSI, Stochastic, Williams %R, CCI
 - Volatility: Bollinger Bands, ATR, Keltner Channels
-- Volume: OBV, Volume SMA, Volume ROC
+- Volume: OBV, Volume SMA, Volume ROC, VWAP
 - Price Change: Absolute and percentage price change detection
 
 Usage
@@ -47,6 +47,14 @@ Usage
         print("Price is up")
     if signals.price_above_by(30):  # Only buy if price is up by at least $30
         print("Price is up by threshold")
+    
+    # VWAP signals
+    if signals.price_above_vwap():
+        print("Price above VWAP - bullish")
+    if signals.price_below_vwap():
+        print("Price below VWAP - bearish")
+    vwap_dist = signals.vwap_distance_pct()
+    print(f"Price is {vwap_dist:.2f}% from VWAP")
 
 IMPORTANT NOTICE
 -----------------
