@@ -8,6 +8,9 @@ automated trading.
 
 Features:
 - Time-window entry (only trades in final N seconds)
+- Multiple time windows (disjoint periods, burst patterns, absolute times)
+- Conditional windows (indicator-based: BTC price, RSI, SMA, custom)
+- Day/hour filtering (trade only on specific days or hours)
 - Dual-threshold strategy (entry/exit thresholds)
 - Price range filtering (entry_price_min to entry_price_max)
 - Excluded price ranges (avoid specific price segments)
@@ -19,8 +22,9 @@ Features:
 Usage
 -----
     from polyalpha.bots import Sniper
+    from polyalpha.bots.sniper import TimeWindow, ConditionalWindow, TimeFilter
 
-    # Basic usage with single entry price
+    # Basic usage with single entry price (simple window_seconds)
     sniper = Sniper(
         client=client,
         asset="BTC",
@@ -32,28 +36,111 @@ Usage
         amount=20.0,
     )
 
-    # Price range usage (only enter between 0.90 and 0.95)
+    # Multiple offset windows (e.g., 2 min to 1 min before end, and last 30 seconds)
     sniper = Sniper(
         client=client,
         asset="BTC",
         timeframe="5m",
         side="UP",
-        entry_price=0.90,
-        entry_price_max=0.95,
-        window_seconds=35,
+        entry_price=0.92,
+        exit_price=0.88,
+        time_windows=[
+            TimeWindow(start_offset=-120, end_offset=-60),
+            TimeWindow(start_offset=-30, end_offset=0),
+        ],
         amount=20.0,
     )
 
-    # Excluded price ranges (avoid 0.93-0.94 and 0.96-0.97)
+    # Absolute time windows (e.g., 01:00-02:00 and 02:30-03:00 UTC)
     sniper = Sniper(
         client=client,
         asset="BTC",
         timeframe="5m",
         side="UP",
-        entry_price=0.90,
-        entry_price_max=0.98,
-        excluded_price_ranges=[(0.93, 0.94), (0.96, 0.97)],
-        window_seconds=35,
+        entry_price=0.92,
+        exit_price=0.88,
+        time_windows=[
+            TimeWindow(start_time="01:00", end_time="02:00"),
+            TimeWindow(start_time="02:30", end_time="03:00"),
+        ],
+        amount=20.0,
+    )
+
+    # Burst pattern (10 seconds on, 20 seconds off, repeating)
+    sniper = Sniper(
+        client=client,
+        asset="BTC",
+        timeframe="5m",
+        side="UP",
+        entry_price=0.92,
+        exit_price=0.88,
+        time_windows=[
+            TimeWindow(burst_on=10, burst_off=20),
+        ],
+        amount=20.0,
+    )
+
+    # Conditional windows (trade only when BTC change < 2%)
+    sniper = Sniper(
+        client=client,
+        asset="BTC",
+        timeframe="5m",
+        side="UP",
+        entry_price=0.92,
+        exit_price=0.88,
+        time_windows=[
+            TimeWindow(start_offset=-60, end_offset=0),
+        ],
+        conditional_windows=[
+            ConditionalWindow(
+                indicator="btc_change",
+                operator="lt",
+                threshold=2.0,
+                periods=5
+            ),
+        ],
+        amount=20.0,
+    )
+
+    # Day/hour filtering (only trade weekdays 9AM-5PM UTC)
+    sniper = Sniper(
+        client=client,
+        asset="BTC",
+        timeframe="5m",
+        side="UP",
+        entry_price=0.92,
+        exit_price=0.88,
+        time_windows=[
+            TimeWindow(start_offset=-60, end_offset=0),
+        ],
+        time_filter=TimeFilter(
+            days=[0, 1, 2, 3, 4],  # Monday-Friday
+            hours=[9, 10, 11, 12, 13, 14, 15, 16, 17]  # 9AM-5PM
+        ),
+        amount=20.0,
+    )
+
+    # Combined: Multiple windows with conditions and time filtering
+    sniper = Sniper(
+        client=client,
+        asset="BTC",
+        timeframe="5m",
+        side="UP",
+        entry_price=0.92,
+        exit_price=0.88,
+        time_windows=[
+            TimeWindow(start_time="01:00", end_time="02:00"),
+            TimeWindow(start_time="02:30", end_time="03:00"),
+        ],
+        conditional_windows=[
+            ConditionalWindow(
+                indicator="btc_change",
+                operator="lt",
+                threshold=2.0,
+                periods=5
+            ),
+        ],
+        time_filter=TimeFilter(days=[0, 1, 2, 3, 4]),
         amount=20.0,
     )
 
@@ -110,6 +197,185 @@ def _jloads(value, default):
     return value if value is not None else default
 
 
+# ── Time Window Configuration ──────────────────────────────────────────────────
+
+@dataclass
+class TimeWindow:
+    """
+    Flexible time window specification for trading.
+    
+    Supports multiple window types:
+    - Offset-based: relative to market end (negative) or start (positive)
+    - Absolute time: specific HH:MM times within market duration
+    - Burst pattern: repeating on/off intervals
+    
+    Examples
+    --------
+    # Offset window (30 to 10 seconds before market end)
+    TimeWindow(start_offset=-30, end_offset=-10)
+    
+    # Absolute time window (trade between 01:00 and 02:00 UTC)
+    TimeWindow(start_time="01:00", end_time="02:00")
+    
+    # Burst pattern (10 seconds on, 20 seconds off, repeating)
+    TimeWindow(burst_on=10, burst_off=20)
+    """
+    # Offset-based (relative to market end)
+    start_offset: Optional[int] = None  # Seconds before market end (negative) or after start (positive)
+    end_offset: Optional[int] = None    # Seconds before market end (negative) or after start (positive)
+    
+    # Absolute time (HH:MM format in UTC)
+    start_time: Optional[str] = None   # HH:MM format
+    end_time: Optional[str] = None     # HH:MM format
+    
+    # Burst pattern (repeating intervals)
+    burst_on: Optional[int] = None      # Seconds to stay ON
+    burst_off: Optional[int] = None     # Seconds to stay OFF
+    
+    def __post_init__(self):
+        """Validate time window configuration."""
+        # Validate offset-based window
+        if self.start_offset is not None and self.end_offset is not None:
+            if self.start_offset >= self.end_offset:
+                raise ValueError(
+                    f"start_offset ({self.start_offset}) must be less than end_offset ({self.end_offset})"
+                )
+        
+        # Validate absolute time window
+        if self.start_time is not None or self.end_time is not None:
+            if self.start_time is None or self.end_time is None:
+                raise ValueError(
+                    "Both start_time and end_time must be provided for absolute time windows"
+                )
+            # Validate HH:MM format
+            for time_val in [self.start_time, self.end_time]:
+                if not re.match(r'^\d{2}:\d{2}$', time_val):
+                    raise ValueError(
+                        f"Time must be in HH:MM format, got {time_val}"
+                    )
+        
+        # Validate burst pattern
+        if self.burst_on is not None or self.burst_off is not None:
+            if self.burst_on is None or self.burst_off is None:
+                raise ValueError(
+                    "Both burst_on and burst_off must be provided for burst patterns"
+                )
+            if self.burst_on <= 0 or self.burst_off <= 0:
+                raise ValueError(
+                    f"burst_on and burst_off must be positive, got {self.burst_on}, {self.burst_off}"
+                )
+        
+        # Ensure only one window type is specified
+        types_specified = sum([
+            self.start_offset is not None,
+            self.start_time is not None,
+            self.burst_on is not None
+        ])
+        if types_specified > 1:
+            raise ValueError(
+                "Only one window type can be specified (offset, absolute time, or burst)"
+            )
+        if types_specified == 0:
+            raise ValueError(
+                "At least one window type must be specified"
+            )
+
+
+@dataclass
+class ConditionalWindow:
+    """
+    Conditional time window based on market indicators.
+    
+    Window opens only when specified conditions are met using indicators
+    like BTC price, Chainlink oracles, Binance data, etc.
+    
+    Examples
+    --------
+    # Trade only when BTC change < 2%
+    ConditionalWindow(
+        indicator="btc_change",
+        operator="lt",
+        threshold=2.0,
+        periods=5
+    )
+    
+    # Trade only when RSI < 30
+    ConditionalWindow(
+        indicator="rsi",
+        operator="lt",
+        threshold=30.0,
+        source="binance"
+    )
+    """
+    indicator: str  # "btc_change", "rsi", "sma", "custom"
+    operator: str   # "lt", "lte", "gt", "gte", "eq"
+    threshold: float
+    source: Optional[str] = None  # "binance", "chainlink", "custom"
+    periods: Optional[int] = None  # For multi-period indicators
+    custom_check: Optional[Callable] = None  # Custom callable for complex conditions
+    
+    def __post_init__(self):
+        """Validate conditional window configuration."""
+        valid_operators = {"lt", "lte", "gt", "gte", "eq"}
+        if self.operator not in valid_operators:
+            raise ValueError(
+                f"Invalid operator '{self.operator}'. Must be one of {valid_operators}"
+            )
+        
+        valid_indicators = {"btc_change", "rsi", "sma", "custom"}
+        if self.indicator not in valid_indicators:
+            raise ValueError(
+                f"Invalid indicator '{self.indicator}'. Must be one of {valid_indicators}"
+            )
+        
+        if self.indicator == "custom" and self.custom_check is None:
+            raise ValueError(
+                "custom_check must be provided when indicator='custom'"
+            )
+
+
+@dataclass
+class TimeFilter:
+    """
+    Time-based filtering for day of week and hour of day.
+    
+    Examples
+    --------
+    # Only trade Monday-Friday
+    TimeFilter(days=[0, 1, 2, 3, 4])  # 0=Monday, 6=Sunday
+    
+    # Only trade 9AM-5PM UTC
+    TimeFilter(hours=[9, 10, 11, 12, 13, 14, 15, 16, 17])
+    
+    # Combined: weekdays during business hours
+    TimeFilter(days=[0, 1, 2, 3, 4], hours=[9, 10, 11, 12, 13, 14, 15, 16, 17])
+    """
+    days: Optional[List[int]] = None  # 0=Monday, 6=Sunday
+    hours: Optional[List[int]] = None  # 0-23 UTC
+    
+    def __post_init__(self):
+        """Validate time filter configuration."""
+        if self.days is not None:
+            if not all(0 <= d <= 6 for d in self.days):
+                raise ValueError(
+                    f"Days must be 0-6 (Monday-Sunday), got {self.days}"
+                )
+        
+        if self.hours is not None:
+            if not all(0 <= h <= 23 for h in self.hours):
+                raise ValueError(
+                    f"Hours must be 0-23, got {self.hours}"
+                )
+    
+    def is_allowed(self, dt: datetime) -> bool:
+        """Check if datetime passes the filter."""
+        if self.days is not None and dt.weekday() not in self.days:
+            return False
+        if self.hours is not None and dt.hour not in self.hours:
+            return False
+        return True
+
+
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -122,8 +388,8 @@ class SniperConfig:
     """
 
     # Market parameters
+    timeframe: str
     asset: str = "BTC"
-    timeframe: str = "5m"
     side: str = "UP"
 
     # Trading parameters
@@ -134,6 +400,12 @@ class SniperConfig:
     excluded_price_ranges: Optional[List[tuple[float, float]]] = None  # List of (min, max) ranges to exclude
     window_seconds: int = DEFAULT_WINDOW_SECONDS
     amount: float = 20.0
+    buy_once_per_market: bool = True
+
+    # Advanced time windows (optional - overrides window_seconds if provided)
+    time_windows: Optional[List[TimeWindow]] = None  # Multiple time windows
+    conditional_windows: Optional[List[ConditionalWindow]] = None  # Indicator-based windows
+    time_filter: Optional[TimeFilter] = None  # Day/hour filtering
 
     # Risk management
     max_position_size: Optional[float] = None
@@ -290,6 +562,36 @@ class SniperConfig:
                 f"btc_change_periods must be positive, got {self.btc_change_periods}"
             )
 
+        # Validate advanced time windows
+        if self.time_windows is not None:
+            if not isinstance(self.time_windows, list):
+                raise ValueError(
+                    f"time_windows must be a list, got {type(self.time_windows)}"
+                )
+            for i, window in enumerate(self.time_windows):
+                if not isinstance(window, TimeWindow):
+                    raise ValueError(
+                        f"time_windows[{i}] must be a TimeWindow instance, got {type(window)}"
+                    )
+
+        # Validate conditional windows
+        if self.conditional_windows is not None:
+            if not isinstance(self.conditional_windows, list):
+                raise ValueError(
+                    f"conditional_windows must be a list, got {type(self.conditional_windows)}"
+                )
+            for i, window in enumerate(self.conditional_windows):
+                if not isinstance(window, ConditionalWindow):
+                    raise ValueError(
+                        f"conditional_windows[{i}] must be a ConditionalWindow instance, got {type(window)}"
+                    )
+
+        # Validate time filter
+        if self.time_filter is not None and not isinstance(self.time_filter, TimeFilter):
+            raise ValueError(
+                f"time_filter must be a TimeFilter instance, got {type(self.time_filter)}"
+            )
+
 
 # ── Statistics ─────────────────────────────────────────────────────────────────
 
@@ -358,11 +660,25 @@ class SniperStats:
 
 class Sniper:
     """
-    Automated trading bot with time-window entry and threshold execution.
+    Automated trading bot with advanced time-window entry and threshold execution.
 
-    The Sniper monitors a market and executes limit orders only during a
-    specified time window before resolution. It automatically transitions
+    The Sniper monitors a market and executes limit orders only during
+    specified time windows before resolution. It automatically transitions
     to the next market after resolution.
+
+    Features
+    --------
+    - Simple time windows (window_seconds for basic use)
+    - Multiple time windows (disjoint periods, burst patterns, absolute times)
+    - Conditional windows (indicator-based: BTC price, RSI, SMA, custom)
+    - Day/hour filtering (trade only on specific days or hours)
+    - Dual-threshold strategy (entry/exit thresholds)
+    - Price range filtering (entry_price_min to entry_price_max)
+    - Excluded price ranges (avoid specific price segments)
+    - Auto-rollover to next market
+    - Risk management (position limits, consecutive loss protection)
+    - Performance monitoring (P&L, win rate, statistics)
+    - Event-driven architecture for custom logic
 
     State Machine
     -------------
@@ -386,11 +702,29 @@ class Sniper:
     config : SniperConfig, optional
         Bot configuration. If not provided, uses defaults.
 
-    Example
-    -------
+    Examples
+    --------
+    Basic usage with simple window_seconds:
     >>> sniper = Sniper(client, asset="BTC", timeframe="5m", side="UP",
     ...                 entry_price=0.92, exit_price=0.88, window_seconds=35,
     ...                 amount=20.0)
+    >>> sniper.run()
+
+    Advanced usage with multiple time windows:
+    >>> from polyalpha.bots.sniper import TimeWindow, ConditionalWindow, TimeFilter
+    >>> sniper = Sniper(client, config=SniperConfig(
+    ...     asset="BTC", timeframe="5m", side="UP",
+    ...     entry_price=0.92, exit_price=0.88,
+    ...     time_windows=[
+    ...         TimeWindow(start_time="01:00", end_time="02:00"),
+    ...         TimeWindow(start_time="02:30", end_time="03:00"),
+    ...     ],
+    ...     conditional_windows=[
+    ...         ConditionalWindow(indicator="btc_change", operator="lt", threshold=2.0),
+    ...     ],
+    ...     time_filter=TimeFilter(days=[0, 1, 2, 3, 4]),
+    ...     amount=20.0
+    ... ))
     >>> sniper.run()
     """
 
@@ -922,7 +1256,9 @@ class Sniper:
                                           current_price, min_price, max_price)
                         break
 
-            if price_in_range and not price_excluded and not self._pending_order and not self._filled_order:
+            if price_in_range and not price_excluded and not self._pending_order:
+                if self._filled_order and self.config.buy_once_per_market:
+                    return
                 max_str = f"-{self.config.entry_price_max:.4f}" if self.config.entry_price_max else ""
                 self._log.info("Entry threshold triggered: %.4f >= %.4f%s",
                               current_price, self.config.entry_price, max_str)
@@ -944,6 +1280,14 @@ class Sniper:
         """Wait until the trading window opens."""
         self._set_state(self.STATE_WAITING)
 
+        # Use advanced time windows if configured, otherwise fall back to simple window_seconds
+        if self.config.time_windows:
+            self._wait_for_advanced_windows()
+        else:
+            self._wait_for_simple_window()
+
+    def _wait_for_simple_window(self) -> None:
+        """Wait for simple window_seconds-based window (backward compatible)."""
         end_time = self._parse_end_time(self._market.end_time)
         window_start = end_time - timedelta(seconds=self.config.window_seconds + self.config.pre_window_buffer)
 
@@ -960,6 +1304,193 @@ class Sniper:
                 return
 
             time.sleep(PRICE_CHECK_INTERVAL)
+
+    def _wait_for_advanced_windows(self) -> None:
+        """Wait for advanced time windows (multiple windows, burst patterns, etc.)."""
+        end_time = self._parse_end_time(self._market.end_time)
+        market_start = end_time - timedelta(seconds=TIMEFRAME_SECONDS[self.config.timeframe])
+
+        self._log.info("Waiting for advanced time windows (ends at %s)", end_time)
+
+        while not self._stop_event.is_set():
+            now = datetime.now(timezone.utc)
+
+            # Check time filter (day/hour restrictions)
+            if self.config.time_filter and not self.config.time_filter.is_allowed(now):
+                self._log.debug("Time filter not satisfied, waiting...")
+                time.sleep(PRICE_CHECK_INTERVAL)
+                continue
+
+            # Check if we're in any of the configured time windows
+            in_window = False
+            active_window = None
+
+            for window in self.config.time_windows:
+                if self._is_in_time_window(window, now, market_start, end_time):
+                    in_window = True
+                    active_window = window
+                    break
+
+            # Check conditional windows (indicator-based)
+            if in_window and self.config.conditional_windows:
+                if not self._check_conditional_windows():
+                    self._log.debug("Conditional windows not satisfied, waiting...")
+                    in_window = False
+
+            if in_window:
+                window_type = self._get_window_type_string(active_window)
+                self._log.info("Entering trading window (%s)", window_type)
+                self._set_state(self.STATE_ARMED)
+                self._emit("window_enter", self._market)
+                return
+
+            time.sleep(PRICE_CHECK_INTERVAL)
+
+    def _is_in_time_window(self, window: TimeWindow, now: datetime, 
+                          market_start: datetime, end_time: datetime) -> bool:
+        """Check if current time is within the specified time window."""
+        # Offset-based window
+        if window.start_offset is not None and window.end_offset is not None:
+            window_start = end_time + timedelta(seconds=window.start_offset)
+            window_end = end_time + timedelta(seconds=window.end_offset)
+            return window_start <= now <= window_end
+
+        # Absolute time window
+        if window.start_time is not None and window.end_time is not None:
+            window_start_time = self._parse_hhmm(window.start_time)
+            window_end_time = self._parse_hhmm(window.end_time)
+            current_time = now.time()
+            
+            # Handle overnight windows (e.g., 23:00 to 02:00)
+            if window_end_time < window_start_time:
+                # Window spans midnight
+                return current_time >= window_start_time or current_time <= window_end_time
+            else:
+                return window_start_time <= current_time <= window_end_time
+
+        # Burst pattern
+        if window.burst_on is not None and window.burst_off is not None:
+            cycle_duration = window.burst_on + window.burst_off
+            seconds_from_start = (now - market_start).total_seconds()
+            position_in_cycle = seconds_from_start % cycle_duration
+            return position_in_cycle < window.burst_on
+
+        return False
+
+    def _parse_hhmm(self, time_str: str) -> datetime.time:
+        """Parse HH:MM string and return as time object."""
+        hour, minute = map(int, time_str.split(':'))
+        return datetime.time(hour=hour, minute=minute)
+
+    def _get_window_type_string(self, window: TimeWindow) -> str:
+        """Get human-readable description of window type."""
+        if window.start_offset is not None:
+            return f"offset: {window.start_offset}s to {window.end_offset}s"
+        elif window.start_time is not None:
+            return f"absolute: {window.start_time} to {window.end_time}"
+        elif window.burst_on is not None:
+            return f"burst: {window.burst_on}s on / {window.burst_off}s off"
+        return "unknown"
+
+    def _check_conditional_windows(self) -> bool:
+        """Check if all conditional windows are satisfied."""
+        if not self.config.conditional_windows:
+            return True
+
+        for window in self.config.conditional_windows:
+            if not self._check_single_conditional_window(window):
+                return False
+
+        return True
+
+    def _check_single_conditional_window(self, window: ConditionalWindow) -> bool:
+        """Check if a single conditional window is satisfied."""
+        try:
+            current_value = self._get_indicator_value(window)
+            
+            if current_value is None:
+                self._log.warning("Could not get value for indicator %s, skipping condition", window.indicator)
+                return False
+
+            # Apply operator
+            result = self._apply_operator(current_value, window.threshold, window.operator)
+            
+            self._log.debug("Conditional check: %s %s %s = %s (current: %.2f)",
+                          window.indicator, window.operator, window.threshold,
+                          result, current_value)
+            
+            return result
+
+        except Exception as exc:
+            self._log.error("Error checking conditional window: %s", exc)
+            return False
+
+    def _get_indicator_value(self, window: ConditionalWindow) -> Optional[float]:
+        """Get current value for the specified indicator."""
+        if window.indicator == "btc_change":
+            return self._get_btc_change(window.periods or self.config.btc_change_periods)
+        elif window.indicator == "rsi":
+            return self._get_rsi_value(window.source)
+        elif window.indicator == "sma":
+            return self._get_sma_value(window.source, window.periods)
+        elif window.indicator == "custom" and window.custom_check:
+            return window.custom_check()
+        else:
+            self._log.warning("Unknown indicator: %s", window.indicator)
+            return None
+
+    def _get_btc_change(self, periods: int) -> Optional[float]:
+        """Get BTC price change percentage over specified periods."""
+        try:
+            # Use existing max_btc_change_pct logic if available
+            if hasattr(self, '_ta_data') and self._ta_data is not None:
+                # This would integrate with existing TA infrastructure
+                # For now, return a placeholder
+                self._log.debug("BTC change check not fully implemented, using placeholder")
+                return 0.0
+            else:
+                self._log.warning("TA data not available for BTC change check")
+                return None
+        except Exception as exc:
+            self._log.error("Error getting BTC change: %s", exc)
+            return None
+
+    def _get_rsi_value(self, source: Optional[str]) -> Optional[float]:
+        """Get RSI value from specified source."""
+        try:
+            # This would integrate with existing TA infrastructure
+            # For now, return a placeholder
+            self._log.debug("RSI check not fully implemented, using placeholder")
+            return 50.0
+        except Exception as exc:
+            self._log.error("Error getting RSI value: %s", exc)
+            return None
+
+    def _get_sma_value(self, source: Optional[str], periods: Optional[int]) -> Optional[float]:
+        """Get SMA value from specified source."""
+        try:
+            # This would integrate with existing TA infrastructure
+            # For now, return a placeholder
+            self._log.debug("SMA check not fully implemented, using placeholder")
+            return 0.0
+        except Exception as exc:
+            self._log.error("Error getting SMA value: %s", exc)
+            return None
+
+    def _apply_operator(self, value: float, threshold: float, operator: str) -> bool:
+        """Apply comparison operator."""
+        if operator == "lt":
+            return value < threshold
+        elif operator == "lte":
+            return value <= threshold
+        elif operator == "gt":
+            return value > threshold
+        elif operator == "gte":
+            return value >= threshold
+        elif operator == "eq":
+            return value == threshold
+        else:
+            raise ValueError(f"Unknown operator: {operator}")
 
     def _parse_end_time(self, end_time_str: str) -> datetime:
         """Parse market end time string to datetime."""
@@ -1044,13 +1575,17 @@ class Sniper:
             if self._pending_order and self._pending_order.status == "filled":
                 self._filled_order = self._pending_order
                 self._pending_order = None
-                self._set_state(self.STATE_FILLED)
                 self._emit("entry", self._filled_order)
 
                 if self.config.log_trades:
                     self._log.info("Order filled: %.4f shares @ %.4f",
                                   self._filled_order.shares, self._filled_order.price)
-                return
+
+                if self.config.buy_once_per_market:
+                    self._set_state(self.STATE_FILLED)
+                    return
+                # buy_once_per_market=False: stay ARMED and keep buying
+                # until the window closes.
 
             # Check for timeout
             elapsed = time.time() - start

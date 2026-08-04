@@ -155,7 +155,8 @@ from .trading.auto_redeem import AutoRedeemConfig
 from .report import ReportPreset
 from .report.comparison import ComparisonReport, VariantResult
 from .bots import Sniper, Tracker
-from .analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator, ChainlinkStreamer, ChainlinkStreamerConfig
+from .analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator, ChainlinkStreamer, ChainlinkStreamerConfig, CVDTracker, CVDTrackerConfig, LiquidationTracker, LiquidationTrackerConfig
+from .globals import Globals, MarketCtx, default_globals, watch_market
 from .database import TradeDatabase
 from .orderbook import (
     BacktestEngine,
@@ -193,6 +194,15 @@ from .core.errors import (
     PositionNotFound,
     RiskLimitExceeded,
     OrderCancelled,
+    CircuitBreakerOpenError,
+    ManualInterventionRequiredError,
+    TransactionRollbackError,
+    BackupError,
+    ConfigurationError,
+    AuthenticationError,
+    RateLimitExceeded,
+    GasEstimationError,
+    TransactionRebroadcastError,
 )
 from . import conditions
 from .ai import (
@@ -277,6 +287,15 @@ __all__ = [
     "SignalGenerator",
     "ChainlinkStreamer",
     "ChainlinkStreamerConfig",
+    "CVDTracker",
+    "CVDTrackerConfig",
+    "LiquidationTracker",
+    "LiquidationTrackerConfig",
+    # Shared globals (one connection, many strategies)
+    "Globals",
+    "MarketCtx",
+    "watch_market",
+    "default_globals",
     # AI
     "OpenRouterClient",
     "MarketAnalysis",
@@ -300,6 +319,15 @@ __all__ = [
     "PositionNotFound",
     "RiskLimitExceeded",
     "OrderCancelled",
+    "CircuitBreakerOpenError",
+    "ManualInterventionRequiredError",
+    "TransactionRollbackError",
+    "BackupError",
+    "ConfigurationError",
+    "AuthenticationError",
+    "RateLimitExceeded",
+    "GasEstimationError",
+    "TransactionRebroadcastError",
     "AIError",
     "AIAuthenticationError",
     "AIModelNotFoundError",

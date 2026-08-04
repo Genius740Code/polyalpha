@@ -1,9 +1,9 @@
 # polyalpha
 
-Python SDK for [Polymarket](https://polymarket.com) — discover prediction markets, stream live prices, trade paper or real, run bots with composable strategy conditions, analyse with 20+ TA indicators and AI signals, track P&L with full reporting, and manage wallets.
+Python SDK for [Polymarket](https://polymarket.com) — discover prediction markets, stream live prices, trade paper or real, run bots with composable strategy conditions, analyse with 19 TA indicators and AI signals, track P&L with full reporting, and manage wallets.
 
 ```bash
-git clone https://github.com/your-org/polyalpha.git
+git clone https://github.com/Genius740Code/polyalpha.git
 cd polyalpha
 pip install -e .
 ```
@@ -110,6 +110,62 @@ client.paper.resolve(market, outcome="UP")
 
 See [`examples/paper.py`](./examples/paper.py) and [`examples/advanced_orders.py`](./examples/advanced_orders.py).
 
+---
+
+## Calculations library
+
+Unified calculation functions for market data analysis across all data sources (Chainlink, Binance, Coinbase).
+
+```python
+from polyalpha.calculations import MarketCalculations, VolumeCalculations
+
+# Universal price calculations (all data sources)
+MarketCalculations.change_pct(data, period=1)     # % change over N periods
+MarketCalculations.change_abs(data, period=1)     # absolute price change
+MarketCalculations.rate_of_change(data, period=1) # speed of change per second
+MarketCalculations.trend(data, period=1)          # UP/DOWN/NEUTRAL
+MarketCalculations.direction(data, period=1)       # "up"/"down"/"flat"
+MarketCalculations.volatility(data, period=10)     # price volatility
+MarketCalculations.high(data, period=10)          # highest price
+MarketCalculations.low(data, period=10)           # lowest price
+MarketCalculations.range(data, period=10)         # price range
+
+# Volume calculations (Binance/Coinbase only)
+VolumeCalculations.vol_ratio(data, period=10)      # current / avg volume
+VolumeCalculations.volume_trend(data, period=5)    # INCREASING/DECREASING/STABLE
+VolumeCalculations.volume_surge(data, multiplier=2.0) # detect volume spikes
+VolumeCalculations.avg_volume(data, period=10)    # average volume
+VolumeCalculations.volume_momentum(data, period=5) # volume % change
+VolumeCalculations.relative_volume(data, percentile=0.75) # percentile-based
+```
+
+### Data source accessors
+
+Source-specific accessors that integrate calculations with live data:
+
+```python
+from polyalpha.calculations import ChainlinkAccessor
+from polyalpha.windows import TimeWindow
+
+# Chainlink accessor (price calculations only)
+window = TimeWindow(max_age=120)
+cl_accessor = ChainlinkAccessor(window)
+cl_accessor.update(67850.0)  # Update with Chainlink price
+cl_accessor.change_pct(30)    # % change over 30 seconds
+cl_accessor.trend(60)         # trend direction
+cl_accessor.is_rising(30)     # convenience method
+cl_accessor.is_falling(30)    # convenience method
+```
+
+**Source availability:**
+- **Chainlink**: Price calculations only (no volume data)
+- **Binance**: Price + volume calculations
+- **Coinbase**: Price + volume calculations (future)
+
+See [`src/polyalpha/calculations/`](./src/polyalpha/calculations/) for implementation details.
+
+---
+
 ### Paper config & presets
 
 Tune realism: fee model, slippage, fill probability, execution delay, risk limits.
@@ -192,8 +248,19 @@ ctx.pnl                         # realised P&L
 ctx.rsi / ctx.sma_20 / ctx.ema_12   # indicators (requires pandas)
 ctx.tick_count / ctx.trade_count
 ctx.chainlink.last_price        # BTC spot from Chainlink oracle
+ctx.cl.value                    # latest Chainlink price
+ctx.cl.change_pct(30)           # % change over 30 seconds
+ctx.cl.change_pct(60)           # % change over 60 seconds
+ctx.cl.age_s                    # seconds since last CL update
+ctx.cl.trend(60)               # trend direction (UP/DOWN/NEUTRAL)
+ctx.cl.direction(30)           # simple direction ("up"/"down"/"flat")
+ctx.cl.volatility(120)         # price volatility
 ctx.binance.macd(12, 26, 9)     # MACD from Binance data
 ctx.binance.price_change(3)     # BTC price change over 3 candles
+ctx.binance.change_pct(3)       # % price change over 3 candles
+ctx.binance.vol_ratio(10)       # current volume / avg of last 10 candles
+ctx.binance.volume_trend(5)     # volume trend (increasing/decreasing/stable)
+ctx.binance.volume_surge(2.0)    # detect volume spikes
 ctx.buy("UP", 20)               # market buy
 ctx.limit("UP", 0.92, 25)       # limit order
 ctx.close_position("UP")        # close position
@@ -341,7 +408,7 @@ See `docs/orderbook.md` for the full order book API.
 
 ## Technical analysis
 
-Multi-source data feed and 20+ TA indicators.
+Multi-source data feed and 19 TA indicators.
 
 ```python
 from polyalpha.analysis import DataFeed, IndicatorCalculator, SignalGenerator
@@ -366,7 +433,29 @@ sig.macd_bullish_crossover()
 sig.summary()  # all signals at once
 ```
 
-**Data sources:** `binance` (default), `chainlink`, `coingecko`, `custom`.
+**Data sources:** `scraping` (default), `binance`, `chainlink`, `custom`, `websocket`.
+
+**Live Binance feeds** (`polyalpha.analysis`): `CVDTracker` streams spot
+aggTrades for cumulative volume delta (`cvd`, `z`, `velocity`, …), and
+`LiquidationTracker` streams futures `forceOrder` events for one-sided
+liquidation clusters (`cluster()`). Both run their own connection and
+reconnect forever.
+
+```python
+from polyalpha.analysis import CVDTracker, LiquidationTracker
+
+cvd = CVDTracker(); cvd.start()
+liq = LiquidationTracker(); liq.start()
+
+cvd.z()                       # CVD z-score, or None
+liq.cluster()                 # {"direction", "notional", "count"} or None
+```
+
+**Shared Globals** (`polyalpha.Globals`): one instance of every
+continuously-running feed, shared by all strategies so adding one costs zero
+extra connections. `default_globals("BTC", cvd=True, liq=True)` builds the
+feeds; `.start()` / `.stop()` manage them all. Per-market scope is
+`MarketCtx` / `watch_market()`.
 
 See [`examples/analysis.py`](./examples/analysis.py) and [`examples/price_change_signals.py`](./examples/price_change_signals.py).
 
@@ -420,8 +509,9 @@ SQLite-backed trade persistence with optional encryption.
 client = polyalpha.Client(db_path="./trades.db")
 
 db = client.paper.database
-db.get_statistics(start_date="2026-01-01", end_date="2026-07-22")
-db.get_trades(market_slug="btc-updown-*")
+db.get_statistics()                                   # aggregate stats (no args)
+db.load_trades(filters={"asset": "btc"})              # filtered trades
+db.load_trades_by_market("btc-updown-5m-1751234700")  # trades for one market
 db.export_json("trades.json")
 db.export_csv("trades.csv")
 ```
@@ -432,20 +522,38 @@ See `docs/database.md` for the full database API.
 
 ## Sniper bot
 
-Time-window execution bot with configurable thresholds and auto-rollover.
+Time-window execution bot with configurable thresholds and auto-rollover. Supports advanced time windows: multiple disjoint periods, burst patterns, absolute time windows, conditional windows (indicator-based), and day/hour filtering.
 
 ```python
-from polyalpha import Sniper, SniperConfig
+from polyalpha import Sniper, SniperConfig, TimeWindow, ConditionalWindow, TimeFilter
 
+# Simple time window (backward compatible)
 Sniper(SniperConfig(
     asset="BTC", timeframe="5m",
     balance=500.0, window_seconds=30,
     side="UP", order_size=25.0,
     auto_rollover=True,
 )).run()
+
+# Advanced: Multiple time windows with conditions
+Sniper(SniperConfig(
+    asset="BTC", timeframe="5m",
+    side="UP", entry_price=0.92, exit_price=0.88,
+    time_windows=[
+        TimeWindow(start_time="01:00", end_time="02:00"),
+        TimeWindow(start_time="02:30", end_time="03:00"),
+    ],
+    conditional_windows=[
+        ConditionalWindow(indicator="btc_change", operator="lt", threshold=2.0, periods=5),
+    ],
+    time_filter=TimeFilter(days=[0, 1, 2, 3, 4], hours=[9, 10, 11, 12, 13, 14, 15, 16, 17]),
+    amount=20.0,
+)).run()
 ```
 
-See [`examples/sniper.py`](./examples/sniper.py), [`examples/sniper_minimal.py`](./examples/sniper_minimal.py), and [`examples/sniper_ta.py`](./examples/sniper_ta.py).
+`timeframe` is **required** (one of `5m`, `15m`, `1h`, `4h`, `24h` — no silent 5m default). By default each bot buys only **once per market** (`buy_once_per_market=True`); set it to `False` on the config to allow multiple entries within the same market.
+
+See [`examples/sniper.py`](./examples/sniper.py), [`examples/sniper_minimal.py`](./examples/sniper_minimal.py), [`examples/sniper_ta.py`](./examples/sniper_ta.py), and [`docs/bots.md`](./docs/bots.md#advanced-time-windows).
 
 ---
 
@@ -557,7 +665,6 @@ client = polyalpha.Client(
 | [`examples/pairsum_arb.py`](./examples/pairsum_arb.py) | Arbitrage example |
 | [`examples/price_change_signals.py`](./examples/price_change_signals.py) | Price change detection signals |
 | [`examples/chainlink_btc_scraper.py`](./examples/chainlink_btc_scraper.py) | Chainlink BTC data scraper |
-| [`examples/m42_flb.py`](./examples/m42_flb.py) | M42 FLB strategy |
 | [`examples/multi_arb_bot.py`](./examples/multi_arb_bot.py) | Multi-arbitrage bot |
 | [`examples/telegram_notifications.py`](./examples/telegram_notifications.py) | Telegram notification integration |
 
@@ -578,7 +685,7 @@ src/polyalpha/
 ├── core/                Constants, errors, market models, env
 ├── trading/             PaperEngine, RealTradingEngine, auto-redeem, retry
 ├── orderbook/           REST + WS book, manager, strategies, backtest
-├── analysis/            DataFeed, 20+ indicators, 30+ signals
+├── analysis/            DataFeed, 19 indicators, 30+ signals
 ├── ai/                  OpenRouterClient, MarketAnalysis, TradingSignal
 ├── report/              ReportEngine, metrics (30+), charts (12), HTML
 ├── bots/                Sniper, Tracker

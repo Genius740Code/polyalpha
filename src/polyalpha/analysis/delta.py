@@ -16,10 +16,18 @@ Usage
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import statistics
+import time
+from collections import deque
+from dataclasses import dataclass
 from typing import Optional
 
 import pandas as pd
+
+from ..core.constants import BINANCE_WS_AGGTRADE
 
 try:
     import pandas_ta as ta
@@ -270,3 +278,198 @@ class DeltaCalculator:
             return None
 
         return valid_values.iloc[-1]
+
+
+@dataclass
+class CVDTrackerConfig:
+    """Configuration for :class:`CVDTracker`.
+
+    Parameters
+    ----------
+    ws_url            : Binance aggTrade WebSocket endpoint.
+    ping_interval     : Seconds between WebSocket-level pings (the websockets
+                        library drives these; Binance drops idle sockets).
+    reconnect_delay   : Fixed delay between reconnect attempts on WS drop.
+    snapshot_interval : Seconds between cumulative-volume-delta snapshots.
+    sample_max_age    : Seconds a signed trade is kept before being pruned.
+    history_maxlen    : Max number of ``cvd30``/``cvd60`` snapshots to retain.
+    """
+
+    ws_url: str = BINANCE_WS_AGGTRADE
+    ping_interval: float = 20.0
+    reconnect_delay: float = 3.0
+    snapshot_interval: float = 10.0
+    sample_max_age: float = 180.0
+    history_maxlen: int = 200
+
+
+class CVDTracker:
+    """Cumulative volume delta for Binance BTC spot, streamed from aggTrades.
+
+    Each aggregate trade is signed by aggressor side: ``m=false`` (buyer is the
+    taker) contributes ``+qty``; ``m=true`` (seller is the taker) contributes
+    ``-qty``. Signed quantities accumulate into a rolling ``samples`` deque and
+    are snapshotted every ``snapshot_interval`` seconds into ``history`` as
+    ``{"ts", "cvd30", "cvd60"}``, which drives the ``z`` / ``decelerating`` /
+    ``velocity`` / ``acceleration`` signals.
+
+    Starts its own connection and reconnects forever on drop.
+
+    Usage
+    -----
+        cvd = CVDTracker()
+        cvd.start()
+
+        # Read the latest signals anytime
+        if cvd.z() > 2.0 and not cvd.decelerating():
+            ...
+
+        cvd.stop()
+    """
+
+    def __init__(self, config: CVDTrackerConfig | None = None):
+        self.config = config or CVDTrackerConfig()
+        self.samples: deque[tuple[float, float]] = deque()
+        self.history: deque[dict[str, float]] = deque(maxlen=self.config.history_maxlen)
+        self._stop = False
+        self._task: asyncio.Task | None = None
+        self._snapshot_task: asyncio.Task | None = None
+
+    # ── Signals ──────────────────────────────────────────────────────────────
+
+    def cvd(self, window_s: float = 60) -> float:
+        """Sum of signed trade qty whose ``ts >= now - window_s``."""
+        self._prune()
+        cutoff = time.time() - window_s
+        return sum(signed for ts, signed in self.samples if ts >= cutoff)
+
+    def z(self, window_s: float = 60) -> float | None:
+        """Current CVD z-score against the snapshot history.
+
+        Uses the ``cvd60`` history when ``window_s >= 60`` else ``cvd30``.
+        Needs ``>= 5`` snapshots; ``None`` when insufficient history or the
+        history has zero variance.
+        """
+        key = "cvd60" if window_s >= 60 else "cvd30"
+        if len(self.history) < 5:
+            return None
+        values = [h[key] for h in self.history]
+        mean = statistics.mean(values)
+        std = statistics.pstdev(values)
+        if std == 0:
+            return None
+        return (self.cvd(window_s) - mean) / std
+
+    def decelerating(self) -> bool | None:
+        """True when the last two ``cvd30`` snapshots share a sign and the
+        magnitude is shrinking (momentum exhausting). ``None`` with ``< 2``
+        snapshots.
+        """
+        if len(self.history) < 2:
+            return None
+        last = self.history[-1]["cvd30"]
+        prev = self.history[-2]["cvd30"]
+        same_sign = (last > 0 and prev > 0) or (last < 0 and prev < 0)
+        return same_sign and abs(last) < abs(prev)
+
+    def velocity(self, key: str = "cvd60") -> float | None:
+        """Change in ``key`` between the last two snapshots. ``None`` with
+        ``< 2`` snapshots.
+        """
+        if len(self.history) < 2:
+            return None
+        return self.history[-1][key] - self.history[-2][key]
+
+    def acceleration(self, key: str = "cvd60") -> float | None:
+        """Rate of change of ``key``'s velocity (second difference).
+        ``None`` with ``< 3`` snapshots.
+        """
+        if len(self.history) < 3:
+            return None
+        d1 = self.history[-1][key] - self.history[-2][key]
+        d2 = self.history[-2][key] - self.history[-3][key]
+        return d1 - d2
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        """Start the background reconnect loop. No-op if already running."""
+        if self._task and not self._task.done():
+            return
+        self._stop = False
+        self._task = asyncio.create_task(self._run())
+
+    def stop(self) -> None:
+        """Stop the reconnect loop and cancel any in-flight tasks."""
+        self._stop = True
+        if self._snapshot_task and not self._snapshot_task.done():
+            self._snapshot_task.cancel()
+        if self._task and not self._task.done():
+            self._task.cancel()
+
+    # ── Internals ─────────────────────────────────────────────────────────────
+
+    def _prune(self) -> None:
+        cutoff = time.time() - self.config.sample_max_age
+        while self.samples and self.samples[0][0] < cutoff:
+            self.samples.popleft()
+
+    def _handle(self, raw: str | bytes) -> None:
+        if isinstance(raw, bytes):
+            try:
+                raw = raw.decode()
+            except UnicodeDecodeError:
+                return
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return
+        if not isinstance(data, dict):
+            return
+        try:
+            qty = float(data["q"])
+        except (TypeError, ValueError, KeyError):
+            return
+        signed = -qty if data.get("m") is True else qty
+        self.samples.append((time.time(), signed))
+
+    async def _run(self) -> None:
+        import websockets
+
+        while not self._stop:
+            try:
+                async with websockets.connect(
+                    self.config.ws_url,
+                    ping_interval=self.config.ping_interval,
+                    ping_timeout=5,
+                ) as ws:
+                    self._snapshot_task = asyncio.create_task(self._snapshot_loop())
+                    try:
+                        async for raw in ws:
+                            if self._stop:
+                                break
+                            self._handle(raw)
+                    finally:
+                        self._snapshot_task.cancel()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:  # noqa: BLE001 — keep the loop alive
+                if self._stop:
+                    break
+                log.warning(
+                    "Binance aggTrade WS dropped (%s), reconnecting in %.1fs",
+                    exc,
+                    self.config.reconnect_delay,
+                )
+                await asyncio.sleep(self.config.reconnect_delay)
+
+    async def _snapshot_loop(self) -> None:
+        try:
+            while not self._stop:
+                await asyncio.sleep(self.config.snapshot_interval)
+                now = time.time()
+                self.history.append(
+                    {"ts": now, "cvd30": self.cvd(30), "cvd60": self.cvd(60)}
+                )
+        except asyncio.CancelledError:
+            pass

@@ -153,7 +153,8 @@ class DatabaseConnection:
                     last_updated TEXT
                 )
             """)
-            cursor.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (1)")
+            for v in (1, 2, 3):
+                cursor.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (v,))
             conn.commit()
         log.info("Database initialized at %s", self.db_path)
 

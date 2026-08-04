@@ -7,11 +7,9 @@ big files into small files
     such as paper engine
 
 
-syncing time to ensure getting correct polymarket time slug
-
-
 binacne data such as volume ect (more if nessary)
 
+coinbase support aswell
 
 
 Finish telegram bot
@@ -19,21 +17,19 @@ Finish telegram bot
     Before stratign ensure that the sturcute code is wrokign great
     Prests for buying, and selling
     send total pl and wallet blance every X minutes
-
 ONLY READ ONLY
 
-better WINDOW_SECONDS so you can choose x multipe ect, eg only trade 01:00 to 02:00, and 02:30- 03:00
+if running mutliple bots, dont have 10 db, put but  all 10 db in 1 db
+
 
 verify max btc change feature
 
 check if btc chainlink data has error
 
 
+readme has too much code
+
 LOADS OF CODE REVIEWS
-
-
-
-
 
 
 API Key Handling: The clob_client.py handles private keys and API credentials. Need to verify:
@@ -47,6 +43,7 @@ Simulated Responses: The clob_client includes mock response generation for testi
 
 
 
+logging prests, u say wheat u want  to log, an it knows, eh only log findign amrekts new market refersh ect
 
 
 when using poylmakret up down price, allow user to choose websocket (websocket is default) clob or a mix
@@ -60,12 +57,8 @@ loook for logic and calcultion errors
 redo or remvoe stale checking as in stalled data (data not updating, for btc price and yes no)
 
 
-make sure frotnend terminal has same data as the backend    
-
 risk managment kidna sucks overcompliacted ect, redo or remove
 
-
-fidn and look for errors in buying, makking srue it buys t correct price, with the delay and spilalge and fee aswell ect
 
 in a few months remove old db schema
 
@@ -81,9 +74,12 @@ ensrue docs are good and updated
 
 make ti easier to update db on resolve or sell 
 
-BETTER SEO FOR STUFF LIKE STRATS.MD
-
 PLESAE DONT DO THE ONCE BELOW
 
     mabye add feature for notify to send windows notifaicton, 
     maybe elgram bot will support commands
+
+
+
+
+

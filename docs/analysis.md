@@ -1,9 +1,9 @@
 # Technical Analysis
 
-The analysis module provides data fetching, indicator calculation, signal generation, and delta change analysis. Access via `polyalpha.analysis` or direct imports.
+The analysis module provides data fetching, indicator calculation, signal generation, delta change analysis, and live Binance streaming feeds (CVD + liquidations). Access via `polyalpha.analysis` or direct imports.
 
 ```python
-from polyalpha.analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator, DeltaCalculator, ChainlinkStreamer, ChainlinkStreamerConfig
+from polyalpha.analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator, DeltaCalculator, ChainlinkStreamer, ChainlinkStreamerConfig, CVDTracker, CVDTrackerConfig, LiquidationTracker, LiquidationTrackerConfig
 ```
 
 ---
@@ -26,9 +26,9 @@ config = DataFeedConfig(
 
 | Source | Description |
 |--------|-------------|
-| `"binance"` | Free Binance API with extensive historical data (default fallback) |
+| `"scraping"` | Polymarket WebSocket with configurable delay — collects live prices directly (default) |
+| `"binance"` | Free Binance API with extensive historical data (fallback when scraping/chainlink unavailable) |
 | `"chainlink"` | Chainlink oracle data — matches Polymarket. Falls back to Binance if web3 not installed |
-| `"scraping"` | Polymarket WebSocket with configurable delay — collects live prices directly |
 | `"custom"` | User-provided API with optional auth key |
 | `"websocket"` | Builds OHLCV from existing Stream cache |
 
@@ -747,6 +747,172 @@ Requires `websockets` library:
 ```bash
 pip install websockets>=12.0
 ```
+
+---
+
+## CVDTracker (Binance cumulative volume delta)
+
+Streams Binance BTC/USDT spot aggregate trades and tracks the cumulative
+volume delta — signed by aggressor side (`m=false` → buy → `+qty`;
+`m=true` → sell → `-qty`). Runs its own connection in a background task and
+reconnects forever on drop.
+
+```python
+from polyalpha.analysis import CVDTracker
+
+cvd = CVDTracker()
+cvd.start()
+```
+
+### CVDTrackerConfig
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `ws_url` | `str` | `"wss://stream.binance.com:9443/ws/btcusdt@aggTrade"` | Binance aggTrade WebSocket endpoint |
+| `ping_interval` | `float` | `20.0` | WebSocket ping interval |
+| `reconnect_delay` | `float` | `3.0` | Delay between reconnect attempts |
+| `snapshot_interval` | `float` | `10.0` | Seconds between CVD snapshots |
+| `sample_max_age` | `float` | `180.0` | Max age of a signed trade before pruning |
+| `history_maxlen` | `int` | `200` | Max `cvd30`/`cvd60` snapshots retained |
+
+### Methods
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `cvd(window_s=60)` | `float` | Sum of signed qty with `ts >= now - window_s` |
+| `z(window_s=60)` | `float \| None` | CVD z-score vs snapshot history (needs `>= 5` snapshots) |
+| `decelerating()` | `bool \| None` | Last two `cvd30` snapshots share a sign and magnitude shrinks |
+| `velocity(key="cvd60")` | `float \| None` | Change between the last two snapshots |
+| `acceleration(key="cvd60")` | `float \| None` | Rate of change of velocity (needs `>= 3` snapshots) |
+| `start()` | — | Start the background reconnect loop (idempotent) |
+| `stop()` | — | Stop the loop and cancel tasks |
+
+```python
+cvd.start()
+
+if cvd.z() > 2.0 and not cvd.decelerating():
+    print("strong CVD momentum")
+
+cvd.stop()
+```
+
+---
+
+## LiquidationTracker (Binance futures liquidations)
+
+Streams Binance USDT-M `btcusdt@forceOrder` and detects one-sided
+liquidation clusters — bursts of SELL or BUY liquidations that signal forced
+deleveraging. A **SELL** liquidation closes a long (bearish pressure); a
+**BUY** liquidation closes a short (bullish pressure). Runs its own connection
+and reconnects forever on drop.
+
+```python
+from polyalpha.analysis import LiquidationTracker
+
+liq = LiquidationTracker()
+liq.start()
+```
+
+### LiquidationTrackerConfig
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `ws_url` | `str` | `"wss://fstream.binance.com/ws/btcusdt@forceOrder"` | Binance futures forceOrder WebSocket endpoint |
+| `ping_interval` | `float` | `20.0` | WebSocket ping interval |
+| `reconnect_delay` | `float` | `3.0` | Delay between reconnect attempts |
+| `events_maxlen` | `int` | `500` | Max liquidation events retained |
+
+### `cluster(window_s=20, min_count=3, notional_mult=2.0)`
+
+Detect a one-sided liquidation cluster in the last `window_s` seconds:
+
+1. `recent` = events within `window_s`; `< min_count` → `None`.
+2. `side` = the **last** event's side; `same` = events with that side;
+   `len(same) < min_count` → `None`.
+3. `notional = sum(same)`; hourly avg = mean notional over events within
+   3600s; if that exists and `notional < avg * notional_mult` → `None`.
+
+Returns `{"direction": "DOWN" | "UP", "notional": float, "count": int}` —
+`SELL` → `"DOWN"`, `BUY` → `"UP"` — or `None` when there is no cluster.
+
+```python
+liq.start()
+
+if (c := liq.cluster()) is not None:
+    print(c["direction"], c["notional"], c["count"])
+
+liq.stop()
+```
+
+---
+
+## Shared Globals (one connection, many strategies)
+
+`Globals` holds one instance of every continuously-running feed so all
+strategies and markets read the same data — adding a strategy costs zero extra
+connections. Caller owns the lifecycle: construct once, `start()` everything,
+`stop()` everything in a `finally`.
+
+```python
+from polyalpha import Globals, MarketCtx, watch_market, default_globals
+
+globals = default_globals("BTC", price_feed=True, cvd=True, liq=True)
+globals.start()
+
+try:
+    ...  # run markets
+finally:
+    globals.stop()
+```
+
+### Globals
+
+`Globals(asset="BTC", price_feed=None, klines=None, cvd=None, obi_cache=None,
+futures=None, liq=None, db=None, eth_feed=None, klines_15m=None,
+klines_1h=None)`.
+
+| Field | Feed | Built by `defaults()` |
+|-------|------|------------------------|
+| `price_feed` | `ChainlinkStreamer` (BTC spot oracle) | `price_feed=True` |
+| `cvd` | `CVDTracker` (Binance spot CVD) | `cvd=True` |
+| `liq` | `LiquidationTracker` (Binance futures liquidations) | `liq=True` |
+| `klines`, `obi_cache`, `futures`, `db`, `eth_feed`, `klines_15m`, `klines_1h` | out of scope — `None` by default | — |
+
+| Method | Description |
+|--------|-------------|
+| `defaults(asset, *, price_feed=True, cvd=True, liq=False)` | Build (not start) the standard feeds |
+| `start()` | Start every non-`None` feed once (idempotent; `price_feed` via `background=True`) |
+| `stop()` | Stop started feeds in reverse order (idempotent) |
+| `started` | List of feeds currently started |
+
+### MarketCtx
+
+Per-market scope wrapping one `TokenPairTracker` plus the shared `globals`.
+
+`MarketCtx(globals, tracker, open_price=None, end_time=None)` — attributes
+`globals`, `tracker`, `open_price`, `end_time`.
+
+| Member | Description |
+|--------|-------------|
+| `remaining` | Seconds left in the window (`float("inf")` when no `end_time`) |
+| `expired` | True once `remaining <= 0` |
+| `price()` | `(up_mid, down_mid)` |
+| `favourite()` | `("UP", mid)` / `("DOWN", mid)` / `(None, None)` |
+| `spread(side)` | `{"current", "stats", "expansion"}` for one leg |
+| `trade_sweep(side, **kwargs)` | One-sided trade burst via `tracker.sweep` |
+
+### watch_market
+
+```python
+await watch_market(globals, market, tick, interval=2.0, timeframe=None)
+```
+
+Creates and starts a per-market `TokenPairTracker`, wraps it in a `MarketCtx`,
+calls `tick(ctx)` every `interval` seconds while `ctx.remaining > 0`, and
+stops the tracker in a `finally`. `market` must expose `up_token` /
+`down_token` / `end_time` (a `polyalpha.core.market.Market` works directly);
+`timeframe` (`"5m"`, …) is the fallback duration when `end_time` can't be
+parsed.
 
 ---
 

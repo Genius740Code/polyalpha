@@ -292,14 +292,14 @@ True when price above cloud top AND tenkan > kijun — strong bullish signal.
 
 True when price below cloud bottom AND tenkan < kijun — strong bearish signal.
 
-### `price_change_above(min_change, candles=1)`
+### `price_change_above(min_change, candles_back=1)`
 
 True when BTC price from Binance increased by at least `min_change` USD over the last N candles. Requires `ctx.binance` (auto-available via `Bot`).
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `min_change` | `float` | — | Minimum USD price increase |
-| `candles` | `int` | `1` | Lookback candles |
+| `candles_back` | `int` | `1` | Lookback candles |
 
 ```python
 from polyalpha.conditions import price_change_above
@@ -308,7 +308,7 @@ condition = price_change_above(30)      # BTC moved up $30+
 condition = price_change_above(100, 3)  # BTC moved up $100+ in 3 candles
 ```
 
-### `price_change_below(min_change, candles=1)`
+### `price_change_below(min_change, candles_back=1)`
 
 True when BTC price dropped by at least `min_change` USD over the last N candles.
 
@@ -318,7 +318,7 @@ from polyalpha.conditions import price_change_below
 condition = price_change_below(30)  # BTC dropped $30+
 ```
 
-### `price_up(candles=1)`
+### `price_up(candles_back=1)`
 
 True when BTC close price is higher than N candles ago.
 
@@ -328,7 +328,7 @@ from polyalpha.conditions import price_up
 condition = price_up(2)  # BTC up over last 2 candles
 ```
 
-### `price_down(candles=1)`
+### `price_down(candles_back=1)`
 
 True when BTC close price is lower than N candles ago.
 
@@ -502,10 +502,10 @@ bot.run()
 | `macd_bearish_crossover(f=12, s=26, sig=9)` | `MACDBearishCrossover` | MACD crossed below signal (Binance BTC) |
 | `macd_above_zero(f=12, s=26, sig=9)` | `MACDAboveZero` | MACD histogram positive (Binance BTC) |
 | `macd_below_zero(f=12, s=26, sig=9)` | `MACDBelowZero` | MACD histogram negative (Binance BTC) |
-| `price_change_above(min, candles=1)` | `PriceChangeAbove` | BTC price up by $min+ (Binance BTC) |
-| `price_change_below(min, candles=1)` | `PriceChangeBelow` | BTC price down by $min+ (Binance BTC) |
-| `price_up(candles=1)` | `PriceUp` | BTC close higher than N candles ago (Binance BTC) |
-| `price_down(candles=1)` | `PriceDown` | BTC close lower than N candles ago (Binance BTC) |
+| `price_change_above(min, candles_back=1)` | `PriceChangeAbove` | BTC price up by $min+ (Binance BTC) |
+| `price_change_below(min, candles_back=1)` | `PriceChangeBelow` | BTC price down by $min+ (Binance BTC) |
+| `price_up(candles_back=1)` | `PriceUp` | BTC close higher than N candles ago (Binance BTC) |
+| `price_down(candles_back=1)` | `PriceDown` | BTC close lower than N candles ago (Binance BTC) |
 | `always()` | `Always` | Always true |
 | `never()` | `Never` | Always false |
 | `when(fn)` | `LambdaCondition` | Custom function as condition |

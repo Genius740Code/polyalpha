@@ -32,23 +32,21 @@ client = polyalpha.Client(balance=1000.0, timeout=10, retries=3)
 | Old | New |
 |-----|-----|
 | `client.paper.sell(market, side)` | `client.paper.sell_position(market, side)` |
-| `client.paper.get_order(id)` | `client.paper.order(id)` |
-| `client.paper.get_position(id)` | `client.paper.position(id)` |
-| `client.paper.get_positions()` | `client.paper.positions()` |
 | `client.paper.get_orders()` | `client.paper.orders()` |
+| `client.paper.get_positions()` | `client.paper.positions()` |
 | `client.paper.balance()` | `client.paper.balance` (property, not method) |
 
 ### New Methods
 - `client.paper.limit(market, side, price, amount)` — place limit orders
-- `client.paper.open(market)` — get open position for a market
-- `client.paper.attach_stream(stream)` — auto-fill from live prices
+- `client.paper.open()` — open (unfilled) limit orders (takes no argument)
+- `client.paper.attach_stream(stream, market)` — auto-fill from live prices
 - `client.paper.pre_trade_checks(market, side, amount)` — validate before trading
 - `client.paper.portfolio_analytics` — performance analysis (property)
+- `client.paper.auto_redeem` — property returning the `AutoRedeemEngine`
 
 ### Removed
-- `client.paper.auto_redeem()` — replaced by `AutoRedeemEngine`
 - `client.payer` — typo removed
-- Position `.slug()` → `.market_slug`
+- Position field renamed `slug` → `market_slug` (was `.slug()` method)
 
 ---
 

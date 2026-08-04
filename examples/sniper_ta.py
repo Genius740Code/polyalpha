@@ -5,12 +5,14 @@ Usage:
     python examples/sniper_ta.py
 """
 import polyalpha
-from polyalpha.bots import Sniper, SniperConfig
+from polyalpha.bots import Sniper
+from polyalpha.bots.sniper import SniperConfig
 
 client = polyalpha.Client(balance=100)
 
 config = SniperConfig(
     asset="BTC",
+    timeframe="5m",
     side="UP",
     entry_price=0.92,
     exit_price=0.88,
@@ -27,7 +29,7 @@ def on_entry(order):
     print(f"TA-filtered entry: {order}")
 
 @sniper.on("resolve")
-def on_resolve(result):
-    print(f"P&L: {result.pnl:.2f}")
+def on_resolve(outcome, pnl):
+    print(f"P&L: ${pnl:.2f} ({outcome})")
 
 sniper.run()

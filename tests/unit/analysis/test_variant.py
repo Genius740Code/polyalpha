@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from polyalpha.bot_hub import BotHub, Variant, _RegisteredStrategy
+from polyalpha.bot_hub import BotHub, Variant, StrategyContext, _RegisteredStrategy
 from polyalpha.report.comparison import (
     ComparisonReport,
     DEFAULT_COMPARISON_METRICS,
@@ -670,3 +670,55 @@ class TestActiveTickers:
     def test_empty_when_nothing_registered(self):
         hub = BotHub(asset="BTC", timeframe="5m")
         assert hub._active_tickers() == []
+
+
+# ── buy_once_per_market ────────────────────────────────────────────────────────
+
+class TestBuyOncePerMarket:
+    def _make_ctx(self, buy_once_per_market):
+        from collections import deque
+        hub = MagicMock()
+        hub.buy_once_per_market = buy_once_per_market
+        hub._bought_this_market = {}
+        paper = MagicMock()
+        paper.buy.return_value = MagicMock()
+        return StrategyContext(
+            name="s1", stream=MagicMock(), paper=paper, market=None,
+            price_history=deque(), hub=hub,
+        ), paper
+
+    def test_defaults_to_true(self):
+        hub = BotHub(asset="BTC", timeframe="5m")
+        assert hub.buy_once_per_market is True
+
+    def test_blocks_after_first_buy_by_default(self):
+        ctx, paper = self._make_ctx(buy_once_per_market=True)
+        ctx.buy("UP", 10)
+        ctx.buy("UP", 10)
+        assert paper.buy.call_count == 1
+
+    def test_allows_multiple_buys_when_disabled(self):
+        ctx, paper = self._make_ctx(buy_once_per_market=False)
+        ctx.buy("UP", 10)
+        ctx.buy("UP", 10)
+        assert paper.buy.call_count == 2
+
+    def test_tracks_per_strategy_name(self):
+        from collections import deque
+        hub = MagicMock()
+        hub.buy_once_per_market = True
+        hub._bought_this_market = {}
+        paper = MagicMock()
+        paper.buy.return_value = MagicMock()
+        ctx_a = StrategyContext(
+            name="strat_a", stream=MagicMock(), paper=paper, market=None,
+            price_history=deque(), hub=hub,
+        )
+        ctx_b = StrategyContext(
+            name="strat_b", stream=MagicMock(), paper=paper, market=None,
+            price_history=deque(), hub=hub,
+        )
+        ctx_a.buy("UP", 10)
+        ctx_a.buy("UP", 10)
+        ctx_b.buy("UP", 10)
+        assert paper.buy.call_count == 2

@@ -7,6 +7,16 @@ GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_API  = "https://clob.polymarket.com"
 CLOB_WS   = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 
+# Max age of a CLOB best-bid/ask before it is considered stale and dropped.
+CLOB_MAX_AGE_S = 20
+
+# Binance spot aggregate-trades stream (BTC/USDT) — feeds CVDTracker.
+BINANCE_WS_AGGTRADE = "wss://stream.binance.com:9443/ws/btcusdt@aggTrade"
+
+# Binance USDT-M futures force-order stream (BTC/USDT) — feeds
+# LiquidationTracker. Only pushes when a position is force-liquidated.
+BINANCE_WS_FORCE_ORDER = "wss://fstream.binance.com/ws/btcusdt@forceOrder"
+
 # ── Timeframes ─────────────────────────────────────────────────────────────────
 
 TIMEFRAME_SECONDS: dict[str, int] = {
@@ -48,12 +58,12 @@ WS_JITTER         = 0.2   # jitter factor (±20% random variation) to prevent th
 
 # ── Scraping ─────────────────────────────────────────────────────────────────────
 
-SCRAPE_RECV_TIMEOUT   = 10   # seconds — per-message recv timeout for scraping
+SCRAPE_RECV_TIMEOUT   = 30   # seconds — per-message recv timeout for scraping
 SCRAPE_RETRY_ATTEMPTS = 3    # retry attempts before falling back to Binance
 
 # ── Chainlink Streamer ──────────────────────────────────────────────────────────
 
-CL_WS_RECV_TIMEOUT   = 10    # seconds — per-message recv timeout
+CL_WS_RECV_TIMEOUT   = 30    # seconds — per-message recv timeout
 CL_WS_MAX_RETRIES    = 10    # max reconnection attempts before giving up
 CL_WS_BASE_DELAY     = 3.0   # base backoff delay in seconds
 CL_WS_BACKOFF_FACTOR = 2.0   # exponential backoff multiplier
@@ -82,14 +92,14 @@ RESOLUTION_CHECK_INTERVAL = 0.5  # Seconds between resolution checks
 
 # ── Slug helpers ───────────────────────────────────────────────────────────────
 
-def build_slug(asset: str, timeframe: str, window_end_ts: int) -> str:
+def build_slug(asset: str, timeframe: str, window_start_ts: int) -> str:
     """Return the deterministic Gamma event slug for an asset/timeframe window."""
     asset_upper = asset.upper()
     asset_lower = asset.lower()
     full_name = ASSET_NAMES.get(asset_upper, asset_lower)
 
     if timeframe in ("1h", "24h"):
-        dt_utc = datetime.datetime.fromtimestamp(window_end_ts, tz=datetime.timezone.utc)
+        dt_utc = datetime.datetime.fromtimestamp(window_start_ts, tz=datetime.timezone.utc)
         tz_et = zoneinfo.ZoneInfo("America/New_York")
         dt_et = dt_utc.astimezone(tz_et)
         
@@ -104,7 +114,7 @@ def build_slug(asset: str, timeframe: str, window_end_ts: int) -> str:
         elif timeframe == "24h":
             return f"what-price-will-{full_name}-hit-on-{month_name}-{day}"
             
-    return f"{asset_lower}-updown-{timeframe}-{window_end_ts}"
+    return f"{asset_lower}-updown-{timeframe}-{window_start_ts}"
 
 def build_tweet_slug(subject: str, start_ts: int, end_ts: int | None = None, monthly: bool = False) -> str:
     """Return the Gamma event slug for a tweet market window."""
@@ -170,6 +180,7 @@ MARKET_CANDIDATE_COUNT = 3  # Number of candidate windows to probe
 DEFAULT_PRICE_THRESHOLD = 0.0  # Minimum price change to emit event (0 = any change)
 FALLBACK_PRICE = 0.5  # Fallback price when market price is unavailable
 PRICE_STALENESS_THRESHOLD = 30  # Seconds before market price is considered stale
+MAX_ORDER_PRICE = 0.999  # Cap for slippage-adjusted buy price (Polymarket prices live in (0,1))
 
 # ── Fee Configuration ───────────────────────────────────────────────────────────
 

@@ -96,6 +96,11 @@ try:
 except ImportError:
     TelegramNotifier = None  # type: ignore[assignment]
 
+try:
+    from .windows import TimeWindow
+except ImportError:
+    TimeWindow = None  # type: ignore[assignment]
+
 MACDResult = namedtuple("MACDResult", ["macd", "signal", "histogram"])
 BBResult = namedtuple("BBResult", ["upper", "mid", "lower"])
 DonchianResult = namedtuple("DonchianResult", ["upper", "mid", "lower"])
@@ -289,6 +294,7 @@ class BinanceAccessor:
 
     Fetches Binance klines once per candle (auto-refreshed on each tick).
     Provides indicators computed on Binance spot price data (not Polymarket).
+    Now integrated with calculation library for enhanced price and volume analysis.
 
     Usage
     -----
@@ -296,6 +302,8 @@ class BinanceAccessor:
         >>> ctx.binance.macd(12, 26, 9)     # MACD on Binance BTC data
         >>> ctx.binance.price_change(3)     # BTC spot change over N candles
         >>> ctx.binance.price_up(2)         # BTC spot went up over N candles
+        >>> ctx.binance.change_pct(30)      # % change over 30 seconds (new)
+        >>> ctx.binance.vol_ratio(10)       # volume ratio (new)
     """
 
     def __init__(self, asset: str = "BTC", timeframe: str = "5m"):
@@ -304,6 +312,17 @@ class BinanceAccessor:
         self._data: Optional[pd.DataFrame] = None
         self._last_candle_key: Optional[str] = None
         self._feed: Optional[object] = None
+        
+        # Try to load calculation library for enhanced methods
+        try:
+            from .calculations import MarketCalculations, VolumeCalculations
+            self._market_calc = MarketCalculations()
+            self._volume_calc = VolumeCalculations()
+            self._has_calculations = True
+        except ImportError:
+            self._market_calc = None
+            self._volume_calc = None
+            self._has_calculations = False
 
     def _lazy_init(self) -> None:
         if self._feed is not None:
@@ -441,6 +460,215 @@ class BinanceAccessor:
             return None if (pd is not None and pd.isna(val)) else float(val)
         except Exception:
             return None
+    
+    # ── Enhanced Calculation Methods (using calculation library) ───────────────
+    
+    def change_pct(self, candles_back: int = 1) -> Optional[float]:
+        """
+        Percentage price change over N candles using calculation library.
+        
+        Parameters
+        ----------
+        candles_back : int
+            Number of candles back to compare (default: 1).
+        
+        Returns
+        -------
+        float | None
+            Percentage change as decimal, or None if insufficient data.
+        """
+        if not self._has_calculations:
+            # Fallback to existing method
+            change = self.price_change_percent(candles_back)
+            return change / 100.0 if change is not None else None
+        
+        self._refresh()
+        if self._data is None or len(self._data) <= candles_back:
+            return None
+        
+        close_data = self._data["close"].tolist()
+        return self._market_calc.change_pct(close_data, candles_back)
+    
+    def change_abs(self, candles_back: int = 1) -> Optional[float]:
+        """
+        Absolute price change over N candles using calculation library.
+        
+        Parameters
+        ----------
+        candles_back : int
+            Number of candles back to compare (default: 1).
+        
+        Returns
+        -------
+        float | None
+            Absolute price change, or None if insufficient data.
+        """
+        if not self._has_calculations:
+            # Fallback to existing method
+            return self.price_change(candles_back)
+        
+        self._refresh()
+        if self._data is None or len(self._data) <= candles_back:
+            return None
+        
+        close_data = self._data["close"].tolist()
+        return self._market_calc.change_abs(close_data, candles_back)
+    
+    def vol_ratio(self, period: int = 10) -> Optional[float]:
+        """
+        Current volume as ratio to average volume over N candles.
+        
+        Parameters
+        ----------
+        period : int
+            Number of candles to calculate average (default: 10).
+        
+        Returns
+        -------
+        float | None
+            Volume ratio, or None if insufficient data or calculations unavailable.
+        """
+        if not self._has_calculations:
+            return None
+        
+        self._refresh()
+        if self._data is None or len(self._data) <= period:
+            return None
+        
+        volume_data = self._data["volume"].tolist()
+        return self._volume_calc.vol_ratio(volume_data, period)
+    
+    def volume_trend(self, period: int = 5, threshold: float = 0.1) -> Optional[str]:
+        """
+        Determine volume trend direction over N candles.
+        
+        Parameters
+        ----------
+        period : int
+            Number of candles to analyze (default: 5).
+        threshold : float
+            Minimum relative change to consider a trend (default: 0.1).
+        
+        Returns
+        -------
+        str | None
+            "increasing", "decreasing", or "stable". None if insufficient data.
+        """
+        if not self._has_calculations:
+            return None
+        
+        self._refresh()
+        if self._data is None or len(self._data) <= period:
+            return None
+        
+        volume_data = self._data["volume"].tolist()
+        trend = self._volume_calc.volume_trend(volume_data, period, threshold)
+        return trend.value if trend else "stable"
+    
+    def volume_surge(self, multiplier: float = 2.0, period: int = 10) -> Optional[bool]:
+        """
+        Detect sudden volume surge compared to recent average.
+        
+        Parameters
+        ----------
+        multiplier : float
+            Multiple of average volume to consider a surge (default: 2.0).
+        period : int
+            Number of candles to calculate average (default: 10).
+        
+        Returns
+        -------
+        bool | None
+            True if volume surge detected, None if insufficient data.
+        """
+        if not self._has_calculations:
+            return None
+        
+        self._refresh()
+        if self._data is None or len(self._data) <= period:
+            return None
+        
+        volume_data = self._data["volume"].tolist()
+        return self._volume_calc.volume_surge(volume_data, multiplier, period)
+    
+    def trend(self, candles_back: int = 1, threshold: float = 0.0) -> Optional[str]:
+        """
+        Determine overall price trend direction over N candles.
+        
+        Parameters
+        ----------
+        candles_back : int
+            Number of candles back to analyze (default: 1).
+        threshold : float
+            Minimum absolute change to consider a trend (default: 0.0).
+        
+        Returns
+        -------
+        str | None
+            "up", "down", or "neutral". None if insufficient data.
+        """
+        if not self._has_calculations:
+            return None
+        
+        self._refresh()
+        if self._data is None or len(self._data) <= candles_back:
+            return None
+        
+        close_data = self._data["close"].tolist()
+        trend = self._market_calc.trend(close_data, candles_back, threshold)
+        return trend.value if trend else "neutral"
+    
+    def direction(self, candles_back: int = 1) -> Optional[str]:
+        """
+        Get simple direction of price change (up/down/flat).
+        
+        Parameters
+        ----------
+        candles_back : int
+            Number of candles back to compare (default: 1).
+        
+        Returns
+        -------
+        str | None
+            "up", "down", or "flat". None if insufficient data.
+        """
+        if not self._has_calculations:
+            # Fallback to existing method
+            is_up = self.price_up(candles_back)
+            if is_up is None:
+                return None
+            return "up" if is_up else "down"
+        
+        self._refresh()
+        if self._data is None or len(self._data) <= candles_back:
+            return None
+        
+        close_data = self._data["close"].tolist()
+        return self._market_calc.direction(close_data, candles_back)
+    
+    def volatility(self, period: int = 10) -> Optional[float]:
+        """
+        Calculate price volatility (standard deviation) over N candles.
+        
+        Parameters
+        ----------
+        period : int
+            Number of candles to analyze (default: 10).
+        
+        Returns
+        -------
+        float | None
+            Standard deviation of prices, or None if insufficient data.
+        """
+        if not self._has_calculations:
+            return None
+        
+        self._refresh()
+        if self._data is None or len(self._data) < 2:
+            return None
+        
+        close_data = self._data["close"].tolist()
+        return self._market_calc.volatility(close_data, period)
 
 
 # ── Order Book Accessor ────────────────────────────────────────────────────────
@@ -544,6 +772,10 @@ class StrategyContext:
         First-class indicator access: ``.indicators.rsi(14)``,
         ``.indicators.macd(12, 26, 9)``,
         ``.indicators.bollinger_bands(20, 2)``, etc.
+    cl : TimeWindow | None
+        Chainlink price window with change percentage helpers.
+        ``ctx.cl.value`` for latest CL price, ``ctx.cl.change_pct(30)`` for
+        % change over 30 seconds, ``ctx.cl.age_s`` for seconds since last update.
     rsi, sma_20, ema_12 : float | None
         Legacy indicators (prefer ``ctx.indicators.rsi(14)``, etc.).
 
@@ -566,6 +798,8 @@ class StrategyContext:
         chainlink_cache: Optional[object] = None,
         chainlink: Optional[object] = None,
         binance: Optional[BinanceAccessor] = None,
+        cl_window: Optional[TimeWindow] = None,
+        globals: Optional[object] = None,
         get_candle_open=None,
         get_seconds_in=None,
         get_candle_id=None,
@@ -583,6 +817,7 @@ class StrategyContext:
         self._chainlink = chainlink
         self._binance = binance
         self._hub = hub  # Reference to BotHub for Telegram notifications
+        self._globals = globals  # Shared feeds (Globals) — one connection, many strategies
         self._get_candle_open = get_candle_open or (lambda: None)
         self._get_seconds_in = get_seconds_in or (lambda: 0.0)
         self._get_candle_id: Callable[[], int] = get_candle_id or (lambda: 0)
@@ -590,6 +825,7 @@ class StrategyContext:
         self._cached_series = None
         self._indicators: IndicatorAccessor = IndicatorAccessor(self._get_price_series)
         self._orderbook: Optional[OrderBookAccessor] = None
+        self._cl_window: Optional[TimeWindow] = cl_window if cl_window is not None else (TimeWindow(max_age=120) if TimeWindow is not None else None)
 
     # ── Prices ──────────────────────────────────────────────────────────────
 
@@ -627,6 +863,40 @@ class StrategyContext:
         Returns ``None`` if not available in this context.
         """
         return self._binance
+
+    @property
+    def globals(self):
+        """The shared :class:`~polyalpha.globals.Globals` instance, if any.
+
+        Every strategy reads the same feeds (``ctx.globals.cvd``,
+        ``ctx.globals.price_feed``, …) so adding a strategy costs 0 extra
+        connections. Returns ``None`` when the hub was not given one.
+        """
+        return self._globals
+
+    @property
+    def cl(self):
+        """Chainlink price window with change percentage helpers.
+
+        Provides a rolling window of Chainlink BTC prices with convenient
+        methods for calculating percentage changes over custom time periods.
+
+        Returns ``None`` if TimeWindow is not available.
+
+        Examples
+        --------
+        >>> ctx.cl.value
+        67850.23
+        >>> ctx.cl.change_pct(30)
+        0.12
+        >>> ctx.cl.change_pct(60)
+        0.08
+        >>> ctx.cl.change_pct(90)
+        0.05
+        >>> ctx.cl.age_s
+        0.5
+        """
+        return self._cl_window
 
     @property
     def candle_open(self) -> Optional[float]:
@@ -686,8 +956,17 @@ class StrategyContext:
 
     def buy(self, side: str, amount: float):
         """Place a market buy order against this strategy's paper engine."""
+        if self._hub is not None and self._hub.buy_once_per_market and self._hub._bought_this_market.get(self.name, False):
+            return None
+        order = self._place_buy(side, amount)
+        if self._hub is not None and order:
+            self._hub._bought_this_market[self.name] = True
+        return order
+
+    def _place_buy(self, side: str, amount: float):
+        """Place the order and fire Telegram notifications (bypasses guards)."""
         order = self._paper.buy(market=self._market, side=side, amount=amount)
-        
+
         # Send Telegram notification if configured
         if self._hub is not None and self._hub._telegram and order:
             price = getattr(self._stream, side.lower(), None) or self.price.up if side == "UP" else self.price.down
@@ -698,7 +977,7 @@ class StrategyContext:
                 price=price,
                 strategy_name=self.name
             )
-        
+
         return order
 
     def limit(self, side: str, price: float, amount: float):
@@ -746,7 +1025,7 @@ class StrategyContext:
         side = side.upper()
         if side in sides:
             return
-        result = self.buy(side, amount)
+        result = self._place_buy(side, amount)
         sides.add(side)
         return result
 
@@ -767,7 +1046,7 @@ class StrategyContext:
         """
         secs = self.seconds_in
         if min_seconds <= secs <= max_seconds:
-            return self.buy(side, amount)
+            return self._place_buy(side, amount)
 
     # ── Indicators (shared price history) ──────────────────────────────────
 
@@ -834,6 +1113,117 @@ class StrategyContext:
         except Exception:
             return None
 
+    # ── Strategy Helper Methods ────────────────────────────────────────────────
+
+    def bollinger_pctile(self, period: int = 20, std_dev: float = 2.0, avg_period: int = 50) -> tuple[Optional[float], Optional[dict]]:
+        """Calculate Bollinger band width percentile and current band values.
+
+        Returns the percentile of current band width relative to historical average,
+        along with the current upper, lower, and close values.
+
+        Parameters
+        ----------
+        period : int
+            BB period (default: 20).
+        std_dev : float
+            Standard deviation multiplier (default: 2.0).
+        avg_period : int
+            Rolling average period for width comparison (default: 50).
+
+        Returns
+        -------
+        tuple (pctile, bb_dict)
+            pctile : float or None
+                Width percentile (0-100) based on historical average.
+            bb_dict : dict or None
+                Dictionary with 'upper', 'lower', 'close' values.
+        """
+        series = self._get_price_series()
+        if series is None or _bbands is None:
+            return None, None
+
+        try:
+            bb_df = _bbands(series, period, float(std_dev))
+            upper = float(bb_df.iloc[-1, 2])
+            lower = float(bb_df.iloc[-1, 0])
+            close = float(series.iloc[-1])
+
+            if pd.isna(upper) or pd.isna(lower) or pd.isna(close):
+                return None, None
+
+            # Calculate width and historical average
+            width = upper - lower
+            if len(series) < avg_period:
+                return None, None
+
+            # Calculate historical widths
+            historical_widths = []
+            for i in range(avg_period, len(series)):
+                if i >= period:
+                    slice_series = series.iloc[i-period:i]
+                    slice_bb = _bbands(slice_series, period, float(std_dev))
+                    if not pd.isna(slice_bb.iloc[-1, 2]) and not pd.isna(slice_bb.iloc[-1, 0]):
+                        hist_width = float(slice_bb.iloc[-1, 2]) - float(slice_bb.iloc[-1, 0])
+                        historical_widths.append(hist_width)
+
+            if not historical_widths:
+                return None, None
+
+            avg_width = sum(historical_widths) / len(historical_widths)
+            if avg_width == 0:
+                return None, None
+
+            # Calculate percentile (where current width falls in distribution)
+            pctile = (width / avg_width) * 100
+
+            bb_dict = {
+                "upper": upper,
+                "lower": lower,
+                "close": close
+            }
+
+            return pctile, bb_dict
+
+        except Exception:
+            return None, None
+
+    def vol_ratio(self, period: int = 10) -> Optional[float]:
+        """Get volume ratio from Binance data.
+
+        Parameters
+        ----------
+        period : int
+            Period for volume ratio calculation (default: 10).
+
+        Returns
+        -------
+        float or None
+            Volume ratio value.
+        """
+        if self._binance is None:
+            return None
+        return self._binance.vol_ratio(period)
+
+    def side_price(self, direction: str) -> Optional[float]:
+        """Get the current price for a specific direction.
+
+        Parameters
+        ----------
+        direction : str
+            "UP" or "DOWN".
+
+        Returns
+        -------
+        float or None
+            Current price for the specified direction.
+        """
+        direction = direction.upper()
+        if direction == "UP":
+            return self.price.up
+        elif direction == "DOWN":
+            return self.price.down
+        return None
+
 
 # ── Registered strategy ────────────────────────────────────────────────────────
 
@@ -877,9 +1267,9 @@ class BotHub:
     Parameters
     ----------
     asset : str
-        BTC, ETH, SOL, XRP, DOGE, HYPE, BNB (default "BTC").
+        BTC, ETH, SOL, XRP, DOGE, HYPE, BNB.
     timeframe : str
-        5m, 15m, 1h, 4h, 24h (default "5m").
+        5m, 15m, 1h, 4h, 24h.
     default_balance : float
         Default starting paper balance per strategy (default 100.0).
     mode : str
@@ -910,13 +1300,15 @@ class BotHub:
 
     def __init__(
         self,
-        asset: str = "BTC",
-        timeframe: str = "5m",
+        asset: str,
+        timeframe: str,
         default_balance: float = 100.0,
         mode: str = "simple",
         paper_config: Optional[PaperConfig] = None,
         chainlink: bool = True,
         log_dir: Optional[str] = None,
+        globals: Optional[object] = None,
+        buy_once_per_market: bool = True,
         **kwargs,
     ):
         asset = asset.upper()
@@ -934,7 +1326,10 @@ class BotHub:
         self.timeframe = timeframe
         self.default_balance = default_balance
         self.mode = mode
+        self.buy_once_per_market = buy_once_per_market
+        self._bought_this_market: dict[str, bool] = {}
         self._log_dir = log_dir
+        self._globals = globals  # Shared feeds — one connection, many strategies
 
         from .trading.paper_config import get_paper_config_from_preset
 
@@ -983,13 +1378,25 @@ class BotHub:
         if TelegramNotifier is not None:
             self._telegram = TelegramNotifier()
 
-        # Initialize Chainlink streamer (live BTC spot from Polymarket)
+        # Initialize Chainlink streamer (live BTC spot from Polymarket).
+        # Reuse the shared globals.price_feed when one is provided so we do
+        # NOT open a second oracle connection — the caller owns its lifecycle.
         self._chainlink: Optional[object] = None
+        self._shared_cl_window: Optional[TimeWindow] = TimeWindow(max_age=120) if TimeWindow is not None else None
         try:
             from .analysis.streaming import ChainlinkStreamer
-            cl = ChainlinkStreamer()
-            cl.start(asset, background=True)
+            shared = getattr(self._globals, "price_feed", None) if self._globals is not None else None
+            cl = shared if isinstance(shared, ChainlinkStreamer) else None
+            if cl is None:
+                cl = ChainlinkStreamer()
+                cl.start(asset, background=True)
             self._chainlink = cl
+            # Set up callback to update shared CL window when prices arrive
+            if self._shared_cl_window:
+                @cl.on("price")
+                def on_cl_price(symbol: str, price: float, timestamp):
+                    if self._shared_cl_window:
+                        self._shared_cl_window.update(price)
         except Exception as exc:
             self._log.debug("Chainlink streamer not available: %s", exc)
 
@@ -1386,6 +1793,8 @@ class BotHub:
                 chainlink_cache=self._chainlink_cache,
                 chainlink=self._chainlink,
                 binance=self._binance,
+                cl_window=self._shared_cl_window,
+                globals=self._globals,
                 get_candle_open=lambda: self._candle_open_price,
                 get_seconds_in=lambda: max(0.0, time.time() - self._candle_start_time),
                 get_candle_id=lambda: self._candle_id,
@@ -1560,6 +1969,7 @@ class BotHub:
         self._market = None
         self._candle_id = 0
         self._bought_this_candle = {}
+        self._bought_this_market = {}
         for s in self._active_tickers():
             s.ctx = None
         self._log.info("Rolling over to next market...")
@@ -1575,6 +1985,7 @@ class BotHub:
         self._market = None
         self._candle_id = 0
         self._bought_this_candle = {}
+        self._bought_this_market = {}
         for s in self._active_tickers():
             s.ctx = None
         self._log.info("Rolling over to next market...")

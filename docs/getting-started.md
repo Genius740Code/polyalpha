@@ -12,7 +12,7 @@ Install PolyAlpha, set up your environment, and run your first script.
 Clone the repository and install from source:
 
 ```bash
-git clone https://github.com/your-org/polyalpha.git
+git clone https://github.com/Genius740Code/polyalpha.git
 cd polyalpha
 python3 -m venv venv
 source venv/bin/activate

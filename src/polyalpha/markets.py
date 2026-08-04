@@ -201,8 +201,8 @@ class MarketClient:
             )
 
         candidates = _candidate_starts(timeframe)
-        for end_ts in candidates:
-            slug = build_slug(asset, timeframe, end_ts)
+        for start_ts in candidates:
+            slug = build_slug(asset, timeframe, start_ts)
             log.debug("Trying slug: %s", slug)
             try:
                 return self._fetch_by_slug(slug)
@@ -378,27 +378,20 @@ class MarketClient:
                     return i
             return None
 
-        up_idx   = _find_index(["up", "higher", "greater"]) or 0
-        down_idx = _find_index(["down", "lower"])
-        if down_idx is None:
-            down_idx = 1 if len(token_ids) > 1 else 0
+        up_idx   = _find_index(["up", "higher", "greater", "above", "over", "yes"])
+        down_idx = _find_index(["down", "lower", "below", "under", "no"])
 
-        # Validate and correct mapping using price information
-        # If both prices are available and differ significantly, ensure UP has the higher price
-        # (since UP typically has higher implied probability in bullish markets)
-        if len(prices_raw) >= 2 and up_idx != down_idx:
-            try:
-                price_up = float(prices_raw[up_idx])
-                price_down = float(prices_raw[down_idx])
-                # If DOWN price is significantly higher than UP, swap the indices
-                if price_down > price_up + 0.1:  # 10% threshold to avoid swapping on small differences
-                    log.warning(
-                        "Price mismatch detected: DOWN price (%.4f) > UP price (%.4f). Swapping token mapping.",
-                        price_down, price_up
-                    )
-                    up_idx, down_idx = down_idx, up_idx
-            except (TypeError, ValueError):
-                pass  # If prices can't be parsed, keep the string-based mapping
+        if up_idx is None:
+            if down_idx is not None and len(outcomes) >= 2:
+                up_idx = 1 if down_idx == 0 else 0
+            else:
+                up_idx = 0
+
+        if down_idx is None:
+            if len(token_ids) > 1:
+                down_idx = 1 if up_idx == 0 else 0
+            else:
+                down_idx = 0
 
         def _token(idx: int) -> str:
             return str(token_ids[idx]) if idx < len(token_ids) else ""
@@ -461,10 +454,20 @@ class MarketClient:
                     return i
             return None
 
-        up_idx   = _find_index(["up", "higher", "greater"]) or 0
-        down_idx = _find_index(["down", "lower"])
+        up_idx   = _find_index(["up", "higher", "greater", "above", "over", "yes"])
+        down_idx = _find_index(["down", "lower", "below", "under", "no"])
+
+        if up_idx is None:
+            if down_idx is not None and len(outcomes) >= 2:
+                up_idx = 1 if down_idx == 0 else 0
+            else:
+                up_idx = 0
+
         if down_idx is None:
-            down_idx = 1 if len(token_ids) > 1 else 0
+            if len(token_ids) > 1:
+                down_idx = 1 if up_idx == 0 else 0
+            else:
+                down_idx = 0
 
         def _token(idx: int) -> str:
             return str(token_ids[idx]) if idx < len(token_ids) else ""

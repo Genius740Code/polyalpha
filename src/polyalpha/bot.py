@@ -75,6 +75,11 @@ try:
 except ImportError:
     ChainlinkStreamer = None
 
+try:
+    from .windows import TimeWindow
+except ImportError:
+    TimeWindow = None  # type: ignore[assignment]
+
 
 # ── Price Snapshot ─────────────────────────────────────────────────────────────
 
@@ -113,6 +118,10 @@ class TickContext:
     binance : BinanceAccessor | None
         Binance BTC market data: ``ctx.binance.close``, ``ctx.binance.macd()``,
         ``ctx.binance.price_change(30)``, ``ctx.binance.price_up()``.
+    cl : TimeWindow | None
+        Chainlink price window with change percentage helpers.
+        ``ctx.cl.value`` for latest CL price, ``ctx.cl.change_pct(30)`` for
+        % change over 30 seconds, ``ctx.cl.age_s`` for seconds since last update.
     rsi : float | None
         RSI indicator (legacy — prefer ``.indicators.rsi(14)``).
     sma : float | None
@@ -135,6 +144,7 @@ class TickContext:
         self._cross_state: dict[int, float] = {}
         self._cached_series = None
         self._indicators: Optional[IndicatorAccessor] = IndicatorAccessor(self._get_price_series) if IndicatorAccessor is not None else None  # type: ignore[arg-type]
+        self._cl_window: Optional[TimeWindow] = TimeWindow(max_age=120) if TimeWindow is not None else None
 
     # ── Prices ──────────────────────────────────────────────────────────────
 
@@ -196,18 +206,27 @@ class TickContext:
         -------
         PaperOrder
         """
+        if self._bot.buy_once_per_market and self._bot._bought_this_market:
+            return None
+        order = self._place_buy(side, amount)
+        if order:
+            self._bot._bought_this_market = True
+        return order
+
+    def _place_buy(self, side: str, amount: float):
+        """Place the order and fire Telegram notifications (bypasses guards)."""
         order = self._client.paper.buy(market=self._market, side=side, amount=amount)
-        
+
         # Send Telegram notification if configured
         if self._bot._telegram and order:
-            price = getattr(self._bot._stream, side.lower(), None) or self.price.up if side == "UP" else self.price.down
+            price = getattr(self._bot._stream, side.lower(), None) or (self.price.up if side == "UP" else self.price.down)
             self._bot._telegram.send_buy(
                 asset=self._bot.asset,
                 side=side,
                 amount=amount,
                 price=price
             )
-        
+
         return order
 
     def limit(self, side: str, price: float, amount: float):
@@ -249,7 +268,7 @@ class TickContext:
         
         # Send Telegram notification if configured
         if self._bot._telegram and order:
-            price = getattr(self._bot._stream, side.lower(), None) or self.price.up if side == "UP" else self.price.down
+            price = getattr(self._bot._stream, side.lower(), None) or (self.price.up if side == "UP" else self.price.down)
             sell_amount = amount if amount else (order.amount if hasattr(order, 'amount') else 0)
             self._bot._telegram.send_sell(
                 asset=self._bot.asset,
@@ -288,7 +307,7 @@ class TickContext:
         side = side.upper()
         if side in sides:
             return
-        result = self.buy(side, amount)
+        result = self._place_buy(side, amount)
         sides.add(side)
         return result
 
@@ -341,6 +360,30 @@ class TickContext:
         True
         """
         return self._bot._binance
+
+    @property
+    def cl(self):
+        """Chainlink price window with change percentage helpers.
+
+        Provides a rolling window of Chainlink BTC prices with convenient
+        methods for calculating percentage changes over custom time periods.
+
+        Returns ``None`` if TimeWindow is not available.
+
+        Examples
+        --------
+        >>> ctx.cl.value
+        67850.23
+        >>> ctx.cl.change_pct(30)
+        0.12
+        >>> ctx.cl.change_pct(60)
+        0.08
+        >>> ctx.cl.change_pct(90)
+        0.05
+        >>> ctx.cl.age_s
+        0.5
+        """
+        return self._cl_window
 
     # ── Indicators (optional — requires analysis deps) ──────────────────────
 
@@ -415,9 +458,9 @@ class Bot:
     Parameters
     ----------
     asset : str
-        BTC, ETH, SOL, XRP, DOGE (default "BTC").
+        BTC, ETH, SOL, XRP, DOGE.
     timeframe : str
-        5m, 15m, 1h, 4h, 24h (default "5m").
+        5m, 15m, 1h, 4h, 24h.
     balance : float
         Starting paper-trading balance (default 100.0).
     paper : bool
@@ -448,13 +491,14 @@ class Bot:
 
     def __init__(
         self,
-        asset: str = "BTC",
-        timeframe: str = "5m",
+        asset: str,
+        timeframe: str,
         balance: float = 100.0,
         paper: bool = True,
         mode: str = "simple",
         paper_config: Optional[PaperConfig] = None,
         log_dir: Optional[str] = None,
+        buy_once_per_market: bool = True,
         **kwargs,
     ):
         asset = asset.upper()
@@ -468,6 +512,8 @@ class Bot:
         self.asset = asset
         self.timeframe = timeframe
         self.paper_mode = paper
+        self.buy_once_per_market = buy_once_per_market
+        self._bought_this_market = False
 
         from .trading.paper_config import get_paper_config_from_preset
 
@@ -484,6 +530,7 @@ class Bot:
         self._stream = None
         self._strategy: Optional[Callable] = None
         self._on_resolve: Optional[Callable] = None
+        self._price_anomaly_handler: Optional[Callable] = None
         self._condition: Optional[Condition] = None
         self._buy_side: Optional[str] = None
         self._buy_amount: Optional[float] = None
@@ -518,6 +565,12 @@ class Bot:
                 cl = ChainlinkStreamer()
                 cl.start(asset, background=True)
                 self._chainlink = cl
+                # Set up callback to update CL window when prices arrive
+                if self._ctx and self._ctx._cl_window:
+                    @cl.on("price")
+                    def on_cl_price(symbol: str, price: float, timestamp):
+                        if self._ctx and self._ctx._cl_window:
+                            self._ctx._cl_window.update(price)
             except Exception as exc:
                 self._log.warning("Chainlink streamer init failed: %s", exc)
 
@@ -553,6 +606,21 @@ class Bot:
                 print(f"{pos.side} {pos.outcome} pnl=${pos.pnl:.2f}")
         """
         self._on_resolve = fn
+        return fn
+
+    def on_price_anomaly(self, fn: Callable) -> Callable:
+        """
+        Decorator — register a price anomaly callback.
+
+        The function receives anomaly details when price validation fails.
+
+        Usage
+        -----
+            @bot.on_price_anomaly
+            def handle_anomaly(anomaly_type: str, *args):
+                print(f"Price anomaly: {anomaly_type}")
+        """
+        self._price_anomaly_handler = fn
         return fn
 
     def when(self, condition: Condition) -> Bot:
@@ -746,6 +814,13 @@ class Bot:
 
         # Create the context
         self._ctx = TickContext(self)
+        
+        # Set up Chainlink callback to update CL window
+        if self._chainlink and self._ctx._cl_window:
+            @self._chainlink.on("price")
+            def on_cl_price(symbol: str, price: float, timestamp):
+                if self._ctx and self._ctx._cl_window:
+                    self._ctx._cl_window.update(price)
 
         # Register handlers
         @self._stream.on("price")
@@ -782,6 +857,18 @@ class Bot:
         def on_close():
             self._log.info("Market closed: %s", self._market.slug)
 
+        @self._stream.on("price_anomaly")
+        def on_price_anomaly(anomaly_type: str, *args):
+            if self._stop_event.is_set():
+                return
+            self._log.warning("Price anomaly detected: type=%s", anomaly_type)
+            # Call the price anomaly handler if registered
+            if hasattr(self, '_price_anomaly_handler') and self._price_anomaly_handler:
+                try:
+                    self._price_anomaly_handler(anomaly_type, *args)
+                except Exception as exc:
+                    self._log.exception("Price anomaly handler error: %s", exc)
+
         # Start blocking — returns when stream ends
         self._stream.start(background=False)
 
@@ -790,6 +877,13 @@ class Bot:
         self._stream = self._client.stream(self._market)
         self._client.paper.attach_stream(self._stream, self._market)
         self._ctx = TickContext(self)
+        
+        # Set up Chainlink callback to update CL window
+        if self._chainlink and self._ctx._cl_window:
+            @self._chainlink.on("price")
+            def on_cl_price(symbol: str, price: float, timestamp):
+                if self._ctx and self._ctx._cl_window:
+                    self._ctx._cl_window.update(price)
 
         @self._stream.on("price")
         def on_price(up: float, down: float):
@@ -838,6 +932,7 @@ class Bot:
         self._ctx = None
         self._candle_id = 0
         self._bought_this_candle = {}
+        self._bought_this_market = False
         self._log.info("Rolling over to next market...")
         await self._asleep(2)
 
@@ -881,6 +976,7 @@ class Bot:
         self._ctx = None
         self._candle_id = 0
         self._bought_this_candle = {}
+        self._bought_this_market = False
         self._log.info("Rolling over to next market...")
         self._sleep(2)
 

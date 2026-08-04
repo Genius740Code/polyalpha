@@ -96,11 +96,10 @@ Output of `portfolio()`:
 | `save_trade(...) -> int` | ⚠️ Deprecated. Insert a new trade record. Use `buy_trade()` instead. |
 | `save_trades_bulk(trades, check_duplicates=True) -> list[int]` | Bulk insert multiple trades |
 | `update_trade_status(order_id, status, filled_shares=0.0, filled_amount=0.0, avg_fill_price=0.0, filled_at=None) -> bool` | Update trade status after fill |
-| `update_trade(trade_id, **fields) -> bool` | Update arbitrary fields on a trade by ID (e.g. `exit_price`, `pnl`, `outcome`, `status`) |
-| `get_trade(trade_id) -> TradeRecord \| None` | Fetch a single trade by ID |
 | `delete_trade(trade_id) -> bool` | Delete a trade by ID |
 | `clear_all_trades()` | Delete all trades |
 | `is_duplicate_trade(market_id, side, timestamp, tolerance_seconds=1) -> bool` | Check for duplicate trades |
+> To adjust a trade, use `update_trade_status()` or delete and re-insert via `buy_trade()`.
 
 ### Querying
 

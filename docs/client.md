@@ -34,6 +34,7 @@ client = polyalpha.Client()
 | `client.ai` | `OpenRouterClient \| None` | AI-powered analysis (if API key provided) |
 | `client.real` | `RealTradingEngine \| None` | Real trading with actual funds (if credentials provided) |
 | `client.db` | `TradeDatabase \| None` | SQLite trade database (if `db_path` provided) |
+| `client.time_sync` | `TimeSync` | NTP clock synchronization used by `client.check()` |
 
 ## Methods
 
@@ -57,6 +58,23 @@ Create a live order book feed.
 feed = client.orderbook(market)
 feed.refresh()
 ```
+
+### `client.check(force_ntp=False) -> dict`
+
+Run a pre-market health check and return a report.
+
+Checks:
+1. **NTP clock sync** — ensures local clock drift is below the fail threshold so deterministic slug generation produces the correct Polymarket windows.
+2. **Gamma API reachability** — verifies the Polymarket Gamma API responds before a market lookup.
+
+```python
+report = client.check()
+report["all_ok"]  # True when every check passes
+```
+
+- `force_ntp` — force a fresh NTP query (bypasses cache)
+
+Returns a dict with keys `ntp` (NTP sync report), `gamma` (API health), and `all_ok`.
 
 ### `client.close()`
 

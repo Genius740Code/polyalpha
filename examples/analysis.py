@@ -23,7 +23,7 @@ print(f"MACD: {indicators.get_latest_value(macd['macd']):.4f}")
 print(f"Signal: {indicators.get_latest_value(macd['signal']):.4f}")
 print(f"Histogram: {indicators.get_latest_value(macd['histogram']):.4f}")
 print(f"BB Upper: {indicators.get_latest_value(bb['upper']):.4f}")
-print(f"BB Mid:   {indicators.get_latest_value(bb['mid']):.4f}")
+print(f"BB Mid:   {indicators.get_latest_value(bb['middle']):.4f}")
 print(f"BB Lower: {indicators.get_latest_value(bb['lower']):.4f}")
 
 signals = SignalGenerator(indicators)

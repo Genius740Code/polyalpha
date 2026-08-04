@@ -13,8 +13,8 @@ Configuration:
 - weather_config: Pre-configured city templates for weather bots
 """
 
-from .sniper import Sniper
+from .sniper import Sniper, TimeWindow, ConditionalWindow, TimeFilter
 from .tracker import Tracker
 from .weather_config import CITIES, get_config, list_configs, print_config
 
-__all__ = ["Sniper", "Tracker", "CITIES", "get_config", "list_configs", "print_config"]
+__all__ = ["Sniper", "TimeWindow", "ConditionalWindow", "TimeFilter", "Tracker", "CITIES", "get_config", "list_configs", "print_config"]
