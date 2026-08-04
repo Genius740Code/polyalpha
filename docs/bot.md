@@ -325,10 +325,10 @@ def strategy(ctx):
     volume = ctx.binance.volume        # float | None — current candle volume
 
     # Price movement helpers
-    change = ctx.binance.price_change(3)               # absolute change over last 3 candles
-    change_pct = ctx.binance.price_change_percent(3)   # percent change over last 3 candles
-    up = ctx.binance.price_up(2)                       # bool — close higher than 2 candles ago?
-    jumped = ctx.binance.price_above_by(50)            # bool — moved up at least $50?
+    change = ctx.binance.price_change(candles_back=3)               # absolute change over last 3 candles
+    change_pct = ctx.binance.price_change_percent(candles_back=3)   # percent change over last 3 candles
+    up = ctx.binance.price_up(candles_back=2)                       # bool — close higher than 2 candles ago?
+    jumped = ctx.binance.price_above_by(min_change=50)            # bool — moved up at least $50?
 
     # Calculation library (price analysis)
     pct = ctx.binance.change_pct(3)          # % change over 3 candles

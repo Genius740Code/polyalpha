@@ -104,7 +104,7 @@ Concise reference of every symbol exported from `polyalpha.__init__`, grouped by
 | `BookLevel` | `orderbook/models.py` | (frozen) price + size at a level |
 | `BookSide` | `orderbook/models.py` | Enum: `BUY`, `SELL` |
 | `FillEstimate` | `orderbook/models.py` | (frozen) Estimated fill: avg price, slippage, levels used |
-| `Trade` | `orderbook/models.py` | Trade dataclass (exported as `BookTrade` via `polyalpha/__init__.py` to avoid naming conflict) |
+| `Trade` | `orderbook/models.py` | Trade dataclass (alias `BookTrade` exported via `polyalpha/__init__.py`) |
 | `Strategy` | `orderbook/strategy.py` | Abstract base class for order book strategies |
 | `ImbalanceStrategy` | `orderbook/strategy.py` | Trades on order book imbalance |
 | `SpreadStrategy` | `orderbook/strategy.py` | Quotes both sides with inventory skew |
@@ -175,7 +175,7 @@ See [Strategies](strategies.md).
 
 | Symbol | Source | Description |
 |--------|--------|-------------|
-| `conditions` | `conditions.py` | Module. 28+ condition classes, 3 combinators (`and_`, `or_`, `not_`), 34+ factories (`rsi_above`, `ema_crossed_above`, `supertrend_up`, `ichimoku_bullish_breakout`, `macd_bullish_crossover`, `price_change_above`, etc.), operator overloading (`&`, `\|`, `~`) |
+| `conditions` | `conditions.py` | Module. Condition classes, 3 combinators (`and_`, `or_`, `not_`), 34+ factories (`rsi_above`, `ema_crossed_above`, `supertrend_up`, `ichimoku_bullish_breakout`, `macd_bullish_crossover`, `price_change_above`, etc.), operator overloading (`&`, `\|`, `~`) |
 
 ---
 

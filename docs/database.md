@@ -99,9 +99,6 @@ Output of `portfolio()`:
 | `delete_trade(trade_id) -> bool` | Delete a trade by ID |
 | `clear_all_trades()` | Delete all trades |
 | `is_duplicate_trade(market_id, side, timestamp, tolerance_seconds=1) -> bool` | Check for duplicate trades |
-
-> **Note:** The generic `update_trade(trade_id, **fields)` and `get_trade(trade_id)` helpers are
-> internal to the `TradeRepository` and are not exposed on the public `TradeDatabase` wrapper.
 > To adjust a trade, use `update_trade_status()` or delete and re-insert via `buy_trade()`.
 
 ### Querying

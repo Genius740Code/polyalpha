@@ -32,15 +32,13 @@ client = polyalpha.Client(balance=1000.0, timeout=10, retries=3)
 | Old | New |
 |-----|-----|
 | `client.paper.sell(market, side)` | `client.paper.sell_position(market, side)` |
-| `client.paper.get_order(id)` | `client.paper.orders()` — find by `.id` |
-| `client.paper.get_position(id)` | `client.paper.positions()` — find by `.id` |
-| `client.paper.get_positions()` | `client.paper.positions()` |
 | `client.paper.get_orders()` | `client.paper.orders()` |
+| `client.paper.get_positions()` | `client.paper.positions()` |
 | `client.paper.balance()` | `client.paper.balance` (property, not method) |
 
 ### New Methods
 - `client.paper.limit(market, side, price, amount)` — place limit orders
-- `client.paper.open()` — open (unfilled) limit orders
+- `client.paper.open()` — open (unfilled) limit orders (takes no argument)
 - `client.paper.attach_stream(stream, market)` — auto-fill from live prices
 - `client.paper.pre_trade_checks(market, side, amount)` — validate before trading
 - `client.paper.portfolio_analytics` — performance analysis (property)
@@ -48,7 +46,7 @@ client = polyalpha.Client(balance=1000.0, timeout=10, retries=3)
 
 ### Removed
 - `client.payer` — typo removed
-- Position field renamed `market_slug` → `slug` (was `.slug()` method)
+- Position field renamed `slug` → `market_slug` (was `.slug()` method)
 
 ---
 

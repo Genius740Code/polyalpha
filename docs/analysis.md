@@ -26,9 +26,9 @@ config = DataFeedConfig(
 
 | Source | Description |
 |--------|-------------|
+| `"scraping"` | Polymarket WebSocket with configurable delay — collects live prices directly (default) |
 | `"binance"` | Free Binance API with extensive historical data (fallback when scraping/chainlink unavailable) |
 | `"chainlink"` | Chainlink oracle data — matches Polymarket. Falls back to Binance if web3 not installed |
-| `"scraping"` | Polymarket WebSocket with configurable delay — collects live prices directly |
 | `"custom"` | User-provided API with optional auth key |
 | `"websocket"` | Builds OHLCV from existing Stream cache |
 

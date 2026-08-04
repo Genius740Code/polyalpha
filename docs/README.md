@@ -1,47 +1,61 @@
 # PolyAlpha Documentation
 
-Documentation index for the [PolyAlpha](https://github.com/Genius740Code/polyalpha) Python SDK — a Python SDK for [Polymarket](https://polymarket.com) prediction markets.
+Complete documentation for the PolyAlpha Python SDK for Polymarket trading.
 
-## Start here
+## Quick Start
 
-- [Getting Started](./getting-started.md) — installation, quickstart, paper trading
-- [API Reference](./api-reference.md) — classes, methods, and exports
-- [Migration Guide](./migration-guide.md) — differences from the previous version
-- [Troubleshooting](./troubleshooting.md) — common issues and fixes
+1. **[Getting Started](getting-started.md)** - Installation, setup, and your first script
+2. **[Client API](client.md)** - Core client functionality and configuration
+3. **[Markets](markets.md)** - Market discovery and data structures
 
-## Core
+## Core Features
 
-- [Client](./client.md) — `Client`, market data, paper/real trading entry points
-- [Streaming](./streaming.md) — real-time price streams and events
-- [Markets](./markets.md) — market lookup and slug format
-- [Conditions](./conditions.md) — reusable trading conditions
-- [Strategy Framework](./strategies.md) — declarative strategy system
-- [Bot Framework](./bot.md) — `Bot`, `BotHub`, TickContext
-- [Bot Utilities](./bots.md) — Sniper, Tracker, WeatherConfig
-- [Trading](./trading.md) — paper and real trading engines
-- [Order Book](./orderbook.md) — order book types and client
-- [Wallet](./wallet.md) — wallet management
-- [Database](./database.md) — local trade/market storage
-- [Reporting](./reporting.md) — reports and statistics
-- [Logging](./logging.md) — logging configuration
+### Trading
+- **[Trading](trading.md)** - Paper trading and real trading engines
+- **[Streaming](streaming.md)** - Real-time WebSocket price streams
+- **[Order Book](orderbook.md)** - Order book analytics and strategies
 
-## Analysis & AI
+### Bot Framework
+- **[Bot](bot.md)** - Single-bot declarative trading framework
+- **[BotHub](bots.md)** - Multi-strategy comparison and backtesting
+- **[Conditions](conditions.md)** - Composable strategy conditions
+- **[Strategies](strategies.md)** - Example strategies and patterns
 
-- [Technical Analysis](./analysis.md) — indicators and signals
-- [AI-Powered Analysis](./ai.md) — LLM-driven analysis
-- [Calculations Library](./calculations.md) — reusable math helpers
+### Analysis & AI
+- **[Technical Analysis](analysis.md)** - TA indicators, signals, and data feeds
+- **[AI Integration](ai.md)** - AI-powered market analysis and signals
+- **[Calculations](calculations.md)** - Market, volume, and Chainlink calculations
 
-## Reference & Ops
+### Data & Reporting
+- **[Database](database.md)** - Trade storage, querying, and export
+- **[Reporting](reporting.md)** - Performance reports and analytics
+- **[Examples Guide](examples-guide.md)** - Example scripts walkthrough
 
-- [Configuration](./configuration.md) — environment and settings
-- [Errors](./errors.md) — exception hierarchy
-- [Architecture](./architecture.md) — design overview
-- [Security](./security.md) — security notes
-- [Telegram Notifications](./telegram-notifications.md)
-- [Testing](./testing.md)
-- [Contributing](./contributing.md)
-- [Examples Guide](./examples-guide.md)
+## Reference
 
-## Examples
+- **[API Reference](api-reference.md)** - Complete API reference
+- **[Configuration](configuration.md)** - All configuration options
+- **[Error Handling](errors.md)** - Error classes and troubleshooting
+- **[Troubleshooting](troubleshooting.md)** - Common issues and solutions
 
-Runnable scripts live in [`examples/`](../examples/) — see [Examples Guide](./examples-guide.md) and the [root README](../README.md) for a walkthrough.
+## Advanced Topics
+
+- **[Migration Guide](migration-guide.md)** - Upgrading from pre-v0.2 API
+- **[Architecture](architecture.md)** - System architecture and design
+- **[Wallet Management](wallet.md)** - Wallet and key management
+- **[Telegram Notifications](telegram-notifications.md)** - Telegram bot integration
+- **[Security](security.md)** - Security best practices
+- **[Logging](logging.md)** - Logging configuration
+- **[Testing](testing.md)** - Testing framework
+- **[Contributing](contributing.md)** - Contributing guidelines
+
+## Documentation Structure
+
+This documentation is organized by topic and use case:
+
+- **Beginner** → Start with Getting Started, then Client API and Markets
+- **Trader** → Focus on Trading, Streaming, Order Book, and Bot Framework
+- **Analyst** → Technical Analysis, AI Integration, and Calculations
+- **Developer** → API Reference, Architecture, and Contributing
+
+For a complete list of all exported symbols, see the [API Reference](api-reference.md#complete-export-list).
