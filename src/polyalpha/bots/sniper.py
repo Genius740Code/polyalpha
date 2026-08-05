@@ -163,7 +163,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Optional, List
+from typing import Any, Callable, Optional, List
 
 from ..core import ASSETS, TIMEFRAME_SECONDS, Market
 from ..core.market_sessions import validate_session_list, get_session
@@ -783,6 +783,8 @@ class Sniper:
         self._ta_data = None
         self._ta_indicators = None
         self._ta_signals = None
+        # Cached IndicatorCalculator per data source (for conditional windows)
+        self._cond_ta: dict[str, "IndicatorCalculator"] = {}
         if self.config.use_ta:
             self._setup_ta()
 
@@ -1442,26 +1444,63 @@ class Sniper:
     def _get_btc_change(self, periods: int) -> Optional[float]:
         """Get BTC price change percentage over specified periods."""
         try:
-            # Use existing max_btc_change_pct logic if available
-            if hasattr(self, '_ta_data') and self._ta_data is not None:
-                # This would integrate with existing TA infrastructure
-                # For now, return a placeholder
-                self._log.debug("BTC change check not fully implemented, using placeholder")
-                return 0.0
-            else:
-                self._log.warning("TA data not available for BTC change check")
+            from ..analysis import DataFeed, DataFeedConfig
+
+            # Use Binance as the default source for BTC spot price data
+            feed_config = DataFeedConfig(
+                source="binance",
+                timeframe=self.config.timeframe,
+                lookback_periods=periods + 5,
+            )
+            feed = DataFeed(feed_config)
+            data = feed.fetch("BTC")
+
+            if data is None or len(data) < 2:
+                self._log.warning("Not enough BTC data for change calculation")
                 return None
+
+            # Get the close prices for the lookback period
+            latest = data["close"].iloc[-1]
+            if len(data) > periods:
+                prev = data["close"].iloc[-periods]
+            else:
+                prev = data["close"].iloc[0]
+
+            return abs((latest - prev) / prev) * 100
         except Exception as exc:
             self._log.error("Error getting BTC change: %s", exc)
+            return None
+
+    def _get_ta_indicators(self, source: Optional[str]) -> Optional[Any]:
+        """Fetch and cache an IndicatorCalculator for the given data source."""
+        source = source or "binance"
+        if source in self._cond_ta:
+            return self._cond_ta[source]
+        try:
+            from ..analysis import DataFeed, DataFeedConfig, IndicatorCalculator
+
+            feed_config = DataFeedConfig(
+                source=source,
+                timeframe=self.config.timeframe,
+                lookback_periods=DEFAULT_TA_LOOKBACK_PERIODS,
+            )
+            feed = DataFeed(feed_config)
+            data = feed.fetch(self.config.asset)
+            indicators = IndicatorCalculator(data)
+            self._cond_ta[source] = indicators
+            return indicators
+        except Exception as exc:
+            self._log.error("Error building TA indicators from %s: %s", source, exc)
             return None
 
     def _get_rsi_value(self, source: Optional[str]) -> Optional[float]:
         """Get RSI value from specified source."""
         try:
-            # This would integrate with existing TA infrastructure
-            # For now, return a placeholder
-            self._log.debug("RSI check not fully implemented, using placeholder")
-            return 50.0
+            indicators = self._get_ta_indicators(source)
+            if indicators is None:
+                return None
+            rsi = indicators.rsi(14)
+            return indicators.get_latest_value(rsi)
         except Exception as exc:
             self._log.error("Error getting RSI value: %s", exc)
             return None
@@ -1469,10 +1508,11 @@ class Sniper:
     def _get_sma_value(self, source: Optional[str], periods: Optional[int]) -> Optional[float]:
         """Get SMA value from specified source."""
         try:
-            # This would integrate with existing TA infrastructure
-            # For now, return a placeholder
-            self._log.debug("SMA check not fully implemented, using placeholder")
-            return 0.0
+            indicators = self._get_ta_indicators(source)
+            if indicators is None:
+                return None
+            sma = indicators.sma(periods or 20)
+            return indicators.get_latest_value(sma)
         except Exception as exc:
             self._log.error("Error getting SMA value: %s", exc)
             return None
