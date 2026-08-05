@@ -1300,6 +1300,13 @@ class Sniper:
             now = datetime.now(timezone.utc)
 
             if now >= window_start:
+                # Check conditional windows (indicator-based) — same gating as
+                # the advanced window path, so window_seconds alone works too.
+                if self.config.conditional_windows and not self._check_conditional_windows():
+                    self._log.debug("Conditional windows not satisfied, waiting...")
+                    time.sleep(PRICE_CHECK_INTERVAL)
+                    continue
+
                 self._log.info("Entering trading window")
                 self._set_state(self.STATE_ARMED)
                 self._emit("window_enter", self._market)

@@ -530,33 +530,43 @@ See `docs/database.md` for the full database API.
 Time-window execution bot with configurable thresholds and auto-rollover. Supports advanced time windows: multiple disjoint periods, burst patterns, absolute time windows, conditional windows (indicator-based), and day/hour filtering.
 
 ```python
-from polyalpha import Sniper, SniperConfig, TimeWindow, ConditionalWindow, TimeFilter
+import polyalpha
+from polyalpha.bots import Sniper
+from polyalpha.bots.sniper import SniperConfig, TimeWindow, ConditionalWindow, TimeFilter
+
+client = polyalpha.Client(balance=100)
 
 # Simple time window (backward compatible)
-Sniper(SniperConfig(
-    asset="BTC", timeframe="5m",
-    balance=500.0, window_seconds=30,
-    side="UP", order_size=25.0,
-    auto_rollover=True,
-)).run()
+Sniper(
+    client=client,
+    config=SniperConfig(
+        asset="BTC", timeframe="5m",
+        side="UP", window_seconds=30,
+        entry_price=0.92, exit_price=0.88,
+        amount=25.0,
+    ),
+).run()
 
 # Advanced: Multiple time windows with conditions
-Sniper(SniperConfig(
-    asset="BTC", timeframe="5m",
-    side="UP", entry_price=0.92, exit_price=0.88,
-    time_windows=[
-        TimeWindow(start_time="01:00", end_time="02:00"),
-        TimeWindow(start_time="02:30", end_time="03:00"),
-    ],
-    conditional_windows=[
-        ConditionalWindow(indicator="btc_change", operator="lt", threshold=2.0, periods=5),
-    ],
-    time_filter=TimeFilter(days=[0, 1, 2, 3, 4], hours=[9, 10, 11, 12, 13, 14, 15, 16, 17]),
-    amount=20.0,
-)).run()
+Sniper(
+    client=client,
+    config=SniperConfig(
+        asset="BTC", timeframe="5m",
+        side="UP", entry_price=0.92, exit_price=0.88,
+        time_windows=[
+            TimeWindow(start_time="01:00", end_time="02:00"),
+            TimeWindow(start_time="02:30", end_time="03:00"),
+        ],
+        conditional_windows=[
+            ConditionalWindow(indicator="btc_change", operator="lt", threshold=2.0, periods=5),
+        ],
+        time_filter=TimeFilter(days=[0, 1, 2, 3, 4], hours=[9, 10, 11, 12, 13, 14, 15, 16, 17]),
+        amount=20.0,
+    ),
+).run()
 ```
 
-`timeframe` is **required** (one of `5m`, `15m`, `1h`, `4h`, `24h` — no silent 5m default). By default each bot buys only **once per market** (`buy_once_per_market=True`); set it to `False` on the config to allow multiple entries within the same market.
+`Sniper` takes `client` as its **first required argument** — `Sniper(client, config=SniperConfig(...))`. You can alternately pass config fields directly as keyword args, e.g. `Sniper(client=client, asset="BTC", timeframe="5m", side="UP", window_seconds=30, amount=25.0)`. `timeframe` is **required** (one of `5m`, `15m`, `1h`, `4h`, `24h` — no silent 5m default). By default each bot buys only **once per market** (`buy_once_per_market=True`); set it to `False` on the config to allow multiple entries within the same market.
 
 See [`examples/sniper.py`](./examples/sniper.py), [`examples/sniper_minimal.py`](./examples/sniper_minimal.py), [`examples/sniper_ta.py`](./examples/sniper_ta.py), and [`docs/bots.md`](./docs/bots.md#advanced-time-windows).
 
