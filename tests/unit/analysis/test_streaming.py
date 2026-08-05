@@ -3,6 +3,7 @@ ChainlinkStreamer and ChainlinkStreamerConfig tests — run with: pytest tests/u
 """
 
 import asyncio
+import time
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,7 +20,7 @@ class TestChainlinkStreamerConfig:
         cfg = ChainlinkStreamerConfig()
         assert cfg.ws_url == "wss://ws-live-data.polymarket.com"
         assert cfg.timeout == 30
-        assert cfg.recv_timeout == 10
+        assert cfg.recv_timeout == 30
         assert cfg.max_retries == 10
         assert cfg.base_delay == 3.0
         assert cfg.backoff_factor == 2.0
@@ -59,6 +60,81 @@ class TestChainlinkStreamerConfig:
     def test_custom_reconnect_delay(self):
         cfg = ChainlinkStreamerConfig(reconnect_delay=10.0)
         assert cfg.reconnect_delay == 10.0
+
+    def test_default_window_seconds(self):
+        cfg = ChainlinkStreamerConfig()
+        assert cfg.window_seconds == 120.0
+
+    def test_custom_window_seconds(self):
+        cfg = ChainlinkStreamerConfig(window_seconds=60.0)
+        assert cfg.window_seconds == 60.0
+
+
+@pytest.mark.unit
+class TestChainlinkStreamerWindow:
+    """Test the built-in rolling window and pct calculations."""
+
+    def test_window_none_before_start(self):
+        streamer = ChainlinkStreamer()
+        assert streamer.window is None
+        assert streamer.value is None
+        assert streamer.age_s == float("inf")
+        assert streamer.change_pct(30) is None
+        assert streamer.pct(30) is None
+        assert streamer.trend(30) is None
+        assert streamer.direction(30) is None
+
+    def test_record_price_updates_window_and_value(self):
+        streamer = ChainlinkStreamer()
+        streamer._active_symbol = "BTC"
+        ts = datetime.now(timezone.utc)
+
+        streamer._record_price("BTC", 66000.0, ts)
+        streamer._record_price("BTC", 66050.0, ts)
+
+        assert streamer.last_price == 66050.0
+        assert streamer.value == 66050.0
+        assert streamer.window is not None
+        assert streamer.window.value == 66050.0
+        # Window holds at least the two recorded points
+        assert len(streamer.window._window) >= 2
+
+    def test_record_price_emits_event(self):
+        streamer = ChainlinkStreamer()
+        streamer._active_symbol = "BTC"
+        ts = datetime.now(timezone.utc)
+        called = []
+
+        @streamer.on("price")
+        def handler(symbol, price, timestamp):
+            called.append((symbol, price, timestamp))
+
+        streamer._record_price("BTC", 66000.0, ts)
+        assert called == [("BTC", 66000.0, ts)]
+
+    def test_per_symbol_windows_isolated(self):
+        streamer = ChainlinkStreamer()
+        ts = datetime.now(timezone.utc)
+        streamer._record_price("BTC", 66000.0, ts)
+        streamer._record_price("BTC", 66050.0, ts)
+        streamer._record_price("ETH", 3500.0, ts)
+
+        streamer._active_symbol = "BTC"
+        assert streamer.window.value == 66050.0
+        # ETH window is independent
+        assert streamer.window.value != 3500.0
+
+    def test_pct_returns_decimal_change(self):
+        streamer = ChainlinkStreamer()
+        streamer._active_symbol = "BTC"
+        ts = datetime.now(timezone.utc)
+        streamer._record_price("BTC", 90.0, ts)
+        time.sleep(0.002)
+        streamer._record_price("BTC", 99.0, ts)
+
+        pct = streamer.change_pct(120)
+        assert pct is not None
+        assert pct == pytest.approx((99.0 - 90.0) / 90.0, rel=1e-6)
 
 
 @pytest.mark.unit
@@ -233,6 +309,7 @@ class TestChainlinkStreamerIntegration:
         """Test WebSocket connection with mocked websockets library."""
         streamer = ChainlinkStreamer()
         streamer._running = True
+        streamer._active_symbol = "BTC"
         called = []
 
         @streamer.on("connect")
@@ -263,6 +340,11 @@ class TestChainlinkStreamerIntegration:
 
         assert "connect" in called
         assert any(c == ("price", "BTC", 66000.0) for c in called)
+        # The streamer's built-in window is populated by the WS price update
+        assert streamer.last_price == 66000.0
+        assert streamer.value == 66000.0
+        assert streamer.window is not None
+        assert streamer.window.value == 66000.0
 
     @pytest.mark.asyncio
     async def test_websocket_timeout_raises(self):

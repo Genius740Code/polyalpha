@@ -35,8 +35,14 @@ from ..core.constants import (
     CL_WS_BASE_DELAY,
     CL_WS_BACKOFF_FACTOR,
     CL_WS_JITTER,
+    CL_WS_WINDOW_SECONDS,
     WS_PING_INTERVAL,
 )
+
+try:
+    from ..calculations import ChainlinkAccessor
+except ImportError:  # pragma: no cover
+    ChainlinkAccessor = None  # type: ignore[misc, assignment]
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +74,9 @@ class ChainlinkStreamerConfig:
         Jitter factor for randomizing reconnect delay.
     stale_threshold : float
         Seconds without a price update before warning.
+    window_seconds : float
+        Size of the rolling price window kept for change / trend / volatility
+        calculations (e.g. ``streamer.change_pct(30)``).
     """
     ws_url: str = "wss://ws-live-data.polymarket.com"
     symbol_map: dict = field(default_factory=lambda: {
@@ -85,11 +94,15 @@ class ChainlinkStreamerConfig:
     backoff_factor: float = CL_WS_BACKOFF_FACTOR
     jitter: float = CL_WS_JITTER
     stale_threshold: float = 30.0
+    window_seconds: float = CL_WS_WINDOW_SECONDS
 
 
 class ChainlinkStreamer:
     """
     Stream live Chainlink prices from Polymarket WebSocket.
+
+    Keeps a rolling ``TimeWindow`` of prices (default 120s) so percentage
+    changes, trends and volatility are available without extra wiring.
 
     Events
     ------
@@ -105,6 +118,8 @@ class ChainlinkStreamer:
     ... def on_price(symbol, price, timestamp):
     ...     print(f"{symbol}: ${price:.2f}")
     >>> streamer.start("BTC")
+    >>> streamer.change_pct(30)   # % change over last 30 seconds
+    >>> streamer.window.trend(60) # trend direction over 60 seconds
     """
 
     def __init__(self, config: Optional[ChainlinkStreamerConfig] = None):
@@ -129,6 +144,10 @@ class ChainlinkStreamer:
         self.last_price: Optional[float] = None
         self.last_update: Optional[datetime] = None
         self.last_symbol: Optional[str] = None
+
+        # Rolling price window per symbol for change / trend / volatility calc.
+        self._accessors: dict[str, "ChainlinkAccessor"] = {}
+        self._active_symbol: Optional[str] = None
 
     def on(self, event: str) -> Callable:
         """
@@ -183,6 +202,7 @@ class ChainlinkStreamer:
             )
 
         self._running = True
+        self._active_symbol = symbol
 
         if background:
             self._thread = threading.Thread(
@@ -203,6 +223,146 @@ class ChainlinkStreamer:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
         log.info("Streamer stopped")
+
+    # ── Rolling window + calculations ─────────────────────────────────────────
+
+    @property
+    def window(self) -> Optional["ChainlinkAccessor"]:
+        """Rolling price window + calculations for the active symbol.
+
+        Returns a :class:`~polyalpha.calculations.ChainlinkAccessor` backed by
+        the streamer's own ``TimeWindow``, or ``None`` if streaming has not
+        started yet (or the calculations module is unavailable).
+
+        Examples
+        --------
+        >>> streamer.window.change_pct(30)
+        0.12
+        >>> streamer.window.volatility(120)
+        1.4
+        """
+        if self._active_symbol is None:
+            return None
+        return self._accessors.get(self._active_symbol)
+
+    @property
+    def value(self) -> Optional[float]:
+        """Latest price (alias of ``last_price``)."""
+        return self.last_price
+
+    @property
+    def age_s(self) -> float:
+        """Seconds since the last price update."""
+        window = self.window
+        if window is None:
+            return float("inf")
+        return window.age_s
+
+    def change_pct(self, seconds: float) -> Optional[float]:
+        """Percentage price change over the last ``seconds`` seconds.
+
+        Parameters
+        ----------
+        seconds : float
+            Look-back period in seconds.
+
+        Returns
+        -------
+        float | None
+            Percentage change as a decimal (e.g. ``0.12`` for 12%), or
+            ``None`` if the window has insufficient data.
+        """
+        window = self.window
+        if window is None:
+            return None
+        return window.change_pct(seconds)
+
+    def pct(self, seconds: float) -> Optional[float]:
+        """Alias for :meth:`change_pct` — ``pct(N)`` over ``N`` seconds."""
+        return self.change_pct(seconds)
+
+    def price_change_pct_since(self, seconds: float) -> Optional[float]:
+        """Percentage price change since ``seconds`` ago (alias of change_pct)."""
+        window = self.window
+        if window is None:
+            return None
+        return window.price_change_pct_since(seconds)
+
+    def trend(self, seconds: float, threshold: float = 0.0):
+        """Overall trend direction over the last ``seconds`` seconds."""
+        window = self.window
+        if window is None:
+            return None
+        return window.trend(seconds, threshold)
+
+    def direction(self, seconds: float) -> Optional[str]:
+        """Direction of change over the last ``seconds`` seconds (up/down/flat)."""
+        window = self.window
+        if window is None:
+            return None
+        return window.direction(seconds)
+
+    def volatility(self, seconds: float) -> Optional[float]:
+        """Price volatility (std dev) over the last ``seconds`` seconds."""
+        window = self.window
+        if window is None:
+            return None
+        return window.volatility(seconds)
+
+    def high(self, seconds: float) -> Optional[float]:
+        """Highest price over the last ``seconds`` seconds."""
+        window = self.window
+        if window is None:
+            return None
+        return window.high(seconds)
+
+    def low(self, seconds: float) -> Optional[float]:
+        """Lowest price over the last ``seconds`` seconds."""
+        window = self.window
+        if window is None:
+            return None
+        return window.low(seconds)
+
+    def price_range(self, seconds: float) -> Optional[float]:
+        """Price range (high - low) over the last ``seconds`` seconds."""
+        window = self.window
+        if window is None:
+            return None
+        return window.range(seconds)
+
+    def is_fresh(self, max_age_seconds: float = 60.0) -> bool:
+        """True if the latest price is younger than ``max_age_seconds``."""
+        window = self.window
+        if window is None:
+            return False
+        return window.is_fresh(max_age_seconds)
+
+    def is_rising(self, seconds: float = 30.0) -> Optional[bool]:
+        """True if the price rose over the last ``seconds`` seconds."""
+        window = self.window
+        if window is None:
+            return None
+        return window.is_rising(seconds)
+
+    def is_falling(self, seconds: float = 30.0) -> Optional[bool]:
+        """True if the price fell over the last ``seconds`` seconds."""
+        window = self.window
+        if window is None:
+            return None
+        return window.is_falling(seconds)
+
+    def _record_price(self, symbol: str, price: float, timestamp: datetime) -> None:
+        """Record a price update: refresh ``last_*`` state and the rolling window."""
+        self.last_price = price
+        self.last_update = timestamp
+        self.last_symbol = symbol
+        accessor = self._accessors.get(symbol)
+        if accessor is None and ChainlinkAccessor is not None:
+            accessor = ChainlinkAccessor(max_age=self.config.window_seconds)
+            self._accessors[symbol] = accessor
+        if accessor is not None:
+            accessor.update(price)
+        self._emit("price", symbol, price, timestamp)
 
     def _run_in_thread(self, symbol: str) -> None:
         """Run async loop in background thread."""
@@ -352,11 +512,7 @@ class ChainlinkStreamer:
                         timestamp = datetime.fromtimestamp(ts_val, tz=timezone.utc)
                         raw_price = payload.get("value") if payload.get("value") is not None else payload.get("price")
                         if raw_price is not None:
-                            price = float(raw_price)
-                            self.last_price = price
-                            self.last_update = timestamp
-                            self.last_symbol = symbol
-                            self._emit("price", symbol, price, timestamp)
+                            self._record_price(symbol, float(raw_price), timestamp)
 
                     # 1.5: check stale data on every message
                     self._check_stale_data()

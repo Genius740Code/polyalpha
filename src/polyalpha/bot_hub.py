@@ -880,8 +880,10 @@ class StrategyContext:
 
         Provides a rolling window of Chainlink BTC prices with convenient
         methods for calculating percentage changes over custom time periods.
+        Backed by the shared Chainlink streamer's own rolling window when
+        available.
 
-        Returns ``None`` if TimeWindow is not available.
+        Returns ``None`` if the window is not available.
 
         Examples
         --------
@@ -891,11 +893,13 @@ class StrategyContext:
         0.12
         >>> ctx.cl.change_pct(60)
         0.08
-        >>> ctx.cl.change_pct(90)
-        0.05
         >>> ctx.cl.age_s
         0.5
         """
+        if self._chainlink is not None:
+            window = getattr(self._chainlink, "window", None)
+            if window is not None:
+                return window
         return self._cl_window
 
     @property
@@ -1391,12 +1395,6 @@ class BotHub:
                 cl = ChainlinkStreamer()
                 cl.start(asset, background=True)
             self._chainlink = cl
-            # Set up callback to update shared CL window when prices arrive
-            if self._shared_cl_window:
-                @cl.on("price")
-                def on_cl_price(symbol: str, price: float, timestamp):
-                    if self._shared_cl_window:
-                        self._shared_cl_window.update(price)
         except Exception as exc:
             self._log.debug("Chainlink streamer not available: %s", exc)
 

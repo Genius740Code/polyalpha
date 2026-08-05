@@ -248,6 +248,11 @@ ctx.pnl                         # realised P&L
 ctx.rsi / ctx.sma_20 / ctx.ema_12   # indicators (requires pandas)
 ctx.tick_count / ctx.trade_count
 ctx.chainlink.last_price        # BTC spot from Chainlink oracle
+ctx.chainlink.change_pct(30)    # % change over 30 seconds
+ctx.chainlink.pct(30)           # alias for change_pct
+ctx.chainlink.trend(60)         # trend direction (UP/DOWN/NEUTRAL)
+ctx.chainlink.volatility(120)   # price volatility
+ctx.chainlink.window            # full ChainlinkAccessor rolling window
 ctx.cl.value                    # latest Chainlink price
 ctx.cl.change_pct(30)           # % change over 30 seconds
 ctx.cl.change_pct(60)           # % change over 60 seconds
@@ -291,7 +296,7 @@ bot.when(
 bot.run()
 ```
 
-Chainlink BTC spot is also available at `ctx.chainlink.last_price` in `on_tick` strategies or via `ctx.chainlink` in `BotHub` strategies.
+Chainlink BTC spot is also available at `ctx.chainlink.last_price` in `on_tick` strategies or via `ctx.chainlink` in `BotHub` strategies. The streamer keeps a rolling window (default 120s) so `ctx.chainlink.change_pct(N)` / `ctx.chainlink.pct(N)` / trend / volatility work without extra wiring.
 
 See [`examples/bot_simple.py`](./examples/bot_simple.py).
 

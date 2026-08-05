@@ -22,7 +22,7 @@ class TestDataFeedConfig:
         assert cfg.timeframe == "5m"
         assert cfg.lookback_periods == 500
         assert cfg.use_cache is True
-        assert cfg.scraping_recv_timeout == 10
+        assert cfg.scraping_recv_timeout == 30
         assert cfg.scraping_retry_attempts == 3
         assert cfg.scraping_timeout == 90
         assert "BTC" in cfg.asset_map

@@ -63,11 +63,12 @@ SCRAPE_RETRY_ATTEMPTS = 3    # retry attempts before falling back to Binance
 
 # ── Chainlink Streamer ──────────────────────────────────────────────────────────
 
-CL_WS_RECV_TIMEOUT   = 30    # seconds — per-message recv timeout
-CL_WS_MAX_RETRIES    = 10    # max reconnection attempts before giving up
-CL_WS_BASE_DELAY     = 3.0   # base backoff delay in seconds
-CL_WS_BACKOFF_FACTOR = 2.0   # exponential backoff multiplier
-CL_WS_JITTER         = 0.2   # jitter factor (±20%) to prevent thundering herd
+CL_WS_RECV_TIMEOUT    = 30    # seconds — per-message recv timeout
+CL_WS_MAX_RETRIES     = 10    # max reconnection attempts before giving up
+CL_WS_BASE_DELAY      = 3.0   # base backoff delay in seconds
+CL_WS_BACKOFF_FACTOR  = 2.0   # exponential backoff multiplier
+CL_WS_JITTER          = 0.2   # jitter factor (±20%) to prevent thundering herd
+CL_WS_WINDOW_SECONDS  = 120   # seconds — rolling price window kept for pct(N)
 
 # ── Data Feed ───────────────────────────────────────────────────────────────────
 

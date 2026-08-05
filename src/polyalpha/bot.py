@@ -367,8 +367,9 @@ class TickContext:
 
         Provides a rolling window of Chainlink BTC prices with convenient
         methods for calculating percentage changes over custom time periods.
+        Backed by the Chainlink streamer's own rolling window when available.
 
-        Returns ``None`` if TimeWindow is not available.
+        Returns ``None`` if the window is not available.
 
         Examples
         --------
@@ -383,6 +384,11 @@ class TickContext:
         >>> ctx.cl.age_s
         0.5
         """
+        chainlink = self._bot._chainlink
+        if chainlink is not None:
+            window = getattr(chainlink, "window", None)
+            if window is not None:
+                return window
         return self._cl_window
 
     # ── Indicators (optional — requires analysis deps) ──────────────────────
@@ -565,12 +571,6 @@ class Bot:
                 cl = ChainlinkStreamer()
                 cl.start(asset, background=True)
                 self._chainlink = cl
-                # Set up callback to update CL window when prices arrive
-                if self._ctx and self._ctx._cl_window:
-                    @cl.on("price")
-                    def on_cl_price(symbol: str, price: float, timestamp):
-                        if self._ctx and self._ctx._cl_window:
-                            self._ctx._cl_window.update(price)
             except Exception as exc:
                 self._log.warning("Chainlink streamer init failed: %s", exc)
 
@@ -814,13 +814,6 @@ class Bot:
 
         # Create the context
         self._ctx = TickContext(self)
-        
-        # Set up Chainlink callback to update CL window
-        if self._chainlink and self._ctx._cl_window:
-            @self._chainlink.on("price")
-            def on_cl_price(symbol: str, price: float, timestamp):
-                if self._ctx and self._ctx._cl_window:
-                    self._ctx._cl_window.update(price)
 
         # Register handlers
         @self._stream.on("price")
@@ -877,13 +870,6 @@ class Bot:
         self._stream = self._client.stream(self._market)
         self._client.paper.attach_stream(self._stream, self._market)
         self._ctx = TickContext(self)
-        
-        # Set up Chainlink callback to update CL window
-        if self._chainlink and self._ctx._cl_window:
-            @self._chainlink.on("price")
-            def on_cl_price(symbol: str, price: float, timestamp):
-                if self._ctx and self._ctx._cl_window:
-                    self._ctx._cl_window.update(price)
 
         @self._stream.on("price")
         def on_price(up: float, down: float):

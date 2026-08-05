@@ -7,7 +7,12 @@ Real-time price streaming via the Polymarket CLOB WebSocket, and optional backgr
 stream = client.stream(market)
 
 # Chainlink oracle (auto-started by Bot / BotHub)
-# ctx.chainlink.last_price  — latest BTC/USD spot
+# ctx.chainlink.last_price    — latest BTC/USD spot
+# ctx.chainlink.change_pct(30) — % change over last 30 seconds
+# ctx.chainlink.pct(30)        — alias for change_pct
+# ctx.chainlink.trend(60)      — trend direction over 60 seconds
+# ctx.chainlink.window         — full ChainlinkAccessor (rolling window)
+# ctx.cl.change_pct(30)        — same rolling window via ctx.cl
 ```
 
 ## Stream Constructor
