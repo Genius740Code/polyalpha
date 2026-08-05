@@ -129,15 +129,9 @@ class BaseAccessor(ABC):
         float | None
             Absolute price change, or None if insufficient data.
         """
-        change_pct = self.change_pct(seconds)
-        current = self._window.value if self._window else None
-        
-        if change_pct is None or current is None:
+        if self._window is None:
             return None
-        
-        # Convert percentage change back to absolute change
-        # This is approximate; for exact values, use the raw data
-        return current * change_pct
+        return self._window.change_abs(seconds)
     
     def rate_of_change(self, seconds: float) -> Optional[float]:
         """

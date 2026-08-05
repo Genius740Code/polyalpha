@@ -159,6 +159,54 @@ class TimeWindow:
             
             change = (self._latest_value - oldest_point.value) / oldest_point.value
             return change
+
+    def change_abs(self, seconds: float) -> Optional[float]:
+        """
+        Calculate absolute change over a given time period.
+
+        Parameters
+        ----------
+        seconds : float
+            Time period in seconds to calculate change over.
+
+        Returns
+        -------
+        float | None
+            Absolute change in value units over the period
+            (current minus the value ``seconds`` ago).
+            Returns None if insufficient data is available.
+
+        Example
+        -------
+        >>> w.change_abs(30)  # absolute change over last 30 seconds
+        120.0
+        """
+        with self._lock:
+            if not self._data or len(self._data) < 2:
+                return None
+
+            now = time.time()
+            cutoff = now - seconds
+
+            # Find the oldest point within the time window
+            oldest_point = None
+            for point in self._data:
+                if point.timestamp >= cutoff:
+                    oldest_point = point
+                    break
+
+            if oldest_point is None:
+                # No data point within the requested time window
+                return None
+
+            if self._latest_value is None or self._latest_timestamp is None:
+                return None
+
+            # If the oldest point is the same as the latest (insufficient time spread)
+            if oldest_point.timestamp == self._latest_timestamp:
+                return None
+
+            return self._latest_value - oldest_point.value
     
     def get_value_at(self, seconds_ago: float) -> Optional[float]:
         """

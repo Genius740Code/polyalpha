@@ -201,7 +201,11 @@ class IchimokuSignalsMixin(SignalGeneratorBase):
 
 
     def ichimoku_chikou_above_price(self, tenkan: int = 9, kijun: int = 26, price: str = "close") -> bool:
-        """Check if Chikou span is above current price (bullish confirmation).
+        """Check if Chikou span is above price (bullish confirmation).
+
+        The Chikou (lagging) span is the current close plotted ``kijun`` bars
+        back. Its bullish reading is that the price now is higher than the
+        price ``kijun`` bars ago, i.e. ``close[-1] > close[-1 - kijun]``.
 
         Parameters
         ----------
@@ -215,19 +219,22 @@ class IchimokuSignalsMixin(SignalGeneratorBase):
         Returns
         -------
         bool
-            True if chikou > price.
+            True if current price is above the price ``kijun`` bars ago.
         """
-        ichi = self.indicators.ichimoku(tenkan, kijun)
-        chikou = self.indicators.get_latest_value(ichi["chikou"])
-        latest_price = self._data[price].iloc[-1]
-        if chikou is None:
-            self._log.warning("Ichimoku Chikou data unavailable")
+        if len(self._data) < kijun + 1:
+            self._log.warning("Insufficient Ichimoku data for Chikou signal")
             return False
-        return bool(chikou > latest_price)
+        latest_price = self._data[price].iloc[-1]
+        price_bars_ago = self._data[price].iloc[-1 - kijun]
+        return bool(latest_price > price_bars_ago)
 
 
     def ichimoku_chikou_below_price(self, tenkan: int = 9, kijun: int = 26, price: str = "close") -> bool:
-        """Check if Chikou span is below current price (bearish confirmation).
+        """Check if Chikou span is below price (bearish confirmation).
+
+        The Chikou (lagging) span is the current close plotted ``kijun`` bars
+        back. Its bearish reading is that the price now is lower than the
+        price ``kijun`` bars ago, i.e. ``close[-1] < close[-1 - kijun]``.
 
         Parameters
         ----------
@@ -241,15 +248,14 @@ class IchimokuSignalsMixin(SignalGeneratorBase):
         Returns
         -------
         bool
-            True if chikou < price.
+            True if current price is below the price ``kijun`` bars ago.
         """
-        ichi = self.indicators.ichimoku(tenkan, kijun)
-        chikou = self.indicators.get_latest_value(ichi["chikou"])
-        latest_price = self._data[price].iloc[-1]
-        if chikou is None:
-            self._log.warning("Ichimoku Chikou data unavailable")
+        if len(self._data) < kijun + 1:
+            self._log.warning("Insufficient Ichimoku data for Chikou signal")
             return False
-        return bool(chikou < latest_price)
+        latest_price = self._data[price].iloc[-1]
+        price_bars_ago = self._data[price].iloc[-1 - kijun]
+        return bool(latest_price < price_bars_ago)
 
 
     def ichimoku_bullish_breakout(

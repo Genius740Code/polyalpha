@@ -310,7 +310,17 @@ class IndicatorCalculator:
             raise ValueError("af must be <= af_max")
 
         try:
-            psar_result = ta.psar(self.data["high"], self.data["low"], self.data["close"], af=af, af_max=af_max)
+            if PANDAS_TA_AVAILABLE:
+                # pandas-ta uses `max_af` for the max acceleration factor
+                psar_result = ta.psar(
+                    self.data["high"], self.data["low"], self.data["close"],
+                    af=af, max_af=af_max,
+                )
+            else:
+                psar_result = ta.psar(
+                    self.data["high"], self.data["low"], self.data["close"],
+                    af=af, af_max=af_max,
+                )
         except Exception as exc:
             self._log.error("pandas-ta PSAR calculation failed: %s", exc)
             raise RuntimeError(f"PSAR calculation failed: {exc}") from exc
