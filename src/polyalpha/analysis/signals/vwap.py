@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 import numpy as np
 from .base import SignalGeneratorBase
 
@@ -212,13 +214,13 @@ class VWAPSignalsMixin(SignalGeneratorBase):
         lower_band = latest_vwap - (std_dev * latest_std)
         return bool(lower_band <= latest_price <= upper_band)
 
-    def vwap_distance_pct(self) -> float:
+    def vwap_distance_pct(self) -> Optional[float]:
         """
         Calculate percentage distance of price from VWAP.
 
         Returns
         -------
-        float
+        float | None
             Percentage distance from VWAP (positive if above, negative if below).
             Returns None if data unavailable.
         """
@@ -228,6 +230,6 @@ class VWAPSignalsMixin(SignalGeneratorBase):
 
         if latest_vwap is None or latest_vwap == 0:
             self._log.warning("VWAP data unavailable or zero")
-            return 0.0
+            return None
 
         return float(((latest_price - latest_vwap) / latest_vwap) * 100)

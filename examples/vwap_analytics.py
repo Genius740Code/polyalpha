@@ -57,7 +57,10 @@ def main():
     # VWAP distance
     print("=== VWAP Distance ===")
     vwap_distance = signals.vwap_distance_pct()
-    print(f"Price distance from VWAP: {vwap_distance:.2f}%")
+    if vwap_distance is None:
+        print("Price distance from VWAP: unavailable")
+    else:
+        print(f"Price distance from VWAP: {vwap_distance:.2f}%")
     print()
     
     # Combined strategy example

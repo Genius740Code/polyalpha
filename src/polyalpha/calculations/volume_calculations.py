@@ -208,7 +208,7 @@ class VolumeCalculations:
     @staticmethod
     def relative_volume(data: List[float], percentile: float = 0.75, period: int = 20) -> Optional[bool]:
         """
-        Check if current volume is above a percentile of recent volumes.
+        Calculate whether current volume is above a percentile of the last ``period`` volumes.
         
         Uses linear interpolation for more accurate percentile calculation.
         
@@ -219,7 +219,8 @@ class VolumeCalculations:
         percentile : float
             Percentile threshold (0.0 to 1.0, default: 0.75 for 75th percentile).
         period : int
-            Number of periods to analyze (default: 20).
+            Number of most recent periods to analyze (default: 20).
+            The current value is compared against the previous ``period`` values.
         
         Returns
         -------
@@ -229,14 +230,14 @@ class VolumeCalculations:
         
         Example
         -------
-        >>> VolumeCalculations.relative_volume([100, 110, 105, 120, 130], percentile=0.8)
+        >>> VolumeCalculations.relative_volume([100, 110, 105, 120, 130], percentile=0.8, period=4)
         True  # 130 is above 80th percentile of [100, 110, 105, 120]
         """
         if len(data) < 2:
             return None
         
         current = data[-1]
-        window = data[:-1] if len(data) >= 2 else data
+        window = data[-period - 1:-1] if len(data) >= period + 1 else data[:-1]
         
         if not window:
             return None

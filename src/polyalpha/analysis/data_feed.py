@@ -460,9 +460,12 @@ class DataFeed:
         # Convert timestamp from milliseconds
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
 
-        # Select and normalize columns
-        df = df[["timestamp", "open", "high", "low", "close", "volume"]]
+        # Keep quote_volume and trades for get_quote_volume()/get_trade_count()
+        df = df[["timestamp", "open", "high", "low", "close", "volume",
+                 "quote_volume", "trades"]]
         df = self._normalize_ohlcv(df)
+        df["quote_volume"] = df["quote_volume"].astype(float)
+        df["trades"] = df["trades"].astype(int)
 
         return df
 
@@ -751,9 +754,16 @@ class DataFeed:
         ticks = []
         start_time = time.time()
         target_duration = self.config.scraping_timeout
+        timeframe_seconds = self._get_timeframe_seconds()
+        candle_buckets: set[int] = set()
+
+        def _bucket_key(ts) -> int:
+            """Candle bucket for a timestamp (counts candles, not raw ticks)."""
+            return int(ts.timestamp()) // timeframe_seconds
 
         # 2.4: inner retry loop — reconnect on WS drop within session
-        while time.time() - start_time < target_duration and len(ticks) < self.config.lookback_periods:
+        while (time.time() - start_time < target_duration
+               and len(candle_buckets) < self.config.lookback_periods):
             try:
                 async with websockets.connect(
                     self.config.scraping_ws_url,
@@ -773,7 +783,8 @@ class DataFeed:
                     }))
 
                     # 2.2: use recv_timeout for per-message, session_duration for overall
-                    while time.time() - start_time < target_duration and len(ticks) < self.config.lookback_periods:
+                    while (time.time() - start_time < target_duration
+                           and len(candle_buckets) < self.config.lookback_periods):
                         try:
                             raw = await asyncio.wait_for(
                                 ws.recv(),
@@ -803,13 +814,14 @@ class DataFeed:
                             )
                             price = float(payload["value"])
                             ticks.append({"timestamp": timestamp, "price": price})
+                            candle_buckets.add(_bucket_key(timestamp))
 
                             # 2.3: adaptive delay per timeframe instead of fixed 2s
                             await asyncio.sleep(self._get_scraping_delay())
 
             except Exception as exc:
                 remaining = target_duration - (time.time() - start_time)
-                if remaining <= 0 or len(ticks) >= self.config.lookback_periods:
+                if remaining <= 0 or len(candle_buckets) >= self.config.lookback_periods:
                     break
                 self._log.warning(
                     "Scraping: WS disconnected — retrying (%.0fs remaining): %s", remaining, exc,
