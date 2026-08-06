@@ -48,7 +48,10 @@ class ChainlinkPriceCache:
         @streamer.on("price")
         def on_price(sym: str, price: float, timestamp: datetime) -> None:
             with self._lock:
-                self._prices[sym] = (price, timestamp.timestamp())
+                # Track the local receive time, not the oracle-reported
+                # timestamp — the oracle may report an old feed timestamp even
+                # for a fresh message, which would make get_price flap.
+                self._prices[sym] = (price, time.time())
 
         if self._owns_streamer:
             self._streamer.start(symbol, background=True)

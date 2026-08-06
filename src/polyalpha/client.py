@@ -104,7 +104,13 @@ class Client:
             from .database.database import TradeDatabase
             self._db = TradeDatabase(db_path)
 
-        self.markets = MarketClient(timeout=timeout, retries=retries, rate_limit=rate_limit)
+        self.time_sync = TimeSync()
+        self.markets = MarketClient(
+            timeout=timeout,
+            retries=retries,
+            rate_limit=rate_limit,
+            time_sync=self.time_sync,
+        )
         self.paper   = PaperEngine(balance=balance, config=paper_config, db_path=db_path, db=self._db)
         self.ai      = OpenRouterClient(api_key=openrouter_api_key) if openrouter_api_key else None
         self._clob   = ClobBookClient(timeout=timeout, retries=retries, rate_limit=rate_limit)
@@ -140,7 +146,6 @@ class Client:
 
         self._timeout = timeout
         self._retries = retries
-        self.time_sync = TimeSync()
         self._log.info(
             "Client ready — balance=%.1f, timeout=%d, retries=%d, rate_limit=%s",
             balance, timeout, retries, rate_limit or "unlimited",
