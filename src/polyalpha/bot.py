@@ -243,9 +243,14 @@ class TickContext:
         -------
         PaperOrder
         """
-        return self._client.paper.limit(
+        if self._bot.buy_once_per_market and self._bot._bought_this_market:
+            return None
+        order = self._client.paper.limit(
             market=self._market, side=side, price=price, amount=amount
         )
+        if order:
+            self._bot._bought_this_market = True
+        return order
 
     def close_position(self, side: str, amount: Optional[float] = None):
         """
@@ -544,6 +549,8 @@ class Bot:
         self._candle_start_time: float = 0.0
         self._candle_open_price: Optional[float] = None
         self._candle_id: int = 0
+        self._final_up: Optional[float] = None
+        self._final_down: Optional[float] = None
         self._bought_this_candle: dict[int, set[str]] = {}
         self._stop_event = threading.Event()
         self._tick_count = 0
@@ -848,6 +855,8 @@ class Bot:
 
         @self._stream.on("close")
         def on_close():
+            self._final_up = getattr(self._stream, "up", None)
+            self._final_down = getattr(self._stream, "down", None)
             self._log.info("Market closed: %s", self._market.slug)
 
         @self._stream.on("price_anomaly")
@@ -902,6 +911,8 @@ class Bot:
 
         @self._stream.on("close")
         def on_close():
+            self._final_up = getattr(self._stream, "up", None)
+            self._final_down = getattr(self._stream, "down", None)
             self._log.info("Market closed: %s", self._market.slug)
 
         await self._stream.run_async()
@@ -917,38 +928,56 @@ class Bot:
         self._market = None
         self._ctx = None
         self._candle_id = 0
+        self._candle_start_time = 0.0
+        self._candle_open_price = None
+        self._final_up = None
+        self._final_down = None
         self._bought_this_candle = {}
         self._bought_this_market = False
         self._log.info("Rolling over to next market...")
         await self._asleep(2)
 
     def _resolve(self) -> None:
-        """Wait for resolution and record outcome."""
+        """Resolve paper positions for the finished market and record outcomes."""
         if not self._market:
             return
-        # Check positions
-        for pos in self._client.paper.positions():
-            if pos.resolved:
-                self._trade_count += 1
-                self._slog.info(
-                    "Trade resolved: %s %s | pnl=$%.2f",
-                    pos.side, pos.outcome, pos.pnl,
+        # For paper trading the market is resolved manually: the higher
+        # final price is the winning side.
+        final_up = self._final_up if self._final_up is not None else getattr(self._stream, "up", None)
+        final_down = self._final_down if self._final_down is not None else getattr(self._stream, "down", None)
+        if final_up is not None and final_down is not None and final_up != final_down:
+            outcome = "UP" if final_up > final_down else "DOWN"
+            try:
+                self._client.paper.resolve(self._market, outcome)
+            except Exception as exc:
+                self._slog.warning("Failed to resolve paper positions: %s", exc)
+        else:
+            self._slog.info("No final prices to resolve %s", self._market.slug)
+
+        # Report each resolved position for this market.
+        for pos in self._client.paper.all_positions():
+            if pos.market_id != self._market.id or not pos.resolved:
+                continue
+            self._trade_count += 1
+            self._slog.info(
+                "Trade resolved: %s %s | pnl=$%.2f",
+                pos.side, pos.outcome, pos.pnl,
+            )
+
+            # Send Telegram notification if configured
+            if self._telegram:
+                self._telegram.send_resolve(
+                    asset=self.asset,
+                    side=pos.side,
+                    outcome=pos.outcome,
+                    pnl=pos.pnl
                 )
-                
-                # Send Telegram notification if configured
-                if self._telegram:
-                    self._telegram.send_resolve(
-                        asset=self.asset,
-                        side=pos.side,
-                        outcome=pos.outcome,
-                        pnl=pos.pnl
-                    )
-                
-                if self._on_resolve:
-                    try:
-                        self._on_resolve(pos)
-                    except Exception as exc:
-                        self._slog.exception("onresolve handler error: %s", exc)
+
+            if self._on_resolve:
+                try:
+                    self._on_resolve(pos)
+                except Exception as exc:
+                    self._slog.exception("onresolve handler error: %s", exc)
 
     def _rollover(self) -> None:
         """Clean up and prepare for next cycle."""
@@ -961,6 +990,10 @@ class Bot:
         self._market = None
         self._ctx = None
         self._candle_id = 0
+        self._candle_start_time = 0.0
+        self._candle_open_price = None
+        self._final_up = None
+        self._final_down = None
         self._bought_this_candle = {}
         self._bought_this_market = False
         self._log.info("Rolling over to next market...")

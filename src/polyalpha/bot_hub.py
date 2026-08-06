@@ -793,6 +793,7 @@ class StrategyContext:
         paper: PaperEngine,
         market: Optional[Market],
         price_history: deque,
+        down_price_history: Optional[deque] = None,
         asset: str = "BTC",
         clob: Optional[ClobBookClient] = None,
         chainlink_cache: Optional[object] = None,
@@ -812,6 +813,7 @@ class StrategyContext:
         self._paper = paper
         self._market = market
         self._price_history = price_history  # shared across strategies
+        self._down_price_history: deque = down_price_history if down_price_history is not None else deque(maxlen=200)
         self._clob = clob
         self._chainlink_cache = chainlink_cache
         self._chainlink = chainlink
@@ -823,7 +825,9 @@ class StrategyContext:
         self._get_candle_id: Callable[[], int] = get_candle_id or (lambda: 0)
         self._bought_this_candle: dict[int, dict[str, set[str]]] = bought_this_candle if bought_this_candle is not None else {}
         self._cached_series = None
+        self._down_cached_series = None
         self._indicators: IndicatorAccessor = IndicatorAccessor(self._get_price_series)
+        self._down_indicators: IndicatorAccessor = IndicatorAccessor(self._get_down_price_series)
         self._orderbook: Optional[OrderBookAccessor] = None
         self._cl_window: Optional[TimeWindow] = cl_window if cl_window is not None else (TimeWindow(max_age=120) if TimeWindow is not None else None)
 
@@ -985,10 +989,19 @@ class StrategyContext:
         return order
 
     def limit(self, side: str, price: float, amount: float):
-        """Place a limit order against this strategy's paper engine."""
-        return self._paper.limit(
+        """Place a limit order against this strategy's paper engine.
+
+        Respects the same ``buy_once_per_market`` guard as :meth:`buy`, so
+        a limit order cannot be used to circumvent the once-per-market cap.
+        """
+        if self._hub is not None and self._hub.buy_once_per_market and self._hub._bought_this_market.get(self.name, False):
+            return None
+        order = self._paper.limit(
             market=self._market, side=side, price=price, amount=amount
         )
+        if self._hub is not None and order:
+            self._hub._bought_this_market[self.name] = True
+        return order
 
     def close_position(self, side: str, amount: Optional[float] = None):
         """Close an open position for this strategy."""
@@ -1066,6 +1079,18 @@ class StrategyContext:
         self._cached_series = pd.Series(list(self._price_history))
         return self._cached_series
 
+    def _get_down_price_series(self):
+        if self._down_cached_series is not None:
+            return self._down_cached_series
+        if pd is None:
+            raise RuntimeError(
+                "Indicators require 'pandas'. Install: pip install pandas"
+            )
+        if len(self._down_price_history) < 14:
+            return None
+        self._down_cached_series = pd.Series(list(self._down_price_history))
+        return self._down_cached_series
+
     @property
     def indicators(self) -> IndicatorAccessor:
         """First-class indicator access (RSI, MACD, Bollinger Bands, SMA, EMA).
@@ -1082,7 +1107,18 @@ class StrategyContext:
 
     def _invalidate_series_cache(self) -> None:
         self._cached_series = None
+        self._down_cached_series = None
         self._indicators.invalidate()
+        self._down_indicators.invalidate()
+
+    @property
+    def down_indicators(self) -> IndicatorAccessor:
+        """Indicators computed on the DOWN leg price history.
+
+        Mirrors ``ctx.indicators`` but is fed from ``down`` ticks instead
+        of ``up`` ticks, so DOWN-based signals use DOWN data.
+        """
+        return self._down_indicators
 
     @property
     def rsi(self) -> Optional[float]:
@@ -1356,17 +1392,31 @@ class BotHub:
         self._market: Optional[Market] = None
         self._stream = None
         self._price_history: deque[float] = deque(maxlen=200)
+        self._down_price_history: deque[float] = deque(maxlen=200)
         self._stop_event = threading.Event()
         self._tick_count = 0
         self._candle_start_time: float = 0.0
         self._candle_open_price: Optional[float] = None
         self._candle_id: int = 0
         self._bought_this_candle: dict[int, dict[str, set[str]]] = {}
+        self._final_up: Optional[float] = None
+        self._final_down: Optional[float] = None
+        # Resolve the shared Chainlink streamer ONCE. When the caller supplies
+        # a shared globals.price_feed we reuse it for both the price cache and
+        # the context streamer instead of opening a second oracle socket.
+        shared_cl = None
+        if self._globals is not None:
+            try:
+                from .analysis.streaming import ChainlinkStreamer
+                _pf = getattr(self._globals, "price_feed", None)
+                shared_cl = _pf if isinstance(_pf, ChainlinkStreamer) else None
+            except Exception:
+                shared_cl = None
         self._chainlink_cache: Optional[object] = None
         if chainlink:
             try:
                 from .core.chainlink_cache import ChainlinkPriceCache
-                self._chainlink_cache = ChainlinkPriceCache(symbol=self.asset)
+                self._chainlink_cache = ChainlinkPriceCache(symbol=self.asset, streamer=shared_cl)
             except Exception as exc:
                 self._log.warning("Chainlink cache unavailable: %s", exc)
         self._log = logging.getLogger("polyalpha.BotHub")
@@ -1389,8 +1439,7 @@ class BotHub:
         self._shared_cl_window: Optional[TimeWindow] = TimeWindow(max_age=120) if TimeWindow is not None else None
         try:
             from .analysis.streaming import ChainlinkStreamer
-            shared = getattr(self._globals, "price_feed", None) if self._globals is not None else None
-            cl = shared if isinstance(shared, ChainlinkStreamer) else None
+            cl = shared_cl
             if cl is None:
                 cl = ChainlinkStreamer()
                 cl.start(asset, background=True)
@@ -1786,6 +1835,7 @@ class BotHub:
                 paper=s.paper,
                 market=self._market,
                 price_history=self._price_history,
+                down_price_history=self._down_price_history,
                 asset=self.asset,
                 clob=self._shared_client._clob,
                 chainlink_cache=self._chainlink_cache,
@@ -1825,6 +1875,7 @@ class BotHub:
                 return
             self._tick_count += 1
             self._price_history.append(up)
+            self._down_price_history.append(down)
             # Refresh Binance data on each tick (candle-gated internally)
             if self._binance is not None:
                 try:
@@ -1867,6 +1918,8 @@ class BotHub:
 
         @self._stream.on("close")
         def on_close():
+            self._final_up = getattr(self._stream, "up", None)
+            self._final_down = getattr(self._stream, "down", None)
             self._log.info("Market closed: %s", self._market.slug)
 
         # Blocking — returns when the stream ends (market resolved).
@@ -1888,6 +1941,7 @@ class BotHub:
                 return
             self._tick_count += 1
             self._price_history.append(up)
+            self._down_price_history.append(down)
             # Refresh Binance data on each tick (candle-gated internally)
             if self._binance is not None:
                 try:
@@ -1927,6 +1981,8 @@ class BotHub:
 
         @self._stream.on("close")
         def on_close():
+            self._final_up = getattr(self._stream, "up", None)
+            self._final_down = getattr(self._stream, "down", None)
             self._log.info("Market closed: %s", self._market.slug)
 
         await self._stream.run_async()
@@ -1935,26 +1991,38 @@ class BotHub:
         """Resolve positions for every strategy and variant after the market closes."""
         if not self._market:
             return
+        final_up = self._final_up if self._final_up is not None else getattr(self._stream, "up", None)
+        final_down = self._final_down if self._final_down is not None else getattr(self._stream, "down", None)
+        if final_up is None or final_down is None or final_up == final_down:
+            self._log.info("No final prices to resolve %s", self._market.slug)
+            return
+        outcome = "UP" if final_up > final_down else "DOWN"
         for s in self._active_tickers():
             if s.paper is None:
                 continue
-            for pos in s.paper.positions():
-                if pos.resolved:
-                    slog = self._strategy_loggers.get(s.name, self._log)
-                    slog.info(
-                        "Trade resolved: %s %s | pnl=$%.2f",
-                        pos.side, pos.outcome, pos.pnl,
+            try:
+                s.paper.resolve(self._market, outcome)
+            except Exception as exc:
+                self._log.warning("Failed to resolve %s: %s", s.name, exc)
+                continue
+            for pos in s.paper.all_positions():
+                if pos.market_id != self._market.id or not pos.resolved:
+                    continue
+                slog = self._strategy_loggers.get(s.name, self._log)
+                slog.info(
+                    "Trade resolved: %s %s | pnl=$%.2f",
+                    pos.side, pos.outcome, pos.pnl,
+                )
+
+                # Send Telegram notification if configured
+                if self._telegram:
+                    self._telegram.send_resolve(
+                        asset=self.asset,
+                        side=pos.side,
+                        outcome=pos.outcome,
+                        pnl=pos.pnl,
+                        strategy_name=s.name
                     )
-                    
-                    # Send Telegram notification if configured
-                    if self._telegram:
-                        self._telegram.send_resolve(
-                            asset=self.asset,
-                            side=pos.side,
-                            outcome=pos.outcome,
-                            pnl=pos.pnl,
-                            strategy_name=s.name
-                        )
 
     def _rollover(self) -> None:
         """Clean up the stream and prepare for the next cycle."""
@@ -1966,6 +2034,10 @@ class BotHub:
             self._stream = None
         self._market = None
         self._candle_id = 0
+        self._candle_start_time = 0.0
+        self._candle_open_price = None
+        self._final_up = None
+        self._final_down = None
         self._bought_this_candle = {}
         self._bought_this_market = {}
         for s in self._active_tickers():
@@ -1982,6 +2054,10 @@ class BotHub:
             self._stream = None
         self._market = None
         self._candle_id = 0
+        self._candle_start_time = 0.0
+        self._candle_open_price = None
+        self._final_up = None
+        self._final_down = None
         self._bought_this_candle = {}
         self._bought_this_market = {}
         for s in self._active_tickers():
