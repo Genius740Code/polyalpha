@@ -265,9 +265,19 @@ class TradeRepository:
                         order_id, status, user_id
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, trade_data)
+                # Recover the ids of exactly the rows just inserted. Python's
+                # cursor.lastrowid is unreliable for executemany, so read the
+                # AUTOINCREMENT sequence instead: our rows own the top n ids,
+                # contiguous under this single-writer transaction (SQLite
+                # serializes writers, and AUTOINCREMENT issues consecutive ids).
+                cursor.execute("SELECT seq FROM sqlite_sequence WHERE name = 'trades'")
+                seq_row = cursor.fetchone()
+                last_rowid = seq_row[0] if seq_row else len(trades)
                 conn.commit()
-                cursor.execute("SELECT id FROM (SELECT id FROM trades ORDER BY id DESC LIMIT ?) ORDER BY id", (len(trades),))
-                trade_ids = [row[0] for row in cursor.fetchall()]
+                count = len(trades)
+                trade_ids = (
+                    list(range(last_rowid - count + 1, last_rowid + 1)) if count else []
+                )
                 self._on_cache_invalidate()
                 log.info("Bulk saved %d trades", len(trades))
                 return trade_ids
