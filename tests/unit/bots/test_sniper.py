@@ -90,6 +90,68 @@ def test_sniper_buy_once_per_market_false_allows_reentry():
     assert sniper._pending_order is not None
 
 
+# ── Staleness Guard Tests ───────────────────────────────────────────────────
+
+def _make_stale_stream(age_seconds):
+    """A fake stream whose price is ``age_seconds`` seconds old."""
+    from unittest.mock import MagicMock
+    stream = MagicMock(up=0.95, down=0.45, running=True)
+    stream.price_age_seconds = MagicMock(return_value=age_seconds)
+    return stream
+
+
+@pytest.mark.unit
+def test_sniper_config_stale_data_max_age_default():
+    """stale_data_max_age defaults to 5.0 seconds."""
+    config = SniperConfig(asset="BTC", timeframe="5m")
+    assert config.stale_data_max_age == 5.0
+
+
+@pytest.mark.unit
+def test_sniper_config_stale_data_max_age_validation():
+    """stale_data_max_age must be positive."""
+    with pytest.raises(ValueError, match="stale_data_max_age must be positive"):
+        SniperConfig(asset="BTC", timeframe="5m", stale_data_max_age=0)
+    with pytest.raises(ValueError, match="stale_data_max_age must be positive"):
+        SniperConfig(asset="BTC", timeframe="5m", stale_data_max_age=-1)
+
+
+@pytest.mark.unit
+def test_sniper_entry_skipped_when_price_frozen_past_threshold():
+    """Frozen price (older than threshold) → no order is placed."""
+    sniper = _make_sniper_armed()
+    sniper._stream = _make_stale_stream(age_seconds=90.0)
+    sniper._on_price_update(0.95, 0.45)
+    assert sniper._pending_order is None
+
+
+@pytest.mark.unit
+def test_sniper_entry_allowed_when_price_fresh():
+    """Fresh price (within threshold) → order is placed."""
+    sniper = _make_sniper_armed()
+    sniper._stream = _make_stale_stream(age_seconds=0.5)
+    sniper._on_price_update(0.95, 0.45)
+    assert sniper._pending_order is not None
+
+
+@pytest.mark.unit
+def test_sniper_place_order_skips_stale():
+    """_place_order refuses to fill on a stale price."""
+    sniper = _make_sniper_armed()
+    sniper._stream = _make_stale_stream(age_seconds=90.0)
+    sniper._place_order()
+    assert sniper._pending_order is None
+
+
+@pytest.mark.unit
+def test_sniper_place_order_blocked_without_stream():
+    """No live stream → treated as stale, no order placed."""
+    sniper = _make_sniper_armed()
+    sniper._stream = None
+    sniper._place_order()
+    assert sniper._pending_order is None
+
+
 @pytest.mark.unit
 def test_sniper_trade_record():
     record = TradeRecord(

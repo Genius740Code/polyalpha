@@ -402,6 +402,10 @@ class SniperConfig:
     amount: float = 20.0
     buy_once_per_market: bool = True
 
+    # Staleness guard: skip entry when the stream's last price update is older
+    # than this many seconds (the stream may have dropped / gone quiet).
+    stale_data_max_age: float = 5.0
+
     # Advanced time windows (optional - overrides window_seconds if provided)
     time_windows: Optional[List[TimeWindow]] = None  # Multiple time windows
     conditional_windows: Optional[List[ConditionalWindow]] = None  # Indicator-based windows
@@ -518,6 +522,12 @@ class SniperConfig:
         # Validate amount
         if self.amount <= 0:
             raise ValueError(f"amount must be positive, got {self.amount}")
+
+        # Validate staleness guard
+        if self.stale_data_max_age <= 0:
+            raise ValueError(
+                f"stale_data_max_age must be positive, got {self.stale_data_max_age}"
+            )
 
         # Validate max_position_size
         if self.max_position_size is not None and self.max_position_size <= 0:
@@ -1221,6 +1231,19 @@ class Sniper:
 
     # ── Price Monitoring ───────────────────────────────────────────────────────
 
+    def _price_age_seconds(self) -> float:
+        """Age of the stream's last price update, or ``inf`` if unavailable."""
+        if not self._stream:
+            return float("inf")
+        fn = getattr(self._stream, "price_age_seconds", None)
+        if callable(fn):
+            return float(fn())
+        return float("inf")
+
+    def _price_is_stale(self) -> bool:
+        """True when the last stream price update predates ``stale_data_max_age``."""
+        return self._price_age_seconds() > self.config.stale_data_max_age
+
     def _on_price_update(self, up: float, down: float) -> None:
         """Handle price updates from the stream."""
         with self._state_lock:
@@ -1272,6 +1295,14 @@ class Sniper:
 
                 # Check BTC price change filter
                 if not self._check_btc_change():
+                    return
+
+                # Staleness guard: reject entry when the stream's last price
+                # update is older than the configured threshold.
+                if self._price_is_stale():
+                    age = self._price_age_seconds()
+                    self._log.info("entry skipped: stale price (age=%.1fs) ul=%.4f",
+                                  age, current_price)
                     return
 
                 self._place_order()
@@ -1555,6 +1586,15 @@ class Sniper:
     def _place_order(self) -> None:
         """Place a limit order at the current price (not entry_price)."""
         try:
+            # Staleness guard: never read self._stream.{up,down} blindly when
+            # the price feed has gone quiet.
+            if self._price_is_stale():
+                age = self._price_age_seconds()
+                ul = getattr(self._stream, self.config.side.lower(), None)
+                self._log.info("entry skipped: stale price (age=%.1fs) ul=%s",
+                              age, "%.4f" % ul if ul is not None else "n/a")
+                return
+
             # Get current price from stream
             current_price = getattr(self._stream, self.config.side.lower(), None)
             if current_price is None:

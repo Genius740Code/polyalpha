@@ -230,6 +230,17 @@ class Stream:
             raise ValueError(f"Unknown event '{event}'. Valid: {sorted(EVENTS)}")
         self._handlers[event].append(fn)
 
+    def price_age_seconds(self) -> float:
+        """
+        Seconds since the last validated price update was received.
+
+        Large values indicate the WS has gone quiet (dropped / stale).
+        Callers can use this to refuse trading on price data older than a
+        configured threshold instead of reading ``self.up`` / ``self.down``
+        blindly.
+        """
+        return time.time() - self._last_price_time
+
     def start(self, background: bool = False) -> None:
         """
         Start the WebSocket stream.
