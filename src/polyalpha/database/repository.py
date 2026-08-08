@@ -717,6 +717,40 @@ class TradeRepository:
                 log.exception("Failed to update trade ID=%d", trade_id)
                 return False
 
+    def mark_outcome(self, market_slug: str, market_outcome: str) -> int:
+        """Backfill the resolved outcome for all unresolved trades of a market.
+
+        Any trade of *market_slug* whose ``outcome`` is NULL is set to WON when
+        its ``side`` matches the resolved *market_outcome* (UP/DOWN), else LOST.
+        The trade's status is forced to ``closed`` so the row is never left with
+        a NULL outcome for a market that actually resolved.
+
+        Returns the number of rows updated.
+        """
+        market_outcome = market_outcome.upper()
+        if market_outcome not in ("UP", "DOWN"):
+            raise ValueError(f"market_outcome must be 'UP' or 'DOWN', got '{market_outcome}'")
+        with self._conn._connection_ctx() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("""
+                    UPDATE trades
+                    SET outcome = CASE WHEN side = ? THEN 'WON' ELSE 'LOST' END,
+                        status  = 'closed'
+                    WHERE market_slug = ? AND (outcome IS NULL OR outcome = '')
+                """, (market_outcome, market_slug))
+                conn.commit()
+                updated = cursor.rowcount
+                if updated > 0:
+                    self._on_cache_invalidate()
+                log.info("mark_outcome: %d NULL-outcome rows resolved for %s -> %s",
+                         updated, market_slug, market_outcome)
+                return updated
+            except Exception:
+                conn.rollback()
+                log.exception("Failed to mark outcome for market=%s", market_slug)
+                return 0
+
     def execute_parallel_queries(
         self,
         queries: List[str],

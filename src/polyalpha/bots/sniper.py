@@ -1775,12 +1775,25 @@ class Sniper:
             outcome = "UP" if final_up > final_down else "DOWN"
             self._log.info("Paper resolution: %s (final prices: UP=%.4f, DOWN=%.4f)",
                           outcome, final_up, final_down)
+        else:
+            # Stream dropped before a clean market_resolved — fall back to
+            # resolving via Gamma so the outcome is not silently lost.
+            outcome = self._gamma_resolve(self._market.slug)
+            if outcome:
+                self._log.info("Paper resolution via Gamma fallback: %s", outcome)
+            else:
+                self._log.warning("No resolved position found via stream or Gamma for %s",
+                                  self._market.slug)
 
+        if outcome:
             # Resolve the position (this saves to database)
             try:
                 self.client.paper.resolve(self._market, outcome)
             except Exception as exc:
                 self._log.error("Failed to resolve position: %s", exc)
+
+            # Backfill any rows left with outcome=NULL for this market.
+            self._mark_outcome(self._market.slug, outcome)
 
             # Now record the trade
             positions = self.client.paper.positions()
@@ -1790,6 +1803,26 @@ class Sniper:
                     return
 
         self._log.warning("No resolved position found for %s", self._market.slug)
+
+    def _gamma_resolve(self, slug: str) -> Optional[str]:
+        """Resolve an outcome from Gamma when the live stream dropped."""
+        try:
+            return self.client.markets.resolve_outcome(slug)
+        except Exception as exc:
+            self._log.error("Gamma resolution failed for %s: %s", slug, exc)
+            return None
+
+    def _mark_outcome(self, slug: str, outcome: str) -> None:
+        """Persist a resolved outcome to the database so no NULL rows remain."""
+        db = getattr(self.client.paper, 'database', None)
+        if db is None:
+            return
+        try:
+            updated = db.mark_outcome(slug, outcome)
+            if updated:
+                self._log.info("Backfilled %d NULL-outcome rows for %s", updated, slug)
+        except Exception as exc:
+            self._log.error("mark_outcome failed for %s: %s", slug, exc)
 
     def _on_market_close(self) -> None:
         """Handle market close event."""

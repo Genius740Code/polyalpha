@@ -308,6 +308,73 @@ class MarketClient:
         """
         return self._fetch_by_slug(slug)
 
+    def resolve_outcome(self, slug: str) -> str | None:
+        """
+        Resolve the final UP/DOWN outcome of *slug* from Gamma.
+
+        Used as a fallback when the websocket drops before a clean
+        ``market_resolved``: Gamma prices the winning token at $1.00
+        (loser at $0.00) once the market is resolved.
+
+        Returns ``"UP"``/``"DOWN"`` when the winner is known, else ``None``.
+        """
+        try:
+            data = self._get("/events", params={"slug": slug})
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return None
+            raise
+
+        events = data if isinstance(data, list) else [data]
+        events = [e for e in events if e]
+
+        if not events:
+            return None
+
+        event  = events[0]
+        market = (event.get("markets") or [{}])[0]
+
+        outcomes   = _jloads(market.get("outcomes",      "[]"), [])
+        prices_raw = _jloads(market.get("outcomePrices", "[]"), [])
+
+        def _find_index(variants: list[str]) -> int | None:
+            pattern = r'\b(?:' + '|'.join(re.escape(v) for v in variants) + r')\b'
+            for i, label in enumerate(outcomes):
+                if re.search(pattern, str(label), re.IGNORECASE):
+                    return i
+            return None
+
+        up_idx   = _find_index(["up", "higher", "greater", "above", "over", "yes"])
+        down_idx = _find_index(["down", "lower", "below", "under", "no"])
+
+        if up_idx is None:
+            up_idx = (1 if down_idx == 0 else 0) if down_idx is not None and len(outcomes) >= 2 else 0
+        if down_idx is None:
+            down_idx = 0 if up_idx != 0 else 1
+
+        def _price(idx: int) -> float:
+            try:
+                if idx < len(prices_raw):
+                    return float(prices_raw[idx])
+            except (TypeError, ValueError):
+                pass
+            return 0.0
+
+        up_price   = _price(up_idx)
+        down_price = _price(down_idx)
+
+        log.debug("gamma resolve_outcome slug=%s up=%.4f down=%.4f", slug, up_price, down_price)
+
+        resolved = bool(event.get("closed") or event.get("archived"))
+        if not resolved:
+            status = (market.get("umaResolutionStatus") or "").upper()
+            if status != "RESOLVED":
+                return None
+
+        if up_price == down_price:
+            return None
+        return "UP" if up_price > down_price else "DOWN"
+
     def search(self, query: str, limit: int = DEFAULT_SEARCH_LIMIT) -> list[Market]:
         """
         Search open markets by keyword.

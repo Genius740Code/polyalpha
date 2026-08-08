@@ -626,3 +626,49 @@ def test_sniper_config_backward_compatibility():
     )
     assert config.window_seconds == 35
     assert config.time_windows is None
+
+
+# ── Gamma resolution fallback (#4) ────────────────────────────────────────────
+
+@pytest.mark.unit
+def test_wait_for_resolution_gamma_fallback():
+    """Stream dropped without close → Gamma resolves the outcome via API."""
+    sniper = _make_sniper_armed()
+    sniper._filled_order = MagicMock(side="UP", price=0.95, amount=20.0, id="order-1")
+    sniper._final_up = None
+    sniper._final_down = None
+    sniper._stream.running = False
+    sniper._stop_event.is_set()
+
+    import polyalpha.bots.sniper as sniper_mod
+    sniper_mod.RESOLUTION_TIMEOUT = 0
+    sniper.client.markets.resolve_outcome = MagicMock(return_value="UP")
+    sniper.client.paper.resolve = MagicMock()
+    sniper.client.paper.positions = MagicMock(return_value=[])
+
+    sniper._wait_for_resolution()
+
+    sniper.client.markets.resolve_outcome.assert_called_once_with(sniper._market.slug)
+    sniper.client.paper.resolve.assert_called_once()
+    assert sniper.client.paper.resolve.call_args[0][1] == "UP"
+
+
+@pytest.mark.unit
+def test_wait_for_resolution_gamma_unresolved_warns():
+    """Unresolved Gamma → warning path, no crash, no outcome recorded."""
+    sniper = _make_sniper_armed()
+    sniper._filled_order = MagicMock(side="UP", price=0.95, amount=20.0, id="order-1")
+    sniper._final_up = None
+    sniper._final_down = None
+    sniper._stream.running = False
+    sniper._stop_event.is_set()
+
+    import polyalpha.bots.sniper as sniper_mod
+    sniper_mod.RESOLUTION_TIMEOUT = 0
+    sniper._gamma_resolve = MagicMock(return_value=None)
+    sniper.client.paper.resolve = MagicMock()
+
+    sniper._wait_for_resolution()
+
+    sniper._gamma_resolve.assert_called_once()
+    sniper.client.paper.resolve.assert_not_called()
