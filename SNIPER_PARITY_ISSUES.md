@@ -27,11 +27,17 @@ Secondary divergences: best vs worst book level; different market discovery; mis
   - Do **not** read `self._stream.up` blindly.
 - **Test:** prices frozen past the threshold → no order placed; nothing freezes the thread.
 
-## #2 — Route polyalpha off its own websocket onto the hub feed  🟠 P1
+## #2 — Route polyalpha off its own websocket onto the hub feed  🟠 P1 ✅ resolved
 
-- `sniper_poly.py` currently uses `client.stream(market)`.
+- `client.stream(market)` on `sniper_poly.py` was replaced; the Sniper now runs off an injected price source instead of opening its own WebSocket.
 - **Preferred:** replace it with the hub-driven price source; `sniper_plain.py:Clob` already parses the identical feed (`book`, `price_change`, `best_bid_ask`). Reuse the same `Clob`/`HubClient` across both bots and drive the Sniper's `price` events from it (preserving UP/DOWN orientation).
 - **Acceptable fallback** (if the wiring is too invasive): make poly's Stream reconnect faster — lower `STALE_DATA_SECONDS` to `10`, force-reconnect at `2x` — **and** still add fix #1. Document the tradeoff.
+
+**Implemented (both routes):**
+- `Sniper.__init__` now accepts an injected price feed via the keyword-only `stream=` argument. When provided, `_setup_stream()` uses it (`Using external price feed for …`) instead of calling `client.stream(market)`, and `_cleanup_stream()` leaves it running because the caller (hub) owns it — so the injected feed survives across market cycles. The expected surface is captured in the new `StreamLike` Protocol.
+- New `polyalpha.bots.HubFeed` (exported in `bots/__init__.py`) is a Stream-compatible, push-based adapter: `push(up, down)` / `push_book(side, bids, asks, last_trade_price)` feed it from the hub's own parsed feed; `up`/`down`/`running`, `on(event)`, `price_age_seconds()`, `start()`/`stop()` mirror the native stream so no Sniper changes are needed beyond passing `stream=hub_feed`.
+- Fallback applied too: `STALE_DATA_SECONDS` 30 → 10; `_check_stale_data()` now force-reconnects at `2x` (was `3x`). Docs updated in `docs/streaming.md` and `docs/troubleshooting.md`.
+- Tests: `tests/unit/bots/test_hub_feed.py` (new), plus injected-feed + 10s/2x reconnect coverage in `tests/unit/bots/test_sniper.py` and `tests/unit/stream/test_stream_reconnect.py`.
 
 ## #3 — Use the same book level in both bots  🟡 P2
 

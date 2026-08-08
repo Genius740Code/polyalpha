@@ -163,7 +163,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Optional, List
+from typing import Any, Callable, Optional, List, Protocol
 
 from ..core import ASSETS, TIMEFRAME_SECONDS, Market
 from ..core.market_sessions import validate_session_list, get_session
@@ -668,6 +668,39 @@ class SniperStats:
 
 # ── Sniper Bot ─────────────────────────────────────────────────────────────────
 
+class StreamLike(Protocol):
+    """Minimal surface an external price feed must expose to drive a Sniper.
+
+    Matches what the native stream provides so an injected feed
+    (e.g. :class:`polyalpha.bots.hub_feed.HubFeed`) is a drop-in
+    replacement for ``client.stream(market)``.
+    """
+
+    @property
+    def up(self) -> float:
+        ...
+
+    @property
+    def down(self) -> float:
+        ...
+
+    @property
+    def running(self) -> bool:
+        ...
+
+    def on(self, event: str) -> Callable:
+        ...
+
+    def start(self, background: bool = False) -> None:
+        ...
+
+    def stop(self) -> None:
+        ...
+
+    def price_age_seconds(self) -> float:
+        ...
+
+
 class Sniper:
     """
     Automated trading bot with advanced time-window entry and threshold execution.
@@ -748,7 +781,7 @@ class Sniper:
     STATE_ROLLOVER = "ROLLOVER"
     STATE_STOP = "STOP"
 
-    def __init__(self, client, config: Optional[SniperConfig] = None, **kwargs):
+    def __init__(self, client, config: Optional[SniperConfig] = None, *, stream: Optional[StreamLike] = None, **kwargs):
         """
         Initialize the Sniper bot.
 
@@ -758,6 +791,13 @@ class Sniper:
             The polyalpha client instance.
         config : SniperConfig, optional
             Bot configuration. If not provided, uses defaults.
+        stream : StreamLike, optional
+            Pre-built price feed. When provided, the Sniper is driven off this
+            external source (e.g. the shared hub feed) instead of opening its
+            own WebSocket via ``client.stream(market)``. It must expose the
+            same surface the Sniper expects from a stream: ``up``/``down``,
+            ``on(event)``, ``price_age_seconds()``, ``running``, ``start()``
+            and ``stop()`` — see :class:`polyalpha.bots.hub_feed.HubFeed`.
         **kwargs
             Additional keyword arguments passed to SniperConfig when config is not provided.
         """
@@ -765,6 +805,7 @@ class Sniper:
         if config is None:
             config = SniperConfig(**kwargs)
         self.config = config
+        self._injected_stream: Optional[StreamLike] = stream
 
         # Set up logging
         self._log = logging.getLogger(f"{__name__}.Sniper")
@@ -777,7 +818,7 @@ class Sniper:
 
         # Current market data
         self._market: Optional[Market] = None
-        self._stream = None
+        self._stream: Optional[StreamLike] = None
         self._pending_order = None
         self._filled_order = None
         self._final_up: Optional[float] = None
@@ -1192,8 +1233,18 @@ class Sniper:
     # ── Stream Setup ───────────────────────────────────────────────────────────
 
     def _setup_stream(self) -> None:
-        """Set up WebSocket stream for the current market."""
-        self._stream = self.client.stream(self._market)
+        """Set up the price feed for the current market.
+
+        Prefers an externally-provided ``stream`` (hub-driven feed) so the
+        Sniper is routed off its own WebSocket. Falls back to opening a
+        native ``client.stream(market)`` otherwise.
+        """
+        assert self._market is not None, "_setup_stream called before market discovery"
+        if self._injected_stream is not None:
+            self._stream = self._injected_stream
+            self._log.info("Using external price feed for %s", self._market.slug)
+        else:
+            self._stream = self.client.stream(self._market)
 
         # Register price handler
         @self._stream.on("price")
@@ -1213,20 +1264,27 @@ class Sniper:
         # Attach stream to paper engine for limit order fills
         self.client.paper.attach_stream(self._stream, self._market)
 
-        # Start stream in background
-        self._stream.start(background=True)
+        # Start stream in background (skip when the external feed already runs)
+        if not getattr(self._stream, "running", False):
+            self._stream.start(background=True)
 
         # Wait for connection
         time.sleep(STREAM_SETUP_DELAY)
         self._log.info("Stream attached for %s", self._market.slug)
 
     def _cleanup_stream(self) -> None:
-        """Clean up WebSocket stream."""
+        """Clean up the price feed.
+
+        Only stops streams the Sniper opened itself — an externally-provided
+        feed is owned by the caller (e.g. the hub) and must stay alive across
+        market cycles.
+        """
         if self._stream:
-            try:
-                self._stream.stop()
-            except Exception:
-                pass
+            if self._stream is not self._injected_stream:
+                try:
+                    self._stream.stop()
+                except Exception:
+                    pass
             self._stream = None
 
     # ── Price Monitoring ───────────────────────────────────────────────────────

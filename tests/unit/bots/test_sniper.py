@@ -2,11 +2,14 @@
 Sniper bot tests — run with: pytest tests/unit/bots/test_sniper.py
 """
 
-import pytest
+from unittest.mock import MagicMock
+from datetime import datetime, timezone
+
 import polyalpha
+import pytest
+
 from polyalpha.bots import Sniper
 from polyalpha.bots.sniper import SniperConfig, TradeRecord, SniperStats, TimeWindow, ConditionalWindow, TimeFilter
-from datetime import datetime, timezone
 
 
 @pytest.mark.unit
@@ -149,6 +152,86 @@ def test_sniper_place_order_blocked_without_stream():
     sniper = _make_sniper_armed()
     sniper._stream = None
     sniper._place_order()
+    assert sniper._pending_order is None
+
+
+# ── External Hub Feed (issue #2) ────────────────────────────────────────────
+
+@pytest.mark.unit
+def test_sniper_setup_uses_injected_feed(monkeypatch):
+    """A Sniper given an external feed must NOT open its own WebSocket."""
+    import polyalpha.bots.sniper as sniper_mod
+    from polyalpha.bots import HubFeed
+    monkeypatch.setattr(sniper_mod, "STREAM_SETUP_DELAY", 0)
+    sniper = _make_sniper_armed()
+    feed = HubFeed(market=sniper._market, up=0.95, down=0.45)
+    sniper._injected_stream = feed
+
+    sniper.client.stream = MagicMock(side_effect=AssertionError("must not open own stream"))
+    sniper._setup_stream()
+
+    assert sniper._stream is feed
+    sniper.client.stream.assert_not_called()
+
+
+@pytest.mark.unit
+def test_sniper_cleanup_keeps_injected_feed_running():
+    """The Sniper must not stop a feed it does not own (shared hub feed)."""
+    from polyalpha.bots import HubFeed
+    sniper = _make_sniper_armed()
+    feed = HubFeed(market=sniper._market, up=0.95, down=0.45)
+    feed.start()
+    sniper._injected_stream = feed
+    sniper._stream = feed
+
+    sniper._cleanup_stream()
+
+    assert feed.running is True
+
+
+@pytest.mark.unit
+def test_sniper_cleanup_stops_native_stream():
+    """A stream the Sniper opened itself must still be stopped on cleanup."""
+    sniper = _make_sniper_armed()
+    native = MagicMock()
+    sniper._stream = native
+    sniper._injected_stream = None
+
+    sniper._cleanup_stream()
+
+    native.stop.assert_called_once_with()
+
+
+@pytest.mark.unit
+def test_sniper_injected_feed_fresh_price_places_order(monkeypatch):
+    """Pushing a fresh price into an injected HubFeed triggers entry."""
+    import polyalpha.bots.sniper as sniper_mod
+    from polyalpha.bots import HubFeed
+    monkeypatch.setattr(sniper_mod, "STREAM_SETUP_DELAY", 0)
+    sniper = _make_sniper_armed()
+    feed = HubFeed(market=sniper._market, up=0.95, down=0.45)
+    sniper._injected_stream = feed
+    sniper._setup_stream()
+
+    feed.push(0.95, 0.45)  # emits a fresh 'price' event → sniper entry
+
+    assert sniper._pending_order is not None
+
+
+@pytest.mark.unit
+def test_sniper_injected_feed_stale_price_skips(monkeypatch):
+    """A frozen external feed (no push) must trip the staleness guard."""
+    import polyalpha.bots.sniper as sniper_mod
+    from polyalpha.bots import HubFeed
+    monkeypatch.setattr(sniper_mod, "STREAM_SETUP_DELAY", 0)
+    sniper = _make_sniper_armed()
+    feed = HubFeed(market=sniper._market, up=0.95, down=0.45)
+    feed._last_price_time = 0.0  # pretend it went quiet long ago
+    sniper._injected_stream = feed
+    sniper._setup_stream()
+
+    sniper._on_price_update(0.95, 0.45)
+
     assert sniper._pending_order is None
 
 

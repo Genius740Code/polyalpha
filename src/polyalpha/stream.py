@@ -96,7 +96,7 @@ class Stream:
     ``price_anomaly`` (type: str, ...)          — emitted when price anomaly detected
     """
 
-    STALE_DATA_SECONDS = 30.0
+    STALE_DATA_SECONDS = 10.0
 
     def __init__(
         self,
@@ -807,7 +807,7 @@ class Stream:
         return False
 
     def _check_stale_data(self) -> bool:
-        """Force reconnect if no price update for 3x STALE_DATA_SECONDS."""
+        """Force reconnect if no price update for 2x STALE_DATA_SECONDS."""
         elapsed = time.time() - self._last_price_time
         if elapsed > self.STALE_DATA_SECONDS and not self._stale_warned:
             log.warning(
@@ -818,7 +818,7 @@ class Stream:
         elif elapsed <= self.STALE_DATA_SECONDS:
             self._stale_warned = False
 
-        if elapsed > self.STALE_DATA_SECONDS * 3:
+        if elapsed > self.STALE_DATA_SECONDS * 2:
             log.warning(
                 "Stream: no price update for %.0fs (market %s) — forcing reconnect",
                 elapsed, self.market.slug,

@@ -192,3 +192,33 @@ async def test_async_path_refreshes_stale_clock_on_frame():
     stream._on_message_async(MockWS(), "PING")
 
     assert stream._last_price_time != 500.0
+
+
+# ── issue #2: faster reconnect on stale data ──────────────────────────────────
+
+@pytest.mark.unit
+def test_stale_data_seconds_is_10():
+    """STALE_DATA_SECONDS is tightened to 10s so stale feeds reconnect faster."""
+    assert Stream.STALE_DATA_SECONDS == 10.0
+
+
+@pytest.mark.unit
+def test_check_stale_data_force_reconnects_at_2x(monkeypatch):
+    """A quiet feed forces a reconnect at 2x STALE_DATA_SECONDS, not 3x."""
+    stream = Stream(make_market())
+    reconnects = []
+
+    def fake_reconnect():
+        reconnects.append(True)
+
+    monkeypatch.setattr(stream, "_force_reconnect", fake_reconnect)
+
+    # 1.9x → warn only, no reconnect
+    stream._last_price_time = time.time() - (Stream.STALE_DATA_SECONDS * 1.9)
+    assert stream._check_stale_data() is False
+    assert reconnects == []
+
+    # 2.1x → force reconnect
+    stream._last_price_time = time.time() - (Stream.STALE_DATA_SECONDS * 2.1)
+    assert stream._check_stale_data() is True
+    assert len(reconnects) == 1

@@ -107,7 +107,7 @@ The stream auto-reconnects on unexpected disconnects:
 1. **Exponential backoff** — delay = `retry_delay * 2^(attempt-1)` plus ±20% random jitter
 2. **Max retries** — defaults to 10 attempts for a direct `Stream(...)`; emits `error` and stops after exhausting the budget
 3. **High-retry warning** — logged when >50% of retry budget is consumed
-4. **Stale data check** — warns if no price update for 30 seconds
+4. **Stale data check** — warns if no price update for 10 seconds, force-reconnects at 20 seconds (2x)
 
 ## Keepalive Protocol
 

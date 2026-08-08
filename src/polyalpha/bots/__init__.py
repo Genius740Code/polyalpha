@@ -14,7 +14,8 @@ Configuration:
 """
 
 from .sniper import Sniper, TimeWindow, ConditionalWindow, TimeFilter
+from .hub_feed import HubFeed
 from .tracker import Tracker
 from .weather_config import CITIES, get_config, list_configs, print_config
 
-__all__ = ["Sniper", "TimeWindow", "ConditionalWindow", "TimeFilter", "Tracker", "CITIES", "get_config", "list_configs", "print_config"]
+__all__ = ["Sniper", "TimeWindow", "ConditionalWindow", "TimeFilter", "Tracker", "CITIES", "get_config", "list_configs", "print_config", "HubFeed"]
