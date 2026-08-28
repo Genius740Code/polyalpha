@@ -101,6 +101,36 @@ try:
 except ImportError:
     TimeWindow = None  # type: ignore[assignment]
 
+# ── Chainlink history helper (user chooses {"1m":10, "1h":50, "1s":20}) ───
+
+def _resolve_chainlink_history(value, asset: str):
+    if value is None or value is False:
+        return None, False
+    try:
+        from .history import ChainlinkHistoryConfig, ChainlinkRecorder
+    except ImportError:
+        return None, False
+    if isinstance(value, ChainlinkRecorder):
+        return value, False
+    # Import here to avoid circular
+    from .history import ChainlinkHistoryConfig as CHC, ChainlinkRecorder as CR  # type: ignore
+    if isinstance(value, CHC):
+        rec = CR(config=value)
+        return rec, True
+    if isinstance(value, dict):
+        cfg = CHC(warmup=dict(value))
+        rec = CR(config=cfg)
+        return rec, True
+    if value is True:
+        cfg = CHC(warmup={"1m": 20})
+        rec = CR(config=cfg)
+        return rec, True
+    if isinstance(value, str):
+        cfg = CHC(warmup={"1m": 20}, db_path=value)
+        rec = CR(config=cfg)
+        return rec, True
+    return None, False
+
 MACDResult = namedtuple("MACDResult", ["macd", "signal", "histogram"])
 BBResult = namedtuple("BBResult", ["upper", "mid", "lower"])
 DonchianResult = namedtuple("DonchianResult", ["upper", "mid", "lower"])
@@ -806,6 +836,7 @@ class StrategyContext:
         get_candle_id=None,
         bought_this_candle=None,
         hub=None,
+        chainlink_history=None,
     ):
         self.name = name
         self._asset = asset
@@ -820,6 +851,8 @@ class StrategyContext:
         self._binance = binance
         self._hub = hub  # Reference to BotHub for Telegram notifications
         self._globals = globals  # Shared feeds (Globals) — one connection, many strategies
+        self._chainlink_history = chainlink_history
+        self._chainlink_history_view = None
         self._get_candle_open = get_candle_open or (lambda: None)
         self._get_seconds_in = get_seconds_in or (lambda: 0.0)
         self._get_candle_id: Callable[[], int] = get_candle_id or (lambda: 0)
@@ -905,6 +938,38 @@ class StrategyContext:
             if window is not None:
                 return window
         return self._cl_window
+
+    @property
+    def chainlink_history(self):
+        """
+        Chainlink candle history (shared, pruned to user keep counts).
+
+        Example: ``ctx.chainlink_history.ema("1m",10)``
+        or ``ctx.chainlink_history.candles("1m",10)``.
+        Supports both ``ema("1m",10)`` and ``ema("BTC","1m",10)`` forms.
+        Returns ``None`` if not configured on the hub.
+        """
+        rec = self._chainlink_history
+        # fallback to hub's recorder or globals
+        if rec is None and self._hub is not None:
+            rec = getattr(self._hub, "_chainlink_history", None)
+        if rec is None and self._globals is not None:
+            rec = getattr(self._globals, "chainlink_history", None)
+        if rec is None:
+            return None
+        if self._chainlink_history_view is not None:
+            return self._chainlink_history_view
+        try:
+            from .history.view import ChainlinkHistoryView
+            # ChainlinkHistoryView expects recorder; if rec is already a view, return it
+            if isinstance(rec, ChainlinkHistoryView):
+                self._chainlink_history_view = rec
+                return rec
+            view = ChainlinkHistoryView(rec, asset=self._asset, strat_name=self.name)
+            self._chainlink_history_view = view
+            return view
+        except Exception:
+            return rec
 
     @property
     def candle_open(self) -> Optional[float]:
@@ -1349,6 +1414,7 @@ class BotHub:
         log_dir: Optional[str] = None,
         globals: Optional[object] = None,
         buy_once_per_market: bool = True,
+        chainlink_history=None,
         **kwargs,
     ):
         asset = asset.upper()
@@ -1379,6 +1445,12 @@ class BotHub:
             self._paper_config = paper_config or PaperConfig()
         else:
             self._paper_config = get_paper_config_from_preset("TEST")
+
+        # chainlink_history may be in kwargs (e.g. from tests)
+        if chainlink_history is None and "chainlink_history" in kwargs:
+            chainlink_history = kwargs.pop("chainlink_history")
+        else:
+            kwargs.pop("chainlink_history", None)
 
         # One shared client for market discovery + stream creation.
         # Its paper engine is unused — each strategy gets its own.
@@ -1453,6 +1525,47 @@ class BotHub:
             self._binance = BinanceAccessor(asset=asset, timeframe=timeframe)
         except Exception as exc:
             self._log.debug("BinanceAccessor not available: %s", exc)
+
+        # ── Chainlink history (shared candle store — user chooses {"1m":10, "1h":50, "1s":20}) ─
+        # One recorder per (db_path, asset) via registry; unused TFs pruned automatically.
+        self._chainlink_history = None
+        self._chainlink_history_owned = False
+        self._on_warmup = None
+        self._last_warmup_emit = 0.0
+        # Prefer globals.chainlink_history if caller supplied it
+        _g_hist = getattr(self._globals, "chainlink_history", None) if self._globals is not None else None
+        if _g_hist is not None:
+            self._chainlink_history = _g_hist
+            self._chainlink_history_owned = False
+        elif chainlink_history is not None:
+            try:
+                rec, owned = _resolve_chainlink_history(chainlink_history, asset)
+                self._chainlink_history = rec
+                self._chainlink_history_owned = owned
+                if rec is not None:
+                    # reuse registry if shared flag, else direct
+                    try:
+                        rec.start(asset, background=True)
+                    except Exception as exc:
+                        self._log.warning("Chainlink history start failed: %s", exc)
+                    self._log.info("Chainlink history enabled (hub): %s", getattr(rec.config, "warmup", rec))
+            except Exception as exc:
+                self._log.debug("Chainlink history init skipped (hub): %s", exc)
+
+    @property
+    def chainlink_history(self):
+        """Shared :class:`~polyalpha.history.ChainlinkRecorder` or None."""
+        return getattr(self, "_chainlink_history", None)
+
+    def on_warmup(self, fn: Callable) -> Callable:
+        """Register warmup callback — called with status dict while warming.
+
+        Example: ``@hub.on_warmup(lambda s: print(f"warming {s}"))``
+        Works for both ``block="wait"`` (hub blocks all strats) and
+        ``block="skip"`` (each strat self-guards).
+        """
+        self._on_warmup = fn
+        return fn
 
     # ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -1848,6 +1961,7 @@ class BotHub:
                 get_candle_id=lambda: self._candle_id,
                 bought_this_candle=self._bought_this_candle,
                 hub=self,
+                chainlink_history=self._chainlink_history,
             )
             # Per-strategy rotating file logger
             if self._log_dir and s.name not in self._strategy_loggers:
@@ -1882,6 +1996,39 @@ class BotHub:
                     self._binance._refresh()
                 except Exception:
                     pass
+            # ── Chainlink history warmup gate (hub union) ──────────────────
+            # User chose e.g. {"1m":10, "1h":50, "1s":20}; hub waits for ALL before any strat runs
+            if self._chainlink_history is not None and getattr(self._chainlink_history, "config", None) is not None:
+                cfg = self._chainlink_history.config
+                need = getattr(cfg, "warmup", {}) or {}
+                if need and cfg.block == "wait" and not self._chainlink_history.is_ready_map(need):
+                    now_w = time.time()
+                    if now_w - getattr(self, "_last_warmup_emit", 0) >= getattr(cfg, "warmup_emit_interval", 5.0):
+                        self._last_warmup_emit = now_w
+                        try:
+                            status = self._chainlink_history.status(need)
+                        except Exception:
+                            status = {"warming": True}
+                        self._log.info("Warming chainlink history (hub) %s", status)
+                        self._fire("warmup", status)
+                        if getattr(self, "_on_warmup", None):
+                            try:
+                                self._on_warmup(status)
+                            except Exception:
+                                pass
+                    # still advance candle tracking but skip strat fan-out
+                    now2 = time.time()
+                    tf_seconds = TIMEFRAME_SECONDS.get(self.timeframe, 300)
+                    candle_start = (now2 // tf_seconds) * tf_seconds
+                    if candle_start != self._candle_start_time:
+                        self._fire("candle_close", self._candle_id, self._candle_open_price, up)
+                        self._candle_start_time = candle_start
+                        self._candle_open_price = up
+                        self._candle_id += 1
+                        self._bought_this_candle[self._candle_id] = {}
+                        self._fire("candle_open", self._candle_open_price, self._candle_id)
+                    return
+
             # ── Candle tracking ──────────────────────────────────────────
             now = time.time()
             tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
@@ -1948,6 +2095,36 @@ class BotHub:
                     self._binance._refresh()
                 except Exception:
                     pass
+            # ── Chainlink history warmup gate (hub union, async) ───────
+            if self._chainlink_history is not None and getattr(self._chainlink_history, "config", None) is not None:
+                cfg = self._chainlink_history.config
+                need = getattr(cfg, "warmup", {}) or {}
+                if need and cfg.block == "wait" and not self._chainlink_history.is_ready_map(need):
+                    now_w = time.time()
+                    if now_w - getattr(self, "_last_warmup_emit", 0) >= getattr(cfg, "warmup_emit_interval", 5.0):
+                        self._last_warmup_emit = now_w
+                        try:
+                            status = self._chainlink_history.status(need)
+                        except Exception:
+                            status = {"warming": True}
+                        self._log.info("Warming chainlink history (hub async) %s", status)
+                        self._fire("warmup", status)
+                        if getattr(self, "_on_warmup", None):
+                            try:
+                                self._on_warmup(status)
+                            except Exception:
+                                pass
+                    now2 = time.time()
+                    tf_seconds = TIMEFRAME_SECONDS.get(self.timeframe, 300)
+                    candle_start = (now2 // tf_seconds) * tf_seconds
+                    if candle_start != self._candle_start_time:
+                        self._fire("candle_close", self._candle_id, self._candle_open_price, up)
+                        self._candle_start_time = candle_start
+                        self._candle_open_price = up
+                        self._candle_id += 1
+                        self._bought_this_candle[self._candle_id] = {}
+                        self._fire("candle_open", self._candle_open_price, self._candle_id)
+                    return
             # ── Candle tracking ──────────────────────────────────────────
             now = time.time()
             tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
@@ -2092,6 +2269,12 @@ class BotHub:
         if self._chainlink_cache is not None:
             try:
                 self._chainlink_cache.stop()
+            except Exception:
+                pass
+        rec = getattr(self, "_chainlink_history", None)
+        if rec is not None and getattr(self, "_chainlink_history_owned", False):
+            try:
+                rec.stop()
             except Exception:
                 pass
         self._shared_client.close()

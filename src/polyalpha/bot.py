@@ -81,6 +81,51 @@ except ImportError:
     TimeWindow = None  # type: ignore[assignment]
 
 
+# ── Chainlink history helper ───────────────────────────────────────────────
+
+def _resolve_chainlink_history(
+    value, asset: str
+):
+    """
+    Normalize chainlink_history param to (recorder, owned).
+
+    Accepts:
+      None / False -> (None, False)
+      True        -> default ChainlinkRecorder for asset ("1m": 20)
+      dict        -> warmup dict {"1m":10, "1h":50}
+      ChainlinkHistoryConfig -> config
+      ChainlinkRecorder -> shared recorder (not owned)
+    Returns (recorder|None, owned:bool)
+    """
+    if value is None or value is False:
+        return None, False
+    try:
+        from .history import ChainlinkHistoryConfig, ChainlinkRecorder
+    except ImportError:
+        return None, False
+
+    if isinstance(value, ChainlinkRecorder):
+        return value, False
+    if isinstance(value, ChainlinkHistoryConfig):
+        rec = ChainlinkRecorder(config=value)
+        return rec, True
+    if isinstance(value, dict):
+        # dict warmup like {"1m":10, "1h":50, "1s":20}
+        cfg = ChainlinkHistoryConfig(warmup=dict(value))
+        rec = ChainlinkRecorder(config=cfg)
+        return rec, True
+    if value is True:
+        cfg = ChainlinkHistoryConfig(warmup={"1m": 20})
+        rec = ChainlinkRecorder(config=cfg)
+        return rec, True
+    # string path? treat as db_path with default warmup
+    if isinstance(value, str):
+        cfg = ChainlinkHistoryConfig(warmup={"1m": 20}, db_path=value)
+        rec = ChainlinkRecorder(config=cfg)
+        return rec, True
+    return None, False
+
+
 # ── Price Snapshot ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -396,6 +441,40 @@ class TickContext:
                 return window
         return self._cl_window
 
+    @property
+    def chainlink_history(self):
+        """
+        Chainlink candle history with warmup-aware TA.
+
+        Configured via ``Bot(chainlink_history=...)``. Example:
+
+        >>> bot = Bot("BTC","5m", chainlink_history={"1m":10, "1h":50, "1s":20})
+        >>> @bot.on_tick
+        ... def s(ctx):
+        ...     if ctx.chainlink_history.is_ready("1m",10):
+        ...         ema = ctx.chainlink_history.ema("1m",10)
+        ...         df  = ctx.chainlink_history.candles("1m",10)
+
+        Returns a :class:`~polyalpha.history.ChainlinkHistoryView` (or
+        the underlying :class:`~polyalpha.history.ChainlinkRecorder` when
+        accessed via ``bot.chainlink_history``) or ``None`` if not configured.
+        """
+        # per-tick view (so asset is correct)
+        rec = getattr(self._bot, "_chainlink_history", None)
+        if rec is None:
+            return None
+        # cache per TickContext
+        if hasattr(self, "_chainlink_history_view") and self._chainlink_history_view is not None:
+            return self._chainlink_history_view
+        try:
+            from .history.view import ChainlinkHistoryView
+            # asset from bot
+            view = ChainlinkHistoryView(rec, asset=self._bot.asset, strat_name="bot")
+            self._chainlink_history_view = view
+            return view
+        except Exception:
+            return rec
+
     # ── Indicators (optional — requires analysis deps) ──────────────────────
 
     def _get_price_series(self):
@@ -510,6 +589,7 @@ class Bot:
         paper_config: Optional[PaperConfig] = None,
         log_dir: Optional[str] = None,
         buy_once_per_market: bool = True,
+        chainlink_history=None,
         **kwargs,
     ):
         asset = asset.upper()
@@ -536,6 +616,11 @@ class Bot:
             resolved = get_paper_config_from_preset("TEST")
 
         kwargs.pop("paper_config", None)
+        # chainlink_history may also be passed via kwargs (e.g. from_tests)
+        if chainlink_history is None and "chainlink_history" in kwargs:
+            chainlink_history = kwargs.pop("chainlink_history")
+        else:
+            kwargs.pop("chainlink_history", None)
         self._client = Client(balance=balance, paper_config=resolved, **kwargs)
         self._market: Optional[Market] = None
         self._stream = None
@@ -589,6 +674,27 @@ class Bot:
             except Exception as exc:
                 self._log.warning("BinanceAccessor init failed: %s", exc)
 
+        # ── Chainlink history (configurable candle store) ────────────────────
+        # User chooses e.g. {"1m":10, "1h":50, "1s":20}; unused TFs are pruned.
+        # Storage: SQLite WAL at ~/.polyalpha/chainlink.db (or custom), best for
+        # incremental tick→candle with concurrent reads.
+        self._chainlink_history = None
+        self._chainlink_history_owned = False
+        self._on_warmup = None
+        try:
+            rec, owned = _resolve_chainlink_history(chainlink_history, asset)
+            self._chainlink_history = rec
+            self._chainlink_history_owned = owned
+            if rec is not None:
+                # start recorder for this asset (no-op if already started/shared)
+                try:
+                    rec.start(asset, background=True)
+                except Exception as exc:
+                    self._log.warning("Chainlink history start failed: %s", exc)
+                self._log.info("Chainlink history enabled: %s", getattr(rec.config, "warmup", rec))
+        except Exception as exc:
+            self._log.debug("Chainlink history init skipped: %s", exc)
+
     # ── Public API ──────────────────────────────────────────────────────────
 
     def on_tick(self, fn: Callable) -> Callable:
@@ -599,6 +705,28 @@ class Bot:
         """
         self._strategy = fn
         return fn
+
+    def on_warmup(self, fn: Callable) -> Callable:
+        """
+        Decorator — register a warmup-progress callback.
+
+        Called while ``chainlink_history`` is still warming (when
+        ``block="wait"`` the strat is paused, this fires every
+        ``warmup_emit_interval`` seconds).
+
+        Example
+        -------
+        >>> @bot.on_warmup
+        ... def warmup(status):
+        ...     print(f"warming {status}")  # e.g. {"1m":"7/10", "1h":"50/50 ✅"}
+        """
+        self._on_warmup = fn
+        return fn
+
+    @property
+    def chainlink_history(self):
+        """The underlying :class:`~polyalpha.history.ChainlinkRecorder` or None."""
+        return getattr(self, "_chainlink_history", None)
 
     def onresolve(self, fn: Callable) -> Callable:
         """
@@ -837,6 +965,37 @@ class Bot:
                     self._binance._refresh()
                 except Exception as exc:
                     self._log.warning("Binance refresh failed: %s", exc)
+            # ── Chainlink history warmup gate ──────────────────────────────
+            if self._chainlink_history is not None and getattr(self._chainlink_history, "config", None) is not None:
+                cfg = self._chainlink_history.config
+                need = getattr(cfg, "warmup", {}) or {}
+                if need and cfg.block == "wait" and not self._chainlink_history.is_ready_map(need):
+                    now_w = time.time()
+                    last = getattr(self, "_last_warmup_emit", 0)
+                    interval = getattr(cfg, "warmup_emit_interval", 5.0)
+                    if now_w - last >= interval:
+                        self._last_warmup_emit = now_w
+                        try:
+                            status = self._chainlink_history.status(need)
+                        except Exception:
+                            status = {"warming": True}
+                        self._log.info("Warming chainlink history %s", status)
+                        if self._on_warmup:
+                            try:
+                                self._on_warmup(status)
+                            except Exception:
+                                pass
+                    # skip strategy until warm
+                    # still update candle tracking so candle_id advances
+                    now2 = time.time()
+                    tf_seconds = TIMEFRAME_SECONDS.get(self.timeframe, 300)
+                    candle_start = (now2 // tf_seconds) * tf_seconds
+                    if candle_start != self._candle_start_time:
+                        self._candle_start_time = candle_start
+                        self._candle_open_price = up
+                        self._candle_id += 1
+                        self._bought_this_candle[self._candle_id] = set()
+                    return
             # ── Candle tracking ──────────────────────────────────────────
             now = time.time()
             tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
@@ -894,6 +1053,35 @@ class Bot:
                     self._binance._refresh()
                 except Exception as exc:
                     self._log.warning("Binance refresh failed: %s", exc)
+            # ── Chainlink history warmup gate (async path) ─────────────────
+            if self._chainlink_history is not None and getattr(self._chainlink_history, "config", None) is not None:
+                cfg = self._chainlink_history.config
+                need = getattr(cfg, "warmup", {}) or {}
+                if need and cfg.block == "wait" and not self._chainlink_history.is_ready_map(need):
+                    now_w = time.time()
+                    last = getattr(self, "_last_warmup_emit", 0)
+                    interval = getattr(cfg, "warmup_emit_interval", 5.0)
+                    if now_w - last >= interval:
+                        self._last_warmup_emit = now_w
+                        try:
+                            status = self._chainlink_history.status(need)
+                        except Exception:
+                            status = {"warming": True}
+                        self._log.info("Warming chainlink history %s", status)
+                        if self._on_warmup:
+                            try:
+                                self._on_warmup(status)
+                            except Exception:
+                                pass
+                    now2 = time.time()
+                    tf_seconds = TIMEFRAME_SECONDS.get(self.timeframe, 300)
+                    candle_start = (now2 // tf_seconds) * tf_seconds
+                    if candle_start != self._candle_start_time:
+                        self._candle_start_time = candle_start
+                        self._candle_open_price = up
+                        self._candle_id += 1
+                        self._bought_this_candle[self._candle_id] = set()
+                    return
             # ── Candle tracking ──────────────────────────────────────────
             now = time.time()
             tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
@@ -1027,4 +1215,11 @@ class Bot:
                 self._chainlink.stop()
             except Exception as exc:
                 self._log.warning("Error stopping chainlink during cleanup: %s", exc)
+        # history recorder — only stop if we own it
+        rec = getattr(self, "_chainlink_history", None)
+        if rec is not None and getattr(self, "_chainlink_history_owned", False):
+            try:
+                rec.stop()
+            except Exception as exc:
+                self._log.warning("Error stopping chainlink history during cleanup: %s", exc)
         self._client.close()
