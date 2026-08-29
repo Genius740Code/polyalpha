@@ -296,9 +296,9 @@ class TokenPairTracker:
                 r.raise_for_status()
                 book = r.json()
                 if book.get("bids"):
-                    self.best_bid[tid] = float(book["bids"][-1]["price"])
+                    self.best_bid[tid] = float(book["bids"][0]["price"])
                 if book.get("asks"):
-                    self.best_ask[tid] = float(book["asks"][-1]["price"])
+                    self.best_ask[tid] = float(book["asks"][0]["price"])
                 self._last_update = time.time()
             except Exception as exc:  # noqa: BLE001 — seed is best-effort
                 log.warning("CLOB book seed failed for %s: %s", tid, exc)
@@ -374,9 +374,9 @@ class TokenPairTracker:
         if tid not in self.best_bid:
             return
         if ev.get("bids"):
-            self.best_bid[tid] = float(ev["bids"][-1]["price"])
+            self.best_bid[tid] = float(ev["bids"][0]["price"])
         if ev.get("asks"):
-            self.best_ask[tid] = float(ev["asks"][-1]["price"])
+            self.best_ask[tid] = float(ev["asks"][0]["price"])
         self._last_update = time.time()
         self._record_spread(tid)
 

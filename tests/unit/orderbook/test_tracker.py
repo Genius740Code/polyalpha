@@ -131,8 +131,8 @@ class TestHandleBook:
         })
         with patch("polyalpha.orderbook.tracker.time.time", return_value=200.0):
             tracker._handle(raw)
-            assert tracker.best_bid[UP_ID] == 0.50
-            assert tracker.best_ask[UP_ID] == 0.52
+            assert tracker.best_bid[UP_ID] == 0.49
+            assert tracker.best_ask[UP_ID] == 0.53
             assert tracker.fresh() is True
 
     def test_ignores_unknown_token(self, tracker):

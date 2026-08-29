@@ -89,3 +89,46 @@ def test_hub_feed_add_handler_and_emit():
     feed.add_handler("price", lambda up, down: calls.append(up + down))
     feed.emit("price", 0.3, 0.7)
     assert calls == [1.0]
+
+
+# ── Book-level parity: best vs worst (issue #3) ─────────────────────────────
+
+@pytest.mark.unit
+def test_hub_feed_book_uses_best_level_not_worst():
+    """Best bid/ask (index 0) must be used — not the worst level (index -1)."""
+    feed = HubFeed(up=0.5, down=0.5)
+    # Two levels: best bid 0.60/ask 0.62 → mid 0.61; worst would be (0.40+0.90)/2=0.65
+    feed.push_book("UP", [{"price": "0.60"}, {"price": "0.40"}], [{"price": "0.62"}, {"price": "0.90"}])
+    assert feed.up == pytest.approx(0.61)
+    # Ensure worst is not used
+    assert feed.up != pytest.approx(0.65)
+
+
+@pytest.mark.unit
+def test_hub_feed_best_mid_helper_is_best():
+    """Direct helper also uses best level."""
+    from polyalpha.bots.hub_feed import _best_mid
+    best = _best_mid([{"price": "0.60"}, {"price": "0.40"}], [{"price": "0.62"}, {"price": "0.90"}])
+    assert best == pytest.approx(0.61)
+    worst = (0.40 + 0.90) / 2
+    assert best != pytest.approx(worst)
+
+
+# ── Market provider for hub-aligned discovery (issue #5) ────────────────────
+
+@pytest.mark.unit
+def test_hub_feed_market_provider_get_set():
+    feed = HubFeed(up=0.5, down=0.5)
+    assert feed.get_market() is None
+    fake_market = type("M", (), {"slug": "btc-updown-5m-123"})()
+    feed.set_market(fake_market)
+    assert feed.get_market() is fake_market
+    assert feed.market is fake_market
+
+
+@pytest.mark.unit
+def test_hub_feed_push_market_alias():
+    feed = HubFeed()
+    m = type("M", (), {"slug": "eth-updown-5m-456"})()
+    feed.push_market(m)
+    assert feed.get_market() is m

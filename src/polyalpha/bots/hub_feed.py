@@ -27,6 +27,12 @@ The adapter exposes exactly the surface the Sniper expects from its stream
 guard — works unchanged and the market's UP/DOWN orientation is preserved:
 prices are pushed in (up, down) order and read back the same way.
 
+It can also act as a **market provider** for parity with the hub's
+``on_market → slug`` event. Call :meth:`set_market` / :meth:`push_market`
+when the hub discovers a new slug, then pass ``market_provider=feed`` to the
+``Sniper`` so it reuses the hub's slug instead of calling
+``client.markets.latest()`` on its own and racing the 5-min boundary.
+
 Events
 ------
 ``price``  (up: float, down: float) — emitted on every ``push()``
@@ -54,6 +60,11 @@ class HubFeed:
     external hub. ``push()`` records a timestamped UP/DOWN price pair so the
     Sniper can both read ``feed.up`` / ``feed.down`` and gate on its age via
     :meth:`price_age_seconds`.
+
+    It doubles as a :class:`MarketProvider` for parity: push the hub's current
+    market via :meth:`set_market` / :meth:`push_market` and the Sniper will
+    consume it through ``market_provider=feed`` instead of discovering its own
+    slug.
     """
 
     def __init__(
@@ -71,6 +82,7 @@ class HubFeed:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._running = False
+        self._market_lock = threading.Lock()
 
         # Staleness clock — mirrors Stream._last_price_time
         self._last_price_time: float = time.time()
@@ -101,6 +113,22 @@ class HubFeed:
             self.push(price, self.down)
         else:
             self.push(self.up, price)
+
+    # ── Market provider (for parity with hub's on_market → slug) ──────────
+
+    def get_market(self) -> Any | None:
+        """Return the last market pushed via :meth:`set_market` (or ``self.market``)."""
+        with self._market_lock:
+            return self.market
+
+    def set_market(self, market: Any) -> None:
+        """Store *market* as the current hub market."""
+        with self._market_lock:
+            self.market = market
+
+    def push_market(self, market: Any) -> None:
+        """Alias for :meth:`set_market` — mirrors :meth:`push` naming."""
+        self.set_market(market)
 
     def close(self, *args, **kwargs) -> None:
         """Tell the Sniper the market resolved / the feed shut down."""

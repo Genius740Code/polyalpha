@@ -400,9 +400,9 @@ def test_schema_version():
         db_path = Path(tmpdir) / "test.db"
         db = TradeDatabase(db_path)
         
-        # New database should have version 1
+        # New database should have latest version (1,2,3 inserted on creation)
         version = db.get_schema_version()
-        assert version == 1
+        assert version == 3
         
         db.close()
     finally:
@@ -420,9 +420,9 @@ def test_run_migrations_no_pending():
         # Should not raise any errors
         db.run_migrations()
         
-        # Version should still be 1
+        # Version should still be latest (3)
         version = db.get_schema_version()
-        assert version == 1
+        assert version == 3
         
         db.close()
     finally:

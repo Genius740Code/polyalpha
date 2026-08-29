@@ -701,6 +701,28 @@ class StreamLike(Protocol):
         ...
 
 
+class MarketProvider(Protocol):
+    """Provider for hub-aligned market discovery.
+
+    The Sniper normally calls ``client.markets.latest(asset, timeframe)``.
+    When a ``MarketProvider`` is supplied, discovery is routed through it so
+    the Sniper evaluates the *same* slug as the hub's ``on_market → slug``
+    event:
+
+    * a callable ``() -> Market | str | None`` (or ``(asset, timeframe) -> Market``)
+    * an object with ``get_market() -> Market | str | None``
+    * an object with ``market`` attribute (e.g. :class:`HubFeed`)
+    * an object with ``latest(asset, timeframe) -> Market`` (e.g. ``MarketClient``)
+
+    String results are resolved via ``client.markets.get(slug)``. ``None``
+    means "provider has no market yet" — discovery falls back to
+    ``client.markets.latest``.
+    """
+
+    def get_market(self) -> Any | None:
+        ...
+
+
 class Sniper:
     """
     Automated trading bot with advanced time-window entry and threshold execution.
@@ -781,7 +803,7 @@ class Sniper:
     STATE_ROLLOVER = "ROLLOVER"
     STATE_STOP = "STOP"
 
-    def __init__(self, client, config: Optional[SniperConfig] = None, *, stream: Optional[StreamLike] = None, **kwargs):
+    def __init__(self, client, config: Optional[SniperConfig] = None, *, stream: Optional[StreamLike] = None, market_provider: Any | None = None, **kwargs):
         """
         Initialize the Sniper bot.
 
@@ -798,14 +820,27 @@ class Sniper:
             same surface the Sniper expects from a stream: ``up``/``down``,
             ``on(event)``, ``price_age_seconds()``, ``running``, ``start()``
             and ``stop()`` — see :class:`polyalpha.bots.hub_feed.HubFeed`.
+        market_provider : optional
+            External market source for hub-aligned discovery. When provided,
+            ``_discover_market()`` consults this provider before calling
+            ``client.markets.latest()`` so ``sniper_poly`` and ``sniper_plain``
+            evaluate the same slug each 5-min cycle (see ``#5 Align market
+            discovery``). Accepts a callable ``() -> Market|str``, an object
+            with ``get_market()``, ``market`` attribute (e.g. ``HubFeed``), or
+            ``latest(asset,timeframe)``. String slugs are resolved via
+            ``client.markets.get``. ``None`` falls back to native discovery.
         **kwargs
             Additional keyword arguments passed to SniperConfig when config is not provided.
         """
+        # ``market_provider`` may be passed as a plain kwarg when config is built via **kwargs
+        if market_provider is None and "market_provider" in kwargs:
+            market_provider = kwargs.pop("market_provider")
         self.client = client
         if config is None:
             config = SniperConfig(**kwargs)
         self.config = config
         self._injected_stream: Optional[StreamLike] = stream
+        self._market_provider: Any | None = market_provider
 
         # Set up logging
         self._log = logging.getLogger(f"{__name__}.Sniper")
@@ -1103,12 +1138,79 @@ class Sniper:
 
         return False
 
+    def _resolve_external_market(self) -> Any | None:
+        """Try to obtain a :class:`Market` from ``self._market_provider``.
+
+        Supports callables, ``get_market()``, ``market`` attribute, and
+        ``latest(asset,timeframe)``. String slugs are resolved via
+        ``client.markets.get``. ``None`` means the provider has no market
+        and native discovery should be used.
+        """
+        provider = self._market_provider
+        if provider is None:
+            return None
+        result: Any | None = None
+        try:
+            if callable(provider):
+                try:
+                    result = provider()
+                except TypeError:
+                    # provider(asset, timeframe) style
+                    result = provider(self.config.asset, self.config.timeframe)  # type: ignore[misc]
+            elif hasattr(provider, "get_market"):
+                result = provider.get_market()  # type: ignore[union-attr]
+            elif hasattr(provider, "market"):
+                result = getattr(provider, "market")
+                # HubFeed.market is None until hub pushes; treat as no market
+                if result is None and hasattr(provider, "get_market"):
+                    try:
+                        result = provider.get_market()  # type: ignore[union-attr]
+                    except Exception:
+                        result = None
+            elif hasattr(provider, "latest"):
+                result = provider.latest(self.config.asset, self.config.timeframe)  # type: ignore[union-attr]
+            else:
+                return None
+        except Exception as exc:
+            self._log.debug("Market provider call failed: %s", exc)
+            return None
+
+        if result is None:
+            return None
+        if isinstance(result, str):
+            slug = result.strip()
+            if not slug:
+                return None
+            try:
+                return self.client.markets.get(slug)
+            except Exception as exc:
+                self._log.debug("Market provider slug resolution failed for %s: %s", slug, exc)
+                return None
+        # Assume Market-like
+        if hasattr(result, "slug"):
+            return result
+        return None
+
     def _discover_market(self) -> bool:
         """Discover a market. Returns True if successful."""
         self._set_state(self.STATE_DISCOVERING)
         # Reset order tracking for new market cycle
         self._pending_order = None
         self._filled_order = None
+        # ── Hub-aligned discovery (parity #5) ──────────────────────────────
+        if self._market_provider is not None:
+            try:
+                ext_market = self._resolve_external_market()
+                if ext_market is not None:
+                    self._fix_market_orientation(ext_market)
+                    self._market = ext_market
+                    self._log.info("Market found (via provider): %s", self._market.slug)
+                    self._emit("market_found", self._market)
+                    return True
+                self._log.debug("Market provider returned None, falling back to native discovery")
+            except Exception as exc:
+                self._log.error("Market provider discovery failed: %s, falling back", exc)
+                # fall through to native discovery
         try:
             self._market = self.client.markets.latest(
                 self.config.asset,

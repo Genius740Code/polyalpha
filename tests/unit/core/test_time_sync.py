@@ -68,6 +68,8 @@ def test_sync_falls_through_malformed_server(monkeypatch):
         }
 
     monkeypatch.setattr("polyalpha.core.time_sync._query_server", fake_query)
+    # Deterministic order — TimeSync shuffles servers, but this test needs to verify failover logic
+    monkeypatch.setattr("polyalpha.core.time_sync.random.shuffle", lambda x: None)
 
     ts = TimeSync(servers=["bad.example", "good.example"], retries=1)
     report = ts.sync(force=True)

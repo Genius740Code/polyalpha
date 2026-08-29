@@ -1415,6 +1415,7 @@ class BotHub:
         globals: Optional[object] = None,
         buy_once_per_market: bool = True,
         chainlink_history=None,
+        market_provider=None,
         **kwargs,
     ):
         asset = asset.upper()
@@ -1451,6 +1452,13 @@ class BotHub:
             chainlink_history = kwargs.pop("chainlink_history")
         else:
             kwargs.pop("chainlink_history", None)
+
+        # market_provider may be passed positionally or via kwargs
+        if market_provider is None and "market_provider" in kwargs:
+            market_provider = kwargs.pop("market_provider")
+        else:
+            kwargs.pop("market_provider", None)
+        self._market_provider = market_provider
 
         # One shared client for market discovery + stream creation.
         # Its paper engine is unused — each strategy gets its own.
@@ -1928,8 +1936,97 @@ class BotHub:
 
     # ── Lifecycle steps ─────────────────────────────────────────────────────
 
+    def _resolve_external_market(self):
+        """Try to obtain a :class:`Market` from ``self._market_provider``."""
+        provider = getattr(self, "_market_provider", None)
+        if provider is None:
+            return None
+        result = None
+        try:
+            if callable(provider):
+                try:
+                    result = provider()
+                except TypeError:
+                    result = provider(self.asset, self.timeframe)
+            elif hasattr(provider, "get_market"):
+                result = provider.get_market()
+            elif hasattr(provider, "market"):
+                result = getattr(provider, "market")
+                if result is None and hasattr(provider, "get_market"):
+                    try:
+                        result = provider.get_market()
+                    except Exception:
+                        result = None
+            elif hasattr(provider, "latest"):
+                result = provider.latest(self.asset, self.timeframe)
+            else:
+                return None
+        except Exception as exc:
+            self._log.debug("Market provider call failed: %s", exc)
+            return None
+        if result is None:
+            return None
+        if isinstance(result, str):
+            slug = result.strip()
+            if not slug:
+                return None
+            try:
+                return self._shared_client.markets.get(slug)
+            except Exception as exc:
+                self._log.debug("Market provider slug resolution failed for %s: %s", slug, exc)
+                return None
+        if hasattr(result, "slug"):
+            return result
+        return None
+
     def _discover(self) -> None:
         """Discover the latest market ONCE for all strategies and variants."""
+        if getattr(self, "_market_provider", None) is not None:
+            try:
+                ext_market = self._resolve_external_market()
+                if ext_market is not None:
+                    self._market = ext_market
+                    self._log.info("Market found (via provider): %s (shared by %d tickers)",
+                                   self._market.slug, len(self._active_tickers()))
+                    # Build / refresh each strategy's and variant's PaperEngine + Context (same as native path)
+                    for s in self._active_tickers():
+                        if s.paper is None:
+                            from .trading.paper_engine import PaperEngine
+                            s.paper = PaperEngine(
+                                balance=s.balance,
+                                config=self._paper_config,
+                            )
+                        s.ctx = StrategyContext(
+                            name=s.name,
+                            stream=self._stream,
+                            paper=s.paper,
+                            market=self._market,
+                            price_history=self._price_history,
+                            down_price_history=self._down_price_history,
+                            asset=self.asset,
+                            clob=self._shared_client._clob,
+                            chainlink_cache=self._chainlink_cache,
+                            chainlink=self._chainlink,
+                            binance=self._binance,
+                            cl_window=self._shared_cl_window,
+                            globals=self._globals,
+                            get_candle_open=lambda: self._candle_open_price,
+                            get_seconds_in=lambda: max(0.0, time.time() - self._candle_start_time),
+                            get_candle_id=lambda: self._candle_id,
+                            bought_this_candle=self._bought_this_candle,
+                            hub=self,
+                            chainlink_history=self._chainlink_history,
+                        )
+                        if self._log_dir and s.name not in self._strategy_loggers:
+                            from .utils.logging_utils import setup_strategy_logger
+                            slog = setup_strategy_logger(
+                                f"{self.asset}_{s.name}", self._log_dir,
+                            )
+                            self._strategy_loggers[s.name] = slog
+                    return
+                self._log.debug("Market provider returned None, falling back to native discovery")
+            except Exception as exc:
+                self._log.error("Market provider discovery failed: %s, falling back", exc)
         self._market = self._shared_client.markets.latest(self.asset, self.timeframe)
         self._log.info("Market found: %s (shared by %d tickers)",
                        self._market.slug, len(self._active_tickers()))

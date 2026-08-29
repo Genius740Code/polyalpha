@@ -672,3 +672,134 @@ def test_wait_for_resolution_gamma_unresolved_warns():
 
     sniper._gamma_resolve.assert_called_once()
     sniper.client.paper.resolve.assert_not_called()
+
+
+# ── Market discovery alignment (issue #5) ────────────────────────────────────
+
+@pytest.mark.unit
+def test_sniper_discover_uses_market_provider_market_object():
+    """When market_provider returns a Market, Sniper must use it, not latest()."""
+    sniper = _make_sniper_armed()
+    provider_market = _make_market(slug="btc-updown-5m-1111111")
+    provider = MagicMock(return_value=provider_market)
+    sniper._market_provider = provider
+    sniper.client.markets.latest = MagicMock(side_effect=AssertionError("must not call latest"))
+    sniper.client.markets.get = MagicMock()
+    ok = sniper._discover_market()
+    assert ok is True
+    assert sniper._market.slug == "btc-updown-5m-1111111"
+    sniper.client.markets.latest.assert_not_called()
+
+
+@pytest.mark.unit
+def test_sniper_discover_uses_market_provider_slug_string():
+    """Slug string from provider is resolved via client.markets.get()."""
+    sniper = _make_sniper_armed()
+    resolved = _make_market(slug="btc-updown-5m-2222222")
+    sniper.client.markets.get = MagicMock(return_value=resolved)
+    sniper.client.markets.latest = MagicMock(side_effect=AssertionError("must not call latest"))
+    sniper._market_provider = lambda: "btc-updown-5m-2222222"
+    ok = sniper._discover_market()
+    assert ok is True
+    assert sniper._market.slug == "btc-updown-5m-2222222"
+    sniper.client.markets.get.assert_called_once_with("btc-updown-5m-2222222")
+
+
+@pytest.mark.unit
+def test_sniper_discover_provider_via_hubfeed():
+    """HubFeed as market_provider: set_market → get_market path."""
+    from polyalpha.bots import HubFeed
+    sniper = _make_sniper_armed()
+    hub_market = _make_market(slug="btc-updown-5m-3333333")
+    feed = HubFeed(market=hub_market)
+    sniper._market_provider = feed
+    sniper.client.markets.latest = MagicMock(side_effect=AssertionError("must not call latest"))
+    ok = sniper._discover_market()
+    assert ok is True
+    assert sniper._market.slug == "btc-updown-5m-3333333"
+
+
+@pytest.mark.unit
+def test_sniper_discover_provider_callable_asset_timeframe():
+    """Callable provider that expects (asset,timeframe) args is supported."""
+    sniper = _make_sniper_armed()
+    hub_market = _make_market(slug="btc-updown-5m-4444444")
+    def provider(asset, timeframe):
+        assert asset == "BTC"
+        assert timeframe == "5m"
+        return hub_market
+    sniper._market_provider = provider
+    sniper.client.markets.latest = MagicMock(side_effect=AssertionError("must not call latest"))
+    ok = sniper._discover_market()
+    assert ok is True
+    assert sniper._market.slug == "btc-updown-5m-4444444"
+
+
+@pytest.mark.unit
+def test_sniper_discover_provider_none_falls_back():
+    """Provider returning None falls back to native discovery."""
+    sniper = _make_sniper_armed()
+    fallback = _make_market(slug="btc-updown-5m-5555555")
+    sniper._market_provider = lambda: None
+    sniper.client.markets.latest = MagicMock(return_value=fallback)
+    ok = sniper._discover_market()
+    assert ok is True
+    assert sniper._market.slug == "btc-updown-5m-5555555"
+    sniper.client.markets.latest.assert_called_once()
+
+
+@pytest.mark.unit
+def test_sniper_discover_provider_object_with_latest():
+    """Provider exposing latest(asset,timeframe) works."""
+    sniper = _make_sniper_armed()
+    hub_market = _make_market(slug="btc-updown-5m-6666666")
+    provider = MagicMock()
+    provider.latest.return_value = hub_market
+    # remove get_market/market so latest path is taken
+    del provider.get_market
+    if hasattr(provider, "market"):
+        del provider.market
+    provider.latest = MagicMock(return_value=hub_market)
+    # Make it non-callable by adding __call__ side effect? MagicMock is callable, so we need to make callable path fail then fall to latest
+    # Force callable path to not return Market: make provider return None when called, but latest returns hub_market
+    # Simpler: use an object with only latest, not callable behavior for market
+    class OnlyLatest:
+        def latest(self, asset, timeframe):
+            return hub_market
+    sniper._market_provider = OnlyLatest()
+    sniper.client.markets.latest = MagicMock(side_effect=AssertionError("must not call native latest"))
+    ok = sniper._discover_market()
+    assert ok is True
+    assert sniper._market.slug == "btc-updown-5m-6666666"
+
+
+@pytest.mark.unit
+def test_sniper_init_accepts_market_provider_kwarg():
+    """market_provider can be passed to Sniper.__init__."""
+    from polyalpha.bots import HubFeed
+    client = polyalpha.Client(balance=100.0)
+    feed = HubFeed(market=_make_market(slug="btc-updown-5m-7777777"))
+    sniper = Sniper(client, asset="BTC", timeframe="5m", market_provider=feed)
+    assert sniper._market_provider is feed
+
+
+@pytest.mark.unit
+def test_sniper_init_market_provider_via_kwargs():
+    """market_provider via **kwargs is also accepted (SniperConfig passthrough)."""
+    client = polyalpha.Client(balance=100.0)
+    provider = lambda: _make_market(slug="btc-updown-5m-8888888")
+    sniper = Sniper(client, asset="BTC", timeframe="5m", market_provider=provider)
+    assert sniper._market_provider is provider
+
+
+# ── Book-level parity: best vs worst (issue #3) ─────────────────────────────
+
+@pytest.mark.unit
+def test_book_level_best_mid_vs_worst():
+    """HubFeed._best_mid must use best (index 0), not worst (index -1)."""
+    from polyalpha.bots.hub_feed import _best_mid
+    # Two levels: best 0.60/0.62 → mid 0.61; worst 0.40/0.90 → mid 0.65
+    bids = [{"price": "0.60"}, {"price": "0.40"}]
+    asks = [{"price": "0.62"}, {"price": "0.90"}]
+    assert _best_mid(bids, asks) == pytest.approx(0.61)
+    assert _best_mid(bids, asks) != pytest.approx(0.65)
