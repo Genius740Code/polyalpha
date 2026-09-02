@@ -700,6 +700,169 @@ class BinanceAccessor:
         close_data = self._data["close"].tolist()
         return self._market_calc.volatility(close_data, period)
 
+    # ── Missing OHLCV Fields ───────────────────────────────────────────────
+
+    @property
+    def open(self) -> Optional[float]:
+        """Latest Binance open price."""
+        self._refresh()
+        if self._data is None or self._data.empty:
+            return None
+        if "open" in self._data.columns:
+            return float(self._data["open"].iloc[-1])
+        return None
+
+    @property
+    def quote_volume(self) -> Optional[float]:
+        """Latest Binance quote asset (USDT) volume."""
+        self._refresh()
+        if self._data is None or self._data.empty:
+            return None
+        if "quote_volume" in self._data.columns:
+            return float(self._data["quote_volume"].iloc[-1])
+        return None
+
+    @property
+    def trades(self) -> Optional[int]:
+        """Number of trades in latest Binance candle."""
+        self._refresh()
+        if self._data is None or self._data.empty:
+            return None
+        if "trades" in self._data.columns:
+            return int(self._data["trades"].iloc[-1])
+        return None
+
+    @property
+    def taker_buy_base(self) -> Optional[float]:
+        """Taker buy base asset volume (latest candle)."""
+        self._refresh()
+        if self._data is None or self._data.empty:
+            return None
+        if "taker_buy_base" in self._data.columns:
+            return float(self._data["taker_buy_base"].iloc[-1])
+        return None
+
+    @property
+    def taker_buy_quote(self) -> Optional[float]:
+        """Taker buy quote asset volume (latest candle)."""
+        self._refresh()
+        if self._data is None or self._data.empty:
+            return None
+        if "taker_buy_quote" in self._data.columns:
+            return float(self._data["taker_buy_quote"].iloc[-1])
+        return None
+
+    def taker_ratio(self) -> Optional[float]:
+        """Taker buy base / volume ratio for latest candle (0..1)."""
+        vol = self.volume
+        taker = self.taker_buy_base
+        if vol is None or taker is None or vol == 0:
+            return None
+        return taker / vol
+
+    # ── Missing Calculation Proxies ────────────────────────────────────────
+
+    def avg_volume(self, period: int = 10) -> Optional[float]:
+        """Average volume over period (excluding current candle)."""
+        if not self._has_calculations:
+            return None
+        self._refresh()
+        if self._data is None or len(self._data) < 2:
+            return None
+        volume_data = self._data["volume"].tolist()
+        return self._volume_calc.avg_volume(volume_data, period)
+
+    def volume_momentum(self, period: int = 5) -> Optional[float]:
+        """Volume momentum — % change in volume over period."""
+        if not self._has_calculations:
+            return None
+        self._refresh()
+        if self._data is None or len(self._data) < 2:
+            return None
+        volume_data = self._data["volume"].tolist()
+        return self._volume_calc.volume_momentum(volume_data, period)
+
+    def relative_volume(self, percentile: float = 0.75, period: int = 20) -> Optional[bool]:
+        """True if current volume above percentile of last N volumes."""
+        if not self._has_calculations:
+            return None
+        self._refresh()
+        if self._data is None or len(self._data) < 2:
+            return None
+        volume_data = self._data["volume"].tolist()
+        return self._volume_calc.relative_volume(volume_data, percentile, period)
+
+    def avg_quote_volume(self, period: int = 10) -> Optional[float]:
+        """Average quote (USDT) volume over period (excluding current)."""
+        if not self._has_calculations:
+            return None
+        self._refresh()
+        if self._data is None or len(self._data) < 2 or "quote_volume" not in self._data.columns:
+            return None
+        qv = self._data["quote_volume"].tolist()
+        if len(qv) < 2:
+            return None
+        # reuse avg_volume logic on quote data
+        window = qv[-period-1:-1] if len(qv) >= period + 1 else qv[:-1]
+        if not window:
+            return None
+        return sum(window) / len(window)
+
+    def quote_volume_ratio(self, period: int = 10) -> Optional[float]:
+        """Current quote_volume / avg quote_volume over period."""
+        if not self._has_calculations:
+            return None
+        self._refresh()
+        if self._data is None or len(self._data) < 2 or "quote_volume" not in self._data.columns:
+            return None
+        qv = self._data["quote_volume"].tolist()
+        return self._volume_calc.vol_ratio(qv, period)
+
+    def high_price(self, period: int = 10) -> Optional[float]:
+        """Highest close price over N candles."""
+        if not self._has_calculations:
+            return None
+        self._refresh()
+        if self._data is None or len(self._data) < 1:
+            return None
+        close_data = self._data["close"].tolist()
+        return self._market_calc.high(close_data, period)
+
+    def low_price(self, period: int = 10) -> Optional[float]:
+        """Lowest close price over N candles."""
+        if not self._has_calculations:
+            return None
+        self._refresh()
+        if self._data is None or len(self._data) < 1:
+            return None
+        close_data = self._data["close"].tolist()
+        return self._market_calc.low(close_data, period)
+
+    def range(self, period: int = 10) -> Optional[float]:  # type: ignore[override]
+        """Price range (high - low) over N candles."""
+        if not self._has_calculations:
+            return None
+        self._refresh()
+        if self._data is None or len(self._data) < 1:
+            return None
+        close_data = self._data["close"].tolist()
+        return self._market_calc.range(close_data, period)
+
+    def rate_of_change(self, period: int = 1, time_interval: Optional[float] = None) -> Optional[float]:
+        """Rate of change per second over N candles. Uses timeframe seconds if None."""
+        if not self._has_calculations:
+            return None
+        self._refresh()
+        if self._data is None or len(self._data) <= period:
+            return None
+        if time_interval is None:
+            from polyalpha.core.constants import TIMEFRAME_SECONDS
+            time_interval = TIMEFRAME_SECONDS.get(self._timeframe, 300)
+            if self._timeframe.lower() == "24h":
+                time_interval = 86400
+        close_data = self._data["close"].tolist()
+        return self._market_calc.rate_of_change(close_data, period, time_interval)
+
 
 # ── Order Book Accessor ────────────────────────────────────────────────────────
 

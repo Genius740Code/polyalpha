@@ -20,12 +20,31 @@ BINANCE_WS_FORCE_ORDER = "wss://fstream.binance.com/ws/btcusdt@forceOrder"
 # ── Timeframes ─────────────────────────────────────────────────────────────────
 
 TIMEFRAME_SECONDS: dict[str, int] = {
+    "1m":  60,
     "5m":  300,
     "15m": 900,
     "1h":  3600,
     "4h":  14400,
+    "1d":  86400,
     "24h": 86400,
 }
+
+# Alias map: accepts both "1d" and "24h" as daily timeframe.
+TIMEFRAME_ALIASES: dict[str, str] = {
+    "1d": "1d",
+    "24h": "1d",
+    "1m": "1m",
+    "5m": "5m",
+    "15m": "15m",
+    "1h": "1h",
+    "4h": "4h",
+}
+
+
+def normalize_timeframe(tf: str) -> str:
+    """Normalize timeframe alias (e.g. '24h' → '1d')."""
+    tf = tf.strip().lower()
+    return TIMEFRAME_ALIASES.get(tf, tf)
 
 # ── Assets ─────────────────────────────────────────────────────────────────────
 
@@ -98,10 +117,14 @@ def build_slug(asset: str, timeframe: str, window_start_ts: int) -> str:
     asset_upper = asset.upper()
     asset_lower = asset.lower()
     full_name = ASSET_NAMES.get(asset_upper, asset_lower)
+    tf_norm = normalize_timeframe(timeframe) if timeframe.lower() in TIMEFRAME_ALIASES else timeframe.lower()
 
-    if timeframe in ("1h", "24h"):
+    if tf_norm in ("1h", "1d") or timeframe.lower() in ("1h", "24h", "1d"):
         dt_utc = datetime.datetime.fromtimestamp(window_start_ts, tz=datetime.timezone.utc)
-        tz_et = zoneinfo.ZoneInfo("America/New_York")
+        try:
+            tz_et = zoneinfo.ZoneInfo("America/New_York")
+        except Exception:
+            tz_et = datetime.timezone(datetime.timedelta(hours=-4))
         dt_et = dt_utc.astimezone(tz_et)
         
         month_name = dt_et.strftime("%B").lower()
@@ -110,9 +133,9 @@ def build_slug(asset: str, timeframe: str, window_start_ts: int) -> str:
         hour_12 = dt_et.strftime("%I").lstrip("0")
         am_pm = dt_et.strftime("%p").lower()
         
-        if timeframe == "1h":
+        if tf_norm == "1h" or timeframe.lower() == "1h":
             return f"{full_name}-up-or-down-{month_name}-{day}-{year}-{hour_12}{am_pm}-et"
-        elif timeframe == "24h":
+        elif tf_norm == "1d":
             return f"what-price-will-{full_name}-hit-on-{month_name}-{day}"
             
     return f"{asset_lower}-updown-{timeframe}-{window_start_ts}"

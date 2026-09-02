@@ -382,5 +382,5 @@ class TestDataFeedIO:
 
     @pytest.mark.unit
     def test_all_timeframe_map_entries_present(self):
-        expected = {"1m", "5m", "15m", "1h", "4h", "1d"}
+        expected = {"1m", "5m", "15m", "1h", "4h", "1d", "24h"}
         assert set(TIMEFRAME_MAP.keys()) == expected
