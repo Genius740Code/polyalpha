@@ -83,6 +83,9 @@ class RealTradingConfig:
     custom_fee_rate: float = 0.02
     maker_fee_rate: float = 0.0
 
+    # Gas / chain
+    matic_price_usd: float = 0.5
+
     # Logging
     log_all_orders: bool = True
     log_balance_updates: bool = True

@@ -3,8 +3,14 @@ from .paper_types import PaperOrder, PaperPosition
 from .real_config import RealTradingConfig
 from .real_orders import RealOrder, RealPosition
 from .real_engine import RealTradingEngine
+from .real_wallet import WalletManager as BlockchainWalletManager
 from .real_wallet import WalletManager
 from .wallet import PaperWallet, RealWallet, RealTradingWalletManager, WalletSelectionStrategy
+# New unified helpers (optional imports)
+from .engine_protocol import TradingEngineProtocol
+from .staleness import get_price_for_side
+from .base_risk import BaseRiskManager
+from .real_helpers import validate_side, validate_positive, apply_buy_slippage, calculate_shares_and_fee
 from .auto_redeem import (
     AutoRedeemEngine,
     AutoRedeemConfig,
@@ -31,6 +37,7 @@ __all__ = [
     "RealOrder",
     "RealPosition",
     "WalletManager",
+    "BlockchainWalletManager",
     "PaperWallet",
     "RealWallet",
     "RealTradingWalletManager",
@@ -48,4 +55,7 @@ __all__ = [
     "print_real_preset",
     "add_real_preset",
     "get_real_config_from_preset",
+    "TradingEngineProtocol",
+    "get_price_for_side",
+    "BaseRiskManager",
 ]

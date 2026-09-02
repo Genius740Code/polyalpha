@@ -837,11 +837,14 @@ class StrategyContext:
         bought_this_candle=None,
         hub=None,
         chainlink_history=None,
+        engine: object | None = None,
     ):
         self.name = name
         self._asset = asset
         self._stream = stream
         self._paper = paper
+        # engine alias — for real trading paper is actually RealTradingEngine
+        self._engine = engine if engine is not None else paper
         self._market = market
         self._price_history = price_history  # shared across strategies
         self._down_price_history: deque = down_price_history if down_price_history is not None else deque(maxlen=200)
@@ -985,15 +988,23 @@ class StrategyContext:
 
     @property
     def balance(self) -> float:
-        return self._paper.balance
+        return self._engine.balance
 
     @property
     def positions(self) -> list:
-        return self._paper.positions()
+        return self._engine.positions()
 
     @property
     def pnl(self) -> float:
-        return sum(p.pnl for p in self._paper.all_positions())
+        return sum(p.pnl for p in self._engine.all_positions())
+
+    @property
+    def engine(self):
+        return self._engine
+
+    @property
+    def paper(self):
+        return self._engine
 
     @property
     def market(self) -> Optional[Market]:
@@ -1027,18 +1038,25 @@ class StrategyContext:
 
     # ── Orders ──────────────────────────────────────────────────────────────
 
-    def buy(self, side: str, amount: float):
-        """Place a market buy order against this strategy's paper engine."""
+    def buy(self, side: str, amount: float, **kwargs):
+        """Place a market buy order against this strategy's engine (paper or real)."""
         if self._hub is not None and self._hub.buy_once_per_market and self._hub._bought_this_market.get(self.name, False):
             return None
-        order = self._place_buy(side, amount)
+        order = self._place_buy(side, amount, **kwargs)
         if self._hub is not None and order:
             self._hub._bought_this_market[self.name] = True
         return order
 
-    def _place_buy(self, side: str, amount: float):
+    def _place_buy(self, side: str, amount: float, **kwargs):
         """Place the order and fire Telegram notifications (bypasses guards)."""
-        order = self._paper.buy(market=self._market, side=side, amount=amount)
+        if getattr(self._engine, "config", None) is not None and getattr(self._engine.config, "require_confirmation", False):
+            kwargs.setdefault("confirm", False)
+        # paper engine cannot accept real-specific kwargs
+        hub_engine = getattr(self._hub, "engine", "paper") if self._hub else "paper"
+        if hub_engine != "real":
+            allowed = {"stop_loss_pct", "take_profit_pct", "time_window_start", "time_window_end", "stop_loss", "take_profit", "trail_sl", "trail_tp"}
+            kwargs = {k: v for k, v in kwargs.items() if k in allowed}
+        order = self._engine.buy(market=self._market, side=side, amount=amount, **kwargs)
 
         # Send Telegram notification if configured
         if self._hub is not None and self._hub._telegram and order:
@@ -1053,26 +1071,37 @@ class StrategyContext:
 
         return order
 
-    def limit(self, side: str, price: float, amount: float):
-        """Place a limit order against this strategy's paper engine.
+    def limit(self, side: str, price: float, amount: float, **kwargs):
+        """Place a limit order against this strategy's engine.
 
         Respects the same ``buy_once_per_market`` guard as :meth:`buy`, so
         a limit order cannot be used to circumvent the once-per-market cap.
         """
         if self._hub is not None and self._hub.buy_once_per_market and self._hub._bought_this_market.get(self.name, False):
             return None
-        order = self._paper.limit(
-            market=self._market, side=side, price=price, amount=amount
+        if getattr(self._engine, "config", None) is not None and getattr(self._engine.config, "require_confirmation", False):
+            kwargs.setdefault("confirm", False)
+        hub_engine = getattr(self._hub, "engine", "paper") if self._hub else "paper"
+        if hub_engine != "real":
+            allowed = {"time_window_start", "time_window_end"}
+            kwargs = {k: v for k, v in kwargs.items() if k in allowed}
+        order = self._engine.limit(
+            market=self._market, side=side, price=price, amount=amount, **kwargs
         )
         if self._hub is not None and order:
             self._hub._bought_this_market[self.name] = True
         return order
 
-    def close_position(self, side: str, amount: Optional[float] = None):
+    def close_position(self, side: str, amount: Optional[float] = None, **kwargs):
         """Close an open position for this strategy."""
-        order = self._paper.sell_position(
-            market=self._market, side=side, amount=amount
-        )
+        if hasattr(self._engine, "sell_position"):
+            order = self._engine.sell_position(
+                market=self._market, side=side, amount=amount, **kwargs
+            )
+        else:
+            order = self._engine.sell(
+                market=self._market, side=side, amount=amount, **kwargs
+            )
         
         # Send Telegram notification if configured
         if self._hub is not None and self._hub._telegram and order:
@@ -1348,7 +1377,8 @@ class _RegisteredStrategy:
     id: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     run_count: int = 0
-    paper: Optional[PaperEngine] = None  # lazily built on first cycle
+    paper: Optional[PaperEngine] = None  # lazily built on first cycle (or RealTradingEngine when engine=real)
+    _engine: Optional[object] = None  # unified engine ref (paper or real)
     ctx: Optional[StrategyContext] = None
 
     def __post_init__(self) -> None:
@@ -1416,6 +1446,7 @@ class BotHub:
         buy_once_per_market: bool = True,
         chainlink_history=None,
         market_provider=None,
+        engine: str | object | None = None,
         **kwargs,
     ):
         asset = asset.upper()
@@ -1460,13 +1491,32 @@ class BotHub:
             kwargs.pop("market_provider", None)
         self._market_provider = market_provider
 
+        # Engine selection — "paper" (default, isolated per-strategy) or "real" (shared client.real)
+        if engine is None:
+            engine_name = "paper"
+            # allow paper= kwarg for backcompat
+            if "paper" in kwargs:
+                pv = kwargs.pop("paper")
+                engine_name = "real" if pv is False else "paper"
+        elif isinstance(engine, str):
+            engine_name = engine.lower()
+        else:
+            engine_name = "custom"
+        self.engine = engine_name
+        self._custom_engine = engine if not isinstance(engine, str) and engine is not None else None
+
         # One shared client for market discovery + stream creation.
-        # Its paper engine is unused — each strategy gets its own.
+        # Its paper engine is unused when engine=="paper" — each strategy gets its own.
+        # For engine=="real", shared client's real engine is the shared engine.
         self._shared_client = Client(
             balance=default_balance,
             paper_config=self._paper_config,
             **kwargs,
         )
+        if engine_name == "real" and self._shared_client.real is None:
+            raise ValueError("engine='real' requires private_key + rpc_url + polymarket_api_key")
+        if engine_name == "custom" and self._custom_engine is None:
+            raise ValueError("custom engine instance required")
 
         self._strategies: list[_RegisteredStrategy] = []
         self._market: Optional[Market] = None
@@ -1988,14 +2038,24 @@ class BotHub:
                     self._market = ext_market
                     self._log.info("Market found (via provider): %s (shared by %d tickers)",
                                    self._market.slug, len(self._active_tickers()))
-                    # Build / refresh each strategy's and variant's PaperEngine + Context (same as native path)
+                    # Build / refresh each strategy's and variant's engine + Context
                     for s in self._active_tickers():
                         if s.paper is None:
-                            from .trading.paper_engine import PaperEngine
-                            s.paper = PaperEngine(
-                                balance=s.balance,
-                                config=self._paper_config,
-                            )
+                            if getattr(self, "engine", "paper") == "real":
+                                # real: share single RealTradingEngine across strategies
+                                s.paper = self._shared_client.real  # type: ignore
+                                s._engine = self._shared_client.real  # type: ignore
+                            elif getattr(self, "engine", "paper") == "custom" and getattr(self, "_custom_engine", None) is not None:
+                                s.paper = self._custom_engine  # type: ignore
+                                s._engine = self._custom_engine  # type: ignore
+                            else:
+                                from .trading.paper_engine import PaperEngine
+                                s.paper = PaperEngine(
+                                    balance=s.balance,
+                                    config=self._paper_config,
+                                    db=self._shared_client.db,
+                                )
+                                s._engine = s.paper
                         s.ctx = StrategyContext(
                             name=s.name,
                             stream=self._stream,
@@ -2016,6 +2076,7 @@ class BotHub:
                             bought_this_candle=self._bought_this_candle,
                             hub=self,
                             chainlink_history=self._chainlink_history,
+                            engine=getattr(s, "_engine", s.paper),
                         )
                         if self._log_dir and s.name not in self._strategy_loggers:
                             from .utils.logging_utils import setup_strategy_logger
@@ -2031,14 +2092,23 @@ class BotHub:
         self._log.info("Market found: %s (shared by %d tickers)",
                        self._market.slug, len(self._active_tickers()))
 
-        # Build / refresh each strategy's and variant's PaperEngine + Context.
+        # Build / refresh each strategy's and variant's engine + Context.
         for s in self._active_tickers():
             if s.paper is None:
-                from .trading.paper_engine import PaperEngine
-                s.paper = PaperEngine(
-                    balance=s.balance,
-                    config=self._paper_config,
-                )
+                if getattr(self, "engine", "paper") == "real":
+                    s.paper = self._shared_client.real  # type: ignore
+                    s._engine = self._shared_client.real  # type: ignore
+                elif getattr(self, "engine", "paper") == "custom" and getattr(self, "_custom_engine", None) is not None:
+                    s.paper = self._custom_engine  # type: ignore
+                    s._engine = self._custom_engine  # type: ignore
+                else:
+                    from .trading.paper_engine import PaperEngine
+                    s.paper = PaperEngine(
+                        balance=s.balance,
+                        config=self._paper_config,
+                        db=self._shared_client.db,
+                    )
+                    s._engine = s.paper
             s.ctx = StrategyContext(
                 name=s.name,
                 stream=self._stream,  # set later in _stream_prices
@@ -2059,6 +2129,7 @@ class BotHub:
                 bought_this_candle=self._bought_this_candle,
                 hub=self,
                 chainlink_history=self._chainlink_history,
+                engine=getattr(s, "_engine", s.paper),
             )
             # Per-strategy rotating file logger
             if self._log_dir and s.name not in self._strategy_loggers:
@@ -2072,13 +2143,20 @@ class BotHub:
         """Set up ONE stream and fan ticks out to all strategies + variants."""
         self._stream = self._shared_client.stream(self._market)
 
-        # Attach each strategy's and variant's paper engine to the SAME stream
-        # so that limit orders auto-fill for every ticker independently.
+        # Attach each strategy's and variant's engine to the SAME stream
         for s in self._active_tickers():
-            if s.paper is not None:
-                s.paper.attach_stream(self._stream, self._market)
+            eng = getattr(s, "_engine", None) or getattr(s, "paper", None)
+            if eng is not None:
+                try:
+                    eng.attach_stream(self._stream, self._market)
+                except Exception:
+                    pass
             if s.ctx is not None:
                 s.ctx._stream = self._stream
+                # keep ctx engine in sync
+                if eng is not None:
+                    s.ctx._engine = eng
+                    s.ctx._paper = eng
 
         @self._stream.on("price")
         def on_price(up: float, down: float):
@@ -2265,21 +2343,31 @@ class BotHub:
         """Resolve positions for every strategy and variant after the market closes."""
         if not self._market:
             return
-        final_up = self._final_up if self._final_up is not None else getattr(self._stream, "up", None)
-        final_down = self._final_down if self._final_down is not None else getattr(self._stream, "down", None)
+        final_up = self._final_up if self._final_up is not None else getattr(self._stream, "up", None) if self._stream else None
+        final_down = self._final_down if self._final_down is not None else getattr(self._stream, "down", None) if self._stream else None
         if final_up is None or final_down is None or final_up == final_down:
             self._log.info("No final prices to resolve %s", self._market.slug)
             return
         outcome = "UP" if final_up > final_down else "DOWN"
+        # Real engine: on-chain settlement, no manual resolve; just sync
+        if getattr(self, "engine", "paper") == "real":
+            self._log.info("Real engine: market %s outcome %s (on-chain settle pending)", self._market.slug, outcome)
+            try:
+                if hasattr(self._shared_client.real, "sync_positions_from_chain"):
+                    self._shared_client.real.sync_positions_from_chain()
+            except Exception:
+                pass
+            return
         for s in self._active_tickers():
-            if s.paper is None:
+            eng = getattr(s, "_engine", None) or s.paper
+            if eng is None:
                 continue
             try:
-                s.paper.resolve(self._market, outcome)
+                eng.resolve(self._market, outcome)
             except Exception as exc:
                 self._log.warning("Failed to resolve %s: %s", s.name, exc)
                 continue
-            for pos in s.paper.all_positions():
+            for pos in eng.all_positions():
                 if pos.market_id != self._market.id or not pos.resolved:
                     continue
                 slog = self._strategy_loggers.get(s.name, self._log)
