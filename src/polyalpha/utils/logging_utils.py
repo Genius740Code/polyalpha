@@ -97,15 +97,20 @@ class SensitiveDataFilter(logging.Filter):
     - File paths (optional)
     """
 
-    # Patterns for sensitive data
+    # Patterns for sensitive data — order matters: longest/most-sensitive first
     PATTERNS = [
-        # Ethereum addresses (0x followed by 40 hex chars)
-        (r'0x[a-f0-9]{40}', lambda m: f"{m.group(0)[:6]}...{m.group(0)[-4:]}"),
-        # Transaction hashes (0x followed by 64 hex chars) - check this before private keys
-        (r'0x[a-f0-9]{64}', lambda m: f"{m.group(0)[:10]}...{m.group(0)[-4:]}"),
-        # Private keys (long hex strings, typically 64+ chars, but not starting with 0x to avoid conflict)
-        # Use positive lookahead to exclude content hashes (sha256:, md5:, hash=, etc.)
-        (r'\b(?!(?:sha256:|md5:|sha1:|hash=|checksum=|digest=))[a-f0-9]{64,}\b', lambda m: f"{m.group(0)[:8]}...REDACTED"),
+        # Private keys with 0x prefix (0x + 64 hex) — most sensitive, fully redacted
+        # Must come before address (40) and tx-hash to avoid partial masking
+        (r'0x[a-fA-F0-9]{64}\b', lambda m: "0x...REDACTED"),
+        # Transaction hashes (0x + 64 hex) — also fully redacted when not caught as private key
+        # (kept as fallback; private-key pattern above already handles 0x+64)
+        # Ethereum addresses (0x + 40 hex) — partially masked (6...4) to retain debuggability
+        (r'0x[a-fA-F0-9]{40}\b', lambda m: f"{m.group(0)[:6]}...{m.group(0)[-4:]}"),
+        # Private keys without 0x prefix (64+ hex) — exclude content hashes via lookahead
+        (r'\b(?!(?:sha256:|md5:|sha1:|hash=|checksum=|digest=))[a-fA-F0-9]{64,}\b', lambda m: f"{m.group(0)[:8]}...REDACTED"),
+        # Private-key assignment form — catches POLYALPHA_PRIVATE_KEY=0x..., private_key="0x...", etc.
+        (r'private_key["\']?\s*[:=]\s*["\']?0x?[a-fA-F0-9]{64,}["\']?', 'private_key=***REDACTED***'),
+        (r'PRIVATE_KEY["\']?\s*[:=]\s*["\']?0x?[a-fA-F0-9]{64,}["\']?', 'PRIVATE_KEY=***REDACTED***'),
         # API keys in common formats
         (r'api_key["\']?\s*[:=]\s*["\']?[^"\']{8,}["\']?', 'api_key=***REDACTED***'),
         (r'API[_-]?KEY["\']?\s*[:=]\s*["\']?[^"\']{8,}["\']?', 'API_KEY=***REDACTED***'),
