@@ -22,7 +22,7 @@ class TestDataFeedConfig:
         assert cfg.timeframe == "5m"
         assert cfg.lookback_periods == 500
         assert cfg.use_cache is True
-        assert cfg.scraping_recv_timeout == 10
+        assert cfg.scraping_recv_timeout == 30
         assert cfg.scraping_retry_attempts == 3
         assert cfg.scraping_timeout == 90
         assert "BTC" in cfg.asset_map
@@ -382,5 +382,5 @@ class TestDataFeedIO:
 
     @pytest.mark.unit
     def test_all_timeframe_map_entries_present(self):
-        expected = {"1m", "5m", "15m", "1h", "4h", "1d"}
+        expected = {"1m", "5m", "15m", "1h", "4h", "1d", "24h"}
         assert set(TIMEFRAME_MAP.keys()) == expected

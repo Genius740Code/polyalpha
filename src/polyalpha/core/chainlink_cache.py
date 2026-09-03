@@ -6,6 +6,8 @@ import time
 from datetime import datetime
 from typing import Optional
 
+from ..analysis.streaming import ChainlinkStreamer
+
 log = logging.getLogger(__name__)
 
 DEFAULT_MAX_AGE = 60.0  # seconds before a cached price is considered stale
@@ -24,25 +26,38 @@ class ChainlinkPriceCache:
         cache.stop()
     """
 
-    def __init__(self, symbol: str = "BTC", max_age: float = DEFAULT_MAX_AGE):
+    def __init__(
+        self,
+        symbol: str = "BTC",
+        max_age: float = DEFAULT_MAX_AGE,
+        streamer: Optional[ChainlinkStreamer] = None,
+    ):
         self._prices: dict[str, tuple[float, float]] = {}
         self._lock = threading.Lock()
-        self._streamer: Optional[object] = None
+        self._streamer: Optional[ChainlinkStreamer] = streamer
+        self._owns_streamer: bool = streamer is None
         self._max_age = max_age
         self._start(symbol)
 
     def _start(self, symbol: str) -> None:
-        from ..analysis.streaming import ChainlinkStreamer
+        if self._streamer is None:
+            self._streamer = ChainlinkStreamer()
 
-        self._streamer = ChainlinkStreamer()
+        streamer = self._streamer
 
-        @self._streamer.on("price")
+        @streamer.on("price")
         def on_price(sym: str, price: float, timestamp: datetime) -> None:
             with self._lock:
-                self._prices[sym] = (price, timestamp.timestamp())
+                # Track the local receive time, not the oracle-reported
+                # timestamp — the oracle may report an old feed timestamp even
+                # for a fresh message, which would make get_price flap.
+                self._prices[sym] = (price, time.time())
 
-        self._streamer.start(symbol, background=True)
-        log.info("ChainlinkPriceCache started for %s", symbol)
+        if self._owns_streamer:
+            self._streamer.start(symbol, background=True)
+            log.info("ChainlinkPriceCache started for %s", symbol)
+        else:
+            log.info("ChainlinkPriceCache reusing shared streamer for %s", symbol)
 
     def get_price(self, symbol: str) -> Optional[float]:
         """Return the latest spot price for *symbol*, or *None* if stale or not yet received."""
@@ -58,9 +73,10 @@ class ChainlinkPriceCache:
 
     def stop(self) -> None:
         if self._streamer:
-            try:
-                self._streamer.stop()
-            except Exception:
-                pass
+            if self._owns_streamer:
+                try:
+                    self._streamer.stop()
+                except Exception:
+                    pass
             self._streamer = None
             log.info("ChainlinkPriceCache stopped")

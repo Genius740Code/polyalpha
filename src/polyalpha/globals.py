@@ -61,6 +61,7 @@ _FEED_FIELDS = (
     "eth_feed",
     "klines_15m",
     "klines_1h",
+    "chainlink_history",
 )
 
 
@@ -83,6 +84,11 @@ class Globals:
     klines, obi_cache, futures, db, eth_feed, klines_15m, klines_1h :
         Optional global feeds. Out of scope for this plan (None by default),
         skipped by ``start()`` / ``stop()``.
+    chainlink_history : object | None
+        Shared candle history — :class:`~polyalpha.history.ChainlinkRecorder`.
+        User chooses e.g. ``{"1m":10, "1h":50, "1s":20}``; one WS → one SQLite
+        ``~/.polyalpha/chainlink.db`` → N strats. Unused TFs pruned automatically.
+
     """
 
     asset: str = "BTC"
@@ -96,6 +102,7 @@ class Globals:
     eth_feed: Optional[object] = None
     klines_15m: Optional[object] = None
     klines_1h: Optional[object] = None
+    chainlink_history: Optional[object] = None
 
     _started: list[object] = field(default_factory=list, init=False, repr=False)
 
@@ -107,6 +114,7 @@ class Globals:
         price_feed: bool = True,
         cvd: bool = True,
         liq: bool = False,
+        chainlink_history=None,
     ) -> "Globals":
         """Build the standard in-scope shared feeds.
 
@@ -132,6 +140,26 @@ class Globals:
             from .analysis.liquidations import LiquidationTracker
 
             g.liq = LiquidationTracker()
+        # chainlink_history can be True / dict / ChainlinkHistoryConfig / ChainlinkRecorder
+        if chainlink_history is not None and chainlink_history is not False:
+            try:
+                from .history import ChainlinkHistoryConfig, ChainlinkRecorder  # type: ignore
+
+                if isinstance(chainlink_history, ChainlinkRecorder):
+                    g.chainlink_history = chainlink_history
+                elif isinstance(chainlink_history, ChainlinkHistoryConfig):
+                    g.chainlink_history = ChainlinkRecorder(config=chainlink_history)
+                elif isinstance(chainlink_history, dict):
+                    cfg = ChainlinkHistoryConfig(warmup=dict(chainlink_history))
+                    g.chainlink_history = ChainlinkRecorder(config=cfg)
+                elif chainlink_history is True:
+                    cfg = ChainlinkHistoryConfig(warmup={"1m": 20})
+                    g.chainlink_history = ChainlinkRecorder(config=cfg)
+                elif isinstance(chainlink_history, str):
+                    cfg = ChainlinkHistoryConfig(warmup={"1m": 20}, db_path=chainlink_history)
+                    g.chainlink_history = ChainlinkRecorder(config=cfg)
+            except Exception as exc:
+                log.warning("Globals chainlink_history init failed: %s", exc)
         return g
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -150,6 +178,15 @@ class Globals:
             try:
                 if name == "price_feed":
                     feed.start(self.asset, background=True)
+                elif name == "chainlink_history":
+                    # chainlink_history needs asset, started background
+                    try:
+                        feed.start(self.asset, background=True)
+                    except TypeError:
+                        # fallback for mock objects without asset param
+                        start = getattr(feed, "start", None)
+                        if start:
+                            start()
                 else:
                     start = getattr(feed, "start", None)
                     if start is None:

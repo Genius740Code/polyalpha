@@ -5,6 +5,7 @@ Markets module tests — run with: pytest tests/unit/markets/test_market_client.
 import pytest
 from polyalpha.markets import MarketClient, RateLimiter
 import time
+from unittest.mock import MagicMock
 
 
 # ── Rate limiter tests ─────────────────────────────────────────────────────────
@@ -222,4 +223,80 @@ def test_parse_event_no_token_swapping_on_high_down_price():
     assert market.down_token == "token_down_456"
     assert market.up_price == 0.20
     assert market.down_price == 0.80
+
+
+# ── Resolved-outcome fallback (#4) ────────────────────────────────────────────
+
+@pytest.mark.unit
+def test_resolve_outcome_up_wins():
+    """Resolved UP market reports winner = UP via Gamma."""
+    client = MarketClient()
+    mock_event = {
+        "id": "event-1",
+        "title": "Will BTC close up?",
+        "closed": True,
+        "archived": True,
+        "markets": [
+            {
+                "outcomes": '["Up", "Down"]',
+                "outcomePrices": '["1.000000000000000000", "0.000000000000000000"]',
+            }
+        ],
+    }
+    client._get = MagicMock(return_value=[mock_event])
+    assert client.resolve_outcome("btc-updown-5m-1751234700") == "UP"
+
+
+@pytest.mark.unit
+def test_resolve_outcome_down_wins():
+    """Resolved market where DOWN token is priced at $1.00 reports DOWN."""
+    client = MarketClient()
+    mock_event = {
+        "id": "event-2",
+        "title": "Will BTC close down?",
+        "closed": True,
+        "archived": True,
+        "markets": [
+            {
+                "outcomes": '["Up", "Down"]',
+                "outcomePrices": '["0.0000000000000000", "1.0000000000000000"]',
+            }
+        ],
+    }
+    client._get = MagicMock(return_value=[mock_event])
+    assert client.resolve_outcome("btc-updown-5m-1751234700") == "DOWN"
+
+
+@pytest.mark.unit
+def test_resolve_outcome_unresolved_returns_none():
+    """Non-closed / unresolved market yields None from gamma fallback."""
+    client = MarketClient()
+    mock_event = {
+        "id": "event-3",
+        "title": "Will BTC close up?",
+        "closed": False,
+        "archived": False,
+        "markets": [
+            {
+                "outcomes": '["Up", "Down"]',
+                "outcomePrices": '["0.9950", "0.0050"]',
+                "umaResolutionStatus": "PENDING",
+            }
+        ],
+    }
+    client._get = MagicMock(lambda path, params=None: [mock_event])
+    assert client.resolve_outcome("btc-updown-5m-1751234700") is None
+
+
+@pytest.mark.unit
+def test_resolve_outcome_missing_event_returns_none():
+    """404 / missing event → no outcome, no exception."""
+    import httpx
+    client = MarketClient()
+    client._get = MagicMock(
+        side_effect=httpx.HTTPStatusError(
+            "404", request=httpx.Request("GET", "/events"), response=httpx.Response(404)
+        )
+    )
+    assert client.resolve_outcome("btc-updown-5m-1751234700") is None
 

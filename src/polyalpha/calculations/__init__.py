@@ -16,10 +16,12 @@ from .market_calculations import MarketCalculations
 from .volume_calculations import VolumeCalculations
 from .base_accessor import BaseAccessor
 from .chainlink_accessor import ChainlinkAccessor
+from .binance_accessor import BinanceAccessor
 
 __all__ = [
     "MarketCalculations",
     "VolumeCalculations", 
     "BaseAccessor",
     "ChainlinkAccessor",
+    "BinanceAccessor",
 ]

@@ -86,6 +86,7 @@ class Client:
         rpc_url: str | None = None,
         polymarket_api_key: str | None = None,
         real_config: RealTradingConfig | None = None,
+        chainlink_history=None,
     ):
         # Configure library-specific logger without affecting global logging
         self._log = logging.getLogger("polyalpha")
@@ -104,7 +105,13 @@ class Client:
             from .database.database import TradeDatabase
             self._db = TradeDatabase(db_path)
 
-        self.markets = MarketClient(timeout=timeout, retries=retries, rate_limit=rate_limit)
+        self.time_sync = TimeSync()
+        self.markets = MarketClient(
+            timeout=timeout,
+            retries=retries,
+            rate_limit=rate_limit,
+            time_sync=self.time_sync,
+        )
         self.paper   = PaperEngine(balance=balance, config=paper_config, db_path=db_path, db=self._db)
         self.ai      = OpenRouterClient(api_key=openrouter_api_key) if openrouter_api_key else None
         self._clob   = ClobBookClient(timeout=timeout, retries=retries, rate_limit=rate_limit)
@@ -138,9 +145,51 @@ class Client:
         if db_path:
             self._log.info("Database path: %s", db_path)
 
+        # ── Chainlink history (read-only or shared) ──────────────────────
+        # User chooses e.g. {"1m":10, "1h":50, "1s":20} → read via client.chainlink_history
+        self.chainlink_history = None
+        self._chainlink_history_owned = False
+        if chainlink_history is not None and chainlink_history is not False:
+            try:
+                from .history import ChainlinkHistoryConfig, ChainlinkRecorder  # type: ignore
+                from .history.view import ChainlinkHistoryView  # type: ignore
+
+                if isinstance(chainlink_history, ChainlinkRecorder):
+                    self.chainlink_history = chainlink_history
+                    self._chainlink_history_owned = False
+                elif isinstance(chainlink_history, ChainlinkHistoryConfig):
+                    # client is reader by default — read_only
+                    # if config says block etc, keep it but don't start WS automatically
+                    rec = ChainlinkRecorder(config=chainlink_history, read_only=False)
+                    # if user explicitly wants writer, they'd pass background start; we don't auto-start here
+                    self.chainlink_history = rec
+                    self._chainlink_history_owned = True
+                elif isinstance(chainlink_history, dict):
+                    cfg = ChainlinkHistoryConfig(warmup=dict(chainlink_history))
+                    rec = ChainlinkRecorder(config=cfg, read_only=False)
+                    self.chainlink_history = rec
+                    self._chainlink_history_owned = True
+                elif chainlink_history is True:
+                    cfg = ChainlinkHistoryConfig(warmup={"1m": 20})
+                    rec = ChainlinkRecorder(config=cfg, read_only=False)
+                    self.chainlink_history = rec
+                    self._chainlink_history_owned = True
+                elif isinstance(chainlink_history, str):
+                    # path to db — read_only view
+                    from pathlib import Path as _P  # noqa
+                    cfg = ChainlinkHistoryConfig(warmup={"1m": 20}, db_path=chainlink_history)
+                    rec = ChainlinkRecorder(config=cfg, read_only=True)
+                    # wrap in view for uniform API with default asset BTC
+                    self.chainlink_history = ChainlinkHistoryView(rec, asset="BTC")
+                    self._chainlink_history_owned = True
+                # also allow ChainlinkHistoryView directly
+                elif hasattr(chainlink_history, "candles"):
+                    self.chainlink_history = chainlink_history
+            except Exception as exc:
+                self._log.warning("Client chainlink_history init failed: %s", exc)
+
         self._timeout = timeout
         self._retries = retries
-        self.time_sync = TimeSync()
         self._log.info(
             "Client ready — balance=%.1f, timeout=%d, retries=%d, rate_limit=%s",
             balance, timeout, retries, rate_limit or "unlimited",
@@ -159,6 +208,15 @@ class Client:
             self._db.close()
         if self.ai:
             self.ai.close()
+        # chainlink history (only close if owned)
+        rec = getattr(self, "chainlink_history", None)
+        if rec is not None and getattr(self, "_chainlink_history_owned", False):
+            try:
+                # if it's a view, close underlying recorder
+                inner = getattr(rec, "_rec", None)
+                (inner or rec).stop()  # type: ignore
+            except Exception:
+                pass
         self._log.info("Client closed")
 
     def __enter__(self):

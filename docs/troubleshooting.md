@@ -12,7 +12,7 @@ Common issues, causes, and solutions when using polyalpha.
 - Network interruption
 - Market expires (resolution)
 - Rate limiting from Polymarket WebSocket
-- Stale data detection (no price update for 30 seconds)
+- Stale data detection (no price update for 10s; force-reconnect at 20s)
 
 **Solutions:**
 ```python

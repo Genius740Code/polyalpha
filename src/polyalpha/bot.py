@@ -81,6 +81,51 @@ except ImportError:
     TimeWindow = None  # type: ignore[assignment]
 
 
+# ── Chainlink history helper ───────────────────────────────────────────────
+
+def _resolve_chainlink_history(
+    value, asset: str
+):
+    """
+    Normalize chainlink_history param to (recorder, owned).
+
+    Accepts:
+      None / False -> (None, False)
+      True        -> default ChainlinkRecorder for asset ("1m": 20)
+      dict        -> warmup dict {"1m":10, "1h":50}
+      ChainlinkHistoryConfig -> config
+      ChainlinkRecorder -> shared recorder (not owned)
+    Returns (recorder|None, owned:bool)
+    """
+    if value is None or value is False:
+        return None, False
+    try:
+        from .history import ChainlinkHistoryConfig, ChainlinkRecorder
+    except ImportError:
+        return None, False
+
+    if isinstance(value, ChainlinkRecorder):
+        return value, False
+    if isinstance(value, ChainlinkHistoryConfig):
+        rec = ChainlinkRecorder(config=value)
+        return rec, True
+    if isinstance(value, dict):
+        # dict warmup like {"1m":10, "1h":50, "1s":20}
+        cfg = ChainlinkHistoryConfig(warmup=dict(value))
+        rec = ChainlinkRecorder(config=cfg)
+        return rec, True
+    if value is True:
+        cfg = ChainlinkHistoryConfig(warmup={"1m": 20})
+        rec = ChainlinkRecorder(config=cfg)
+        return rec, True
+    # string path? treat as db_path with default warmup
+    if isinstance(value, str):
+        cfg = ChainlinkHistoryConfig(warmup={"1m": 20}, db_path=value)
+        rec = ChainlinkRecorder(config=cfg)
+        return rec, True
+    return None, False
+
+
 # ── Price Snapshot ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -138,6 +183,11 @@ class TickContext:
     def __init__(self, bot: Bot):
         self._bot = bot
         self._client = bot._client
+        # engine may be missing on test doubles; fallback to paper for backcompat
+        self._engine = getattr(bot, "_engine", None) or getattr(bot._client, "paper", None) or getattr(bot, "_client", None)
+        # if engine is still a client, try paper
+        if self._engine is not None and hasattr(self._engine, "paper") and not hasattr(self._engine, "buy"):
+            self._engine = self._engine.paper
         self._market = bot._market
         self._stream = bot._stream
         self._price_history: deque[float] = deque(maxlen=200)
@@ -160,21 +210,26 @@ class TickContext:
 
     @property
     def balance(self) -> float:
-        """Current paper-trading balance."""
-        return self._client.paper.balance
+        """Current balance (paper or real depending on Bot engine)."""
+        return self._engine.balance
 
     @property
     def positions(self) -> list:
         """Open (unresolved) positions."""
-        return self._client.paper.positions()
+        return self._engine.positions()
 
     @property
     def pnl(self) -> float:
         """Realised P&L from all resolved positions."""
         total = 0.0
-        for pos in self._client.paper.all_positions():
+        for pos in self._engine.all_positions():
             total += pos.pnl
         return total
+
+    @property
+    def engine(self):
+        """Underlying trading engine (PaperEngine or RealTradingEngine)."""
+        return self._engine
 
     @property
     def market(self) -> Optional[Market]:
@@ -193,7 +248,7 @@ class TickContext:
 
     # ── Orders ──────────────────────────────────────────────────────────────
 
-    def buy(self, side: str, amount: float):
+    def buy(self, side: str, amount: float, **kwargs):
         """
         Place a market buy order.
 
@@ -201,21 +256,29 @@ class TickContext:
         ----------
         side : "UP" | "DOWN"
         amount : USDC to spend
+        **kwargs : forwarded to engine (e.g. confidence, price, stop_loss, take_profit for real)
 
         Returns
         -------
-        PaperOrder
+        PaperOrder | RealOrder
         """
         if self._bot.buy_once_per_market and self._bot._bought_this_market:
             return None
-        order = self._place_buy(side, amount)
+        order = self._place_buy(side, amount, **kwargs)
         if order:
             self._bot._bought_this_market = True
         return order
 
-    def _place_buy(self, side: str, amount: float):
+    def _place_buy(self, side: str, amount: float, **kwargs):
         """Place the order and fire Telegram notifications (bypasses guards)."""
-        order = self._client.paper.buy(market=self._market, side=side, amount=amount)
+        # Real engine accepts confirm=False for bot loop (no stdin)
+        if getattr(self._engine, "config", None) is not None and getattr(self._engine.config, "require_confirmation", False):
+            kwargs.setdefault("confirm", False)
+        # Filter kwargs for paper (paper does not accept confidence/confirm)
+        if getattr(self._bot, "engine", "paper") != "real":
+            allowed = {"stop_loss_pct", "take_profit_pct", "time_window_start", "time_window_end", "stop_loss", "take_profit", "trail_sl", "trail_tp"}
+            kwargs = {k: v for k, v in kwargs.items() if k in allowed}
+        order = self._engine.buy(market=self._market, side=side, amount=amount, **kwargs)
 
         # Send Telegram notification if configured
         if self._bot._telegram and order:
@@ -229,7 +292,7 @@ class TickContext:
 
         return order
 
-    def limit(self, side: str, price: float, amount: float):
+    def limit(self, side: str, price: float, amount: float, **kwargs):
         """
         Place a limit order.
 
@@ -241,13 +304,23 @@ class TickContext:
 
         Returns
         -------
-        PaperOrder
+        PaperOrder | RealOrder
         """
-        return self._client.paper.limit(
-            market=self._market, side=side, price=price, amount=amount
+        if self._bot.buy_once_per_market and self._bot._bought_this_market:
+            return None
+        if getattr(self._engine, "config", None) is not None and getattr(self._engine.config, "require_confirmation", False):
+            kwargs.setdefault("confirm", False)
+        if getattr(self._bot, "engine", "paper") != "real":
+            allowed = {"time_window_start", "time_window_end"}
+            kwargs = {k: v for k, v in kwargs.items() if k in allowed}
+        order = self._engine.limit(
+            market=self._market, side=side, price=price, amount=amount, **kwargs
         )
+        if order:
+            self._bot._bought_this_market = True
+        return order
 
-    def close_position(self, side: str, amount: Optional[float] = None):
+    def close_position(self, side: str, amount: Optional[float] = None, **kwargs):
         """
         Close (sell) an open position.
 
@@ -260,11 +333,17 @@ class TickContext:
 
         Returns
         -------
-        PaperOrder
+        PaperOrder | RealOrder
         """
-        order = self._client.paper.sell_position(
-            market=self._market, side=side, amount=amount
-        )
+        # paper: sell_position, real: sell
+        if hasattr(self._engine, "sell_position"):
+            order = self._engine.sell_position(
+                market=self._market, side=side, amount=amount, **kwargs
+            )
+        else:
+            order = self._engine.sell(
+                market=self._market, side=side, amount=amount, **kwargs
+            )
         
         # Send Telegram notification if configured
         if self._bot._telegram and order:
@@ -367,8 +446,9 @@ class TickContext:
 
         Provides a rolling window of Chainlink BTC prices with convenient
         methods for calculating percentage changes over custom time periods.
+        Backed by the Chainlink streamer's own rolling window when available.
 
-        Returns ``None`` if TimeWindow is not available.
+        Returns ``None`` if the window is not available.
 
         Examples
         --------
@@ -383,7 +463,46 @@ class TickContext:
         >>> ctx.cl.age_s
         0.5
         """
+        chainlink = self._bot._chainlink
+        if chainlink is not None:
+            window = getattr(chainlink, "window", None)
+            if window is not None:
+                return window
         return self._cl_window
+
+    @property
+    def chainlink_history(self):
+        """
+        Chainlink candle history with warmup-aware TA.
+
+        Configured via ``Bot(chainlink_history=...)``. Example:
+
+        >>> bot = Bot("BTC","5m", chainlink_history={"1m":10, "1h":50, "1s":20})
+        >>> @bot.on_tick
+        ... def s(ctx):
+        ...     if ctx.chainlink_history.is_ready("1m",10):
+        ...         ema = ctx.chainlink_history.ema("1m",10)
+        ...         df  = ctx.chainlink_history.candles("1m",10)
+
+        Returns a :class:`~polyalpha.history.ChainlinkHistoryView` (or
+        the underlying :class:`~polyalpha.history.ChainlinkRecorder` when
+        accessed via ``bot.chainlink_history``) or ``None`` if not configured.
+        """
+        # per-tick view (so asset is correct)
+        rec = getattr(self._bot, "_chainlink_history", None)
+        if rec is None:
+            return None
+        # cache per TickContext
+        if hasattr(self, "_chainlink_history_view") and self._chainlink_history_view is not None:
+            return self._chainlink_history_view
+        try:
+            from .history.view import ChainlinkHistoryView
+            # asset from bot
+            view = ChainlinkHistoryView(rec, asset=self._bot.asset, strat_name="bot")
+            self._chainlink_history_view = view
+            return view
+        except Exception:
+            return rec
 
     # ── Indicators (optional — requires analysis deps) ──────────────────────
 
@@ -499,6 +618,8 @@ class Bot:
         paper_config: Optional[PaperConfig] = None,
         log_dir: Optional[str] = None,
         buy_once_per_market: bool = True,
+        chainlink_history=None,
+        engine: str | object | None = None,
         **kwargs,
     ):
         asset = asset.upper()
@@ -511,7 +632,19 @@ class Bot:
 
         self.asset = asset
         self.timeframe = timeframe
-        self.paper_mode = paper
+        # engine resolution — "paper" | "real" | TradingEngineProtocol instance
+        # `paper` bool kept for backcompat: paper=False => real
+        if engine is None:
+            engine_name = "real" if not paper else "paper"
+        elif isinstance(engine, str):
+            engine_name = engine.lower()
+        else:
+            engine_name = "custom"
+        self.engine = engine_name
+        self.paper_mode = paper if engine is None else (engine_name == "paper")
+        if not paper and engine is None:
+            import warnings
+            warnings.warn("Bot(paper=False) is deprecated, use Bot(engine='real')", DeprecationWarning, stacklevel=2)
         self.buy_once_per_market = buy_once_per_market
         self._bought_this_market = False
 
@@ -525,7 +658,22 @@ class Bot:
             resolved = get_paper_config_from_preset("TEST")
 
         kwargs.pop("paper_config", None)
+        # chainlink_history may also be passed via kwargs (e.g. from_tests)
+        if chainlink_history is None and "chainlink_history" in kwargs:
+            chainlink_history = kwargs.pop("chainlink_history")
+        else:
+            kwargs.pop("chainlink_history", None)
         self._client = Client(balance=balance, paper_config=resolved, **kwargs)
+        # Resolve trading engine after client creation
+        if isinstance(engine, object) and not isinstance(engine, str) and engine is not None:
+            # custom engine instance
+            self._engine = engine
+        elif engine_name == "real":
+            if self._client.real is None:
+                raise ValueError("engine='real' requires private_key + rpc_url + polymarket_api_key (Client.real is None)")
+            self._engine = self._client.real
+        else:
+            self._engine = self._client.paper
         self._market: Optional[Market] = None
         self._stream = None
         self._strategy: Optional[Callable] = None
@@ -538,6 +686,8 @@ class Bot:
         self._candle_start_time: float = 0.0
         self._candle_open_price: Optional[float] = None
         self._candle_id: int = 0
+        self._final_up: Optional[float] = None
+        self._final_down: Optional[float] = None
         self._bought_this_candle: dict[int, set[str]] = {}
         self._stop_event = threading.Event()
         self._tick_count = 0
@@ -565,12 +715,6 @@ class Bot:
                 cl = ChainlinkStreamer()
                 cl.start(asset, background=True)
                 self._chainlink = cl
-                # Set up callback to update CL window when prices arrive
-                if self._ctx and self._ctx._cl_window:
-                    @cl.on("price")
-                    def on_cl_price(symbol: str, price: float, timestamp):
-                        if self._ctx and self._ctx._cl_window:
-                            self._ctx._cl_window.update(price)
             except Exception as exc:
                 self._log.warning("Chainlink streamer init failed: %s", exc)
 
@@ -582,6 +726,27 @@ class Bot:
             except Exception as exc:
                 self._log.warning("BinanceAccessor init failed: %s", exc)
 
+        # ── Chainlink history (configurable candle store) ────────────────────
+        # User chooses e.g. {"1m":10, "1h":50, "1s":20}; unused TFs are pruned.
+        # Storage: SQLite WAL at ~/.polyalpha/chainlink.db (or custom), best for
+        # incremental tick→candle with concurrent reads.
+        self._chainlink_history = None
+        self._chainlink_history_owned = False
+        self._on_warmup = None
+        try:
+            rec, owned = _resolve_chainlink_history(chainlink_history, asset)
+            self._chainlink_history = rec
+            self._chainlink_history_owned = owned
+            if rec is not None:
+                # start recorder for this asset (no-op if already started/shared)
+                try:
+                    rec.start(asset, background=True)
+                except Exception as exc:
+                    self._log.warning("Chainlink history start failed: %s", exc)
+                self._log.info("Chainlink history enabled: %s", getattr(rec.config, "warmup", rec))
+        except Exception as exc:
+            self._log.debug("Chainlink history init skipped: %s", exc)
+
     # ── Public API ──────────────────────────────────────────────────────────
 
     def on_tick(self, fn: Callable) -> Callable:
@@ -592,6 +757,28 @@ class Bot:
         """
         self._strategy = fn
         return fn
+
+    def on_warmup(self, fn: Callable) -> Callable:
+        """
+        Decorator — register a warmup-progress callback.
+
+        Called while ``chainlink_history`` is still warming (when
+        ``block="wait"`` the strat is paused, this fires every
+        ``warmup_emit_interval`` seconds).
+
+        Example
+        -------
+        >>> @bot.on_warmup
+        ... def warmup(status):
+        ...     print(f"warming {status}")  # e.g. {"1m":"7/10", "1h":"50/50 ✅"}
+        """
+        self._on_warmup = fn
+        return fn
+
+    @property
+    def chainlink_history(self):
+        """The underlying :class:`~polyalpha.history.ChainlinkRecorder` or None."""
+        return getattr(self, "_chainlink_history", None)
 
     def onresolve(self, fn: Callable) -> Callable:
         """
@@ -693,8 +880,8 @@ class Bot:
         error occurs.
         """
         self._log.info(
-            "Bot starting: %s %s | balance=$%.2f | paper=%s",
-            self.asset, self.timeframe, self._client.paper.balance, self.paper_mode,
+            "Bot starting: %s %s | balance=$%.2f | engine=%s",
+            self.asset, self.timeframe, self._engine.balance, self.engine,
         )
         self._maybe_build_strategy()
         self._stop_event.clear()
@@ -727,8 +914,8 @@ class Bot:
         error occurs.
         """
         self._log.info(
-            "Bot starting (async): %s %s | balance=$%.2f | paper=%s",
-            self.asset, self.timeframe, self._client.paper.balance, self.paper_mode,
+            "Bot starting (async): %s %s | balance=$%.2f | engine=%s",
+            self.asset, self.timeframe, self._engine.balance, self.engine,
         )
         self._maybe_build_strategy()
         self._stop_event.clear()
@@ -765,9 +952,9 @@ class Bot:
         return {
             "ticks": self._tick_count,
             "trades": self._trade_count,
-            "balance": self._client.paper.balance,
-            "pnl": sum(p.pnl for p in self._client.paper.all_positions()),
-            "open_positions": len(self._client.paper.positions()),
+            "balance": self._engine.balance,
+            "pnl": sum(p.pnl for p in self._engine.all_positions()),
+            "open_positions": len(self._engine.positions()),
         }
 
     # ── Cycle ───────────────────────────────────────────────────────────────
@@ -809,44 +996,20 @@ class Bot:
         """Set up stream and call strategy on every price tick."""
         self._stream = self._client.stream(self._market)
 
-        # Wire paper engine to stream for limit-order fills
-        self._client.paper.attach_stream(self._stream, self._market)
+        # Wire engine to stream for limit-order fills / SL-TP
+        try:
+            self._engine.attach_stream(self._stream, self._market)
+        except Exception as exc:
+            self._log.debug("attach_stream failed: %s", exc)
 
         # Create the context
         self._ctx = TickContext(self)
-        
-        # Set up Chainlink callback to update CL window
-        if self._chainlink and self._ctx._cl_window:
-            @self._chainlink.on("price")
-            def on_cl_price(symbol: str, price: float, timestamp):
-                if self._ctx and self._ctx._cl_window:
-                    self._ctx._cl_window.update(price)
 
         # Register handlers
         @self._stream.on("price")
         def on_price(up: float, down: float):
-            if self._stop_event.is_set():
+            if not self._handle_price_tick(up, down):
                 return
-            self._tick_count += 1
-            if self._ctx:
-                self._ctx.record_price(up)
-                self._ctx._invalidate_series_cache()
-            # Refresh Binance data on each tick (candle-gated internally)
-            if self._binance:
-                try:
-                    self._binance._refresh()
-                except Exception as exc:
-                    self._log.warning("Binance refresh failed: %s", exc)
-            # ── Candle tracking ──────────────────────────────────────────
-            now = time.time()
-            tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
-            candle_start = (now // tf_seconds) * tf_seconds
-            if candle_start != self._candle_start_time:
-                self._candle_start_time = candle_start
-                self._candle_open_price = up
-                self._candle_id += 1
-                self._bought_this_candle[self._candle_id] = set()
-            # Call the strategy
             if self._strategy and self._ctx:
                 try:
                     self._strategy(self._ctx)
@@ -855,6 +1018,8 @@ class Bot:
 
         @self._stream.on("close")
         def on_close():
+            self._final_up = getattr(self._stream, "up", None)
+            self._final_down = getattr(self._stream, "down", None)
             self._log.info("Market closed: %s", self._market.slug)
 
         @self._stream.on("price_anomaly")
@@ -875,39 +1040,16 @@ class Bot:
     async def _stream_prices_async(self) -> None:
         """Set up stream and call strategy on every price tick (async version)."""
         self._stream = self._client.stream(self._market)
-        self._client.paper.attach_stream(self._stream, self._market)
+        try:
+            self._engine.attach_stream(self._stream, self._market)
+        except Exception as exc:
+            self._log.debug("attach_stream failed (async): %s", exc)
         self._ctx = TickContext(self)
-        
-        # Set up Chainlink callback to update CL window
-        if self._chainlink and self._ctx._cl_window:
-            @self._chainlink.on("price")
-            def on_cl_price(symbol: str, price: float, timestamp):
-                if self._ctx and self._ctx._cl_window:
-                    self._ctx._cl_window.update(price)
 
         @self._stream.on("price")
         def on_price(up: float, down: float):
-            if self._stop_event.is_set():
+            if not self._handle_price_tick(up, down):
                 return
-            self._tick_count += 1
-            if self._ctx:
-                self._ctx.record_price(up)
-                self._ctx._invalidate_series_cache()
-            # Refresh Binance data on each tick (candle-gated internally)
-            if self._binance:
-                try:
-                    self._binance._refresh()
-                except Exception as exc:
-                    self._log.warning("Binance refresh failed: %s", exc)
-            # ── Candle tracking ──────────────────────────────────────────
-            now = time.time()
-            tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
-            candle_start = (now // tf_seconds) * tf_seconds
-            if candle_start != self._candle_start_time:
-                self._candle_start_time = candle_start
-                self._candle_open_price = up
-                self._candle_id += 1
-                self._bought_this_candle[self._candle_id] = set()
             if self._strategy and self._ctx:
                 try:
                     self._strategy(self._ctx)
@@ -916,6 +1058,8 @@ class Bot:
 
         @self._stream.on("close")
         def on_close():
+            self._final_up = getattr(self._stream, "up", None)
+            self._final_down = getattr(self._stream, "down", None)
             self._log.info("Market closed: %s", self._market.slug)
 
         await self._stream.run_async()
@@ -931,38 +1075,127 @@ class Bot:
         self._market = None
         self._ctx = None
         self._candle_id = 0
+        self._candle_start_time = 0.0
+        self._candle_open_price = None
+        self._final_up = None
+        self._final_down = None
         self._bought_this_candle = {}
         self._bought_this_market = False
         self._log.info("Rolling over to next market...")
         await self._asleep(2)
 
+    def _handle_price_tick(self, up: float, down: float) -> bool:
+        """Shared tick handler for sync and async paths.
+
+        Returns True if strategy should proceed, False if warmup-gated.
+        """
+        if self._stop_event.is_set():
+            return False
+        self._tick_count += 1
+        if self._ctx:
+            self._ctx.record_price(up)
+            self._ctx._invalidate_series_cache()
+        if self._binance:
+            try:
+                self._binance._refresh()
+            except Exception as exc:
+                self._log.warning("Binance refresh failed: %s", exc)
+        if self._chainlink_history is not None and getattr(self._chainlink_history, "config", None) is not None:
+            cfg = self._chainlink_history.config
+            need = getattr(cfg, "warmup", {}) or {}
+            if need and cfg.block == "wait" and not self._chainlink_history.is_ready_map(need):
+                now_w = time.time()
+                last = getattr(self, "_last_warmup_emit", 0)
+                interval = getattr(cfg, "warmup_emit_interval", 5.0)
+                if now_w - last >= interval:
+                    self._last_warmup_emit = now_w
+                    try:
+                        status = self._chainlink_history.status(need)
+                    except Exception:
+                        status = {"warming": True}
+                    self._log.info("Warming chainlink history %s", status)
+                    if self._on_warmup:
+                        try:
+                            self._on_warmup(status)
+                        except Exception:
+                            pass
+                now2 = time.time()
+                tf_seconds = TIMEFRAME_SECONDS.get(self.timeframe, 300)
+                candle_start = (now2 // tf_seconds) * tf_seconds
+                if candle_start != self._candle_start_time:
+                    self._candle_start_time = candle_start
+                    self._candle_open_price = up
+                    self._candle_id += 1
+                    self._bought_this_candle[self._candle_id] = set()
+                return False
+        now = time.time()
+        tf_seconds = TIMEFRAME_SECONDS[self.timeframe]
+        candle_start = (now // tf_seconds) * tf_seconds
+        if candle_start != self._candle_start_time:
+            self._candle_start_time = candle_start
+            self._candle_open_price = up
+            self._candle_id += 1
+            self._bought_this_candle[self._candle_id] = set()
+        return True
+
     def _resolve(self) -> None:
-        """Wait for resolution and record outcome."""
+        """Resolve positions for the finished market and record outcomes."""
         if not self._market:
             return
-        # Check positions
-        for pos in self._client.paper.positions():
-            if pos.resolved:
-                self._trade_count += 1
-                self._slog.info(
-                    "Trade resolved: %s %s | pnl=$%.2f",
-                    pos.side, pos.outcome, pos.pnl,
+        final_up = self._final_up if self._final_up is not None else getattr(self._stream, "up", None) if self._stream else None
+        final_down = self._final_down if self._final_down is not None else getattr(self._stream, "down", None) if self._stream else None
+        # Engine-aware resolve: paper uses manual UP>DOWN; real syncs from chain
+        if self.engine == "real":
+            # For real trading, positions are on-chain; manual resolve is not used.
+            # Keep pnl reporting via engine sync; still compute outcome for logging.
+            if final_up is not None and final_down is not None and final_up != final_down:
+                outcome = "UP" if final_up > final_down else "DOWN"
+                self._slog.info("Real engine: market %s closed UP=%.4f DOWN=%.4f outcome=%s (on-chain settle pending)", self._market.slug, final_up, final_down, outcome)
+                try:
+                    if hasattr(self._engine, "sync_positions_from_chain"):
+                        self._engine.sync_positions_from_chain()
+                except Exception as exc:
+                    self._slog.debug("Real sync after close failed: %s", exc)
+            else:
+                self._slog.info("No final prices to resolve %s", self._market.slug)
+        else:
+            if final_up is not None and final_down is not None and final_up != final_down:
+                outcome = "UP" if final_up > final_down else "DOWN"
+                try:
+                    self._engine.resolve(self._market, outcome)  # type: ignore
+                except Exception as exc:
+                    self._slog.warning("Failed to resolve positions: %s", exc)
+            else:
+                self._slog.info("No final prices to resolve %s", self._market.slug)
+
+        # Report each resolved position for this market.
+        try:
+            all_pos = self._engine.all_positions()
+        except Exception:
+            all_pos = []
+        for pos in all_pos:
+            if pos.market_id != self._market.id or not pos.resolved:
+                continue
+            self._trade_count += 1
+            self._slog.info(
+                "Trade resolved: %s %s | pnl=$%.2f",
+                pos.side, pos.outcome, pos.pnl,
+            )
+
+            # Send Telegram notification if configured
+            if self._telegram:
+                self._telegram.send_resolve(
+                    asset=self.asset,
+                    side=pos.side,
+                    outcome=pos.outcome,
+                    pnl=pos.pnl
                 )
-                
-                # Send Telegram notification if configured
-                if self._telegram:
-                    self._telegram.send_resolve(
-                        asset=self.asset,
-                        side=pos.side,
-                        outcome=pos.outcome,
-                        pnl=pos.pnl
-                    )
-                
-                if self._on_resolve:
-                    try:
-                        self._on_resolve(pos)
-                    except Exception as exc:
-                        self._slog.exception("onresolve handler error: %s", exc)
+
+            if self._on_resolve:
+                try:
+                    self._on_resolve(pos)
+                except Exception as exc:
+                    self._slog.exception("onresolve handler error: %s", exc)
 
     def _rollover(self) -> None:
         """Clean up and prepare for next cycle."""
@@ -975,6 +1208,10 @@ class Bot:
         self._market = None
         self._ctx = None
         self._candle_id = 0
+        self._candle_start_time = 0.0
+        self._candle_open_price = None
+        self._final_up = None
+        self._final_down = None
         self._bought_this_candle = {}
         self._bought_this_market = False
         self._log.info("Rolling over to next market...")
@@ -1008,4 +1245,11 @@ class Bot:
                 self._chainlink.stop()
             except Exception as exc:
                 self._log.warning("Error stopping chainlink during cleanup: %s", exc)
+        # history recorder — only stop if we own it
+        rec = getattr(self, "_chainlink_history", None)
+        if rec is not None and getattr(self, "_chainlink_history_owned", False):
+            try:
+                rec.stop()
+            except Exception as exc:
+                self._log.warning("Error stopping chainlink history during cleanup: %s", exc)
         self._client.close()

@@ -372,6 +372,11 @@ class AuthenticationManager:
         method : AuthMethod
             Authentication method to use.
         """
+        if method == AuthMethod.OAUTH2:
+            raise NotImplementedError(
+                "OAUTH2 authentication is not implemented yet. "
+                "Use AuthMethod.API_KEY or AuthMethod.JWT instead."
+            )
         if method == AuthMethod.JWT and not JWT_AVAILABLE:
             raise ImportError(
                 "PyJWT library is required for JWT authentication. "

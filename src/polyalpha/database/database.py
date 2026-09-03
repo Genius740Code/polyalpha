@@ -190,6 +190,9 @@ class TradeDatabase:
     def is_duplicate_trade(self, *args, **kwargs):
         return self._repo.is_duplicate_trade(*args, **kwargs)
 
+    def mark_outcome(self, market_slug: str, market_outcome: str) -> int:
+        return self._repo.mark_outcome(market_slug, market_outcome)
+
     def delete_trade(self, trade_id: int) -> bool:
         return self._repo.delete_trade(
             trade_id,

@@ -94,6 +94,62 @@ class BaseAccessor(ABC):
     def has_volume(self) -> bool:
         """Check if this data source has volume data."""
         return len(self._get_volume_data()) > 0
+
+    # ── Time-based lookback helpers ──────────────────────────────────────────
+
+    def _get_window_points(self) -> List:
+        """Return the timestamped points from the backing TimeWindow, if any."""
+        if self._window is None:
+            return []
+        return list(self._window._data)
+
+    def _period_for_seconds(self, seconds: float) -> int:
+        """Number of data intervals covering ``seconds`` of elapsed time.
+
+        Uses the window's real timestamps when available so a freshly-started
+        window (which only holds a few seconds of data) degrades to "use
+        everything we have" instead of silently analysing a tiny slice of it.
+        """
+        data = self._get_price_data()
+        n = len(data)
+        if n < 2:
+            return max(1, n)
+
+        points = self._get_window_points()
+
+        # Prefer real timestamps when they cover the price data.
+        if len(points) >= n:
+            now = points[-1].timestamp
+            cutoff = now - seconds
+            count = 0
+            for point in reversed(points):
+                if point.timestamp < cutoff:
+                    break
+                count += 1
+            if count >= 1:
+                return max(1, min(count - 1, n - 1))
+
+        # Fall back to scaling by the actual time span when known.
+        if len(points) >= 2:
+            span = points[-1].timestamp - points[0].timestamp
+            if span > 0:
+                if seconds >= span:
+                    return n - 1
+                return max(1, min(int(n * seconds / span), n - 1))
+
+        # No timestamps available: estimate from max_age.
+        max_age = self._window._max_age if self._window else 120.0
+        return max(1, min(int(n * seconds / max_age), n - 1))
+
+    def _estimate_time_interval(self, points: Optional[List] = None) -> Optional[float]:
+        """Average seconds between consecutive data points, or None if unknown."""
+        if points is None:
+            points = self._get_window_points()
+        if len(points) >= 2:
+            span = points[-1].timestamp - points[0].timestamp
+            if span > 0:
+                return span / (len(points) - 1)
+        return None
     
     # ── Universal Price Calculations ────────────────────────────────────────
     
@@ -129,15 +185,9 @@ class BaseAccessor(ABC):
         float | None
             Absolute price change, or None if insufficient data.
         """
-        change_pct = self.change_pct(seconds)
-        current = self._window.value if self._window else None
-        
-        if change_pct is None or current is None:
+        if self._window is None:
             return None
-        
-        # Convert percentage change back to absolute change
-        # This is approximate; for exact values, use the raw data
-        return current * change_pct
+        return self._window.change_abs(seconds)
     
     def rate_of_change(self, seconds: float) -> Optional[float]:
         """
@@ -156,11 +206,10 @@ class BaseAccessor(ABC):
         data = self._get_price_data()
         if not data:
             return None
-        
-        # Estimate periods from seconds and data
-        # This is approximate; exact calculation requires timestamps
-        period = max(1, int(len(data) * seconds / (self._window._max_age if self._window else 120)))
-        return self._market_calc.rate_of_change(data, period)
+
+        period = self._period_for_seconds(seconds)
+        time_interval = self._estimate_time_interval()
+        return self._market_calc.rate_of_change(data, period, time_interval)
     
     def trend(self, seconds: float, threshold: float = 0.0) -> TrendDirection:
         """
@@ -182,7 +231,7 @@ class BaseAccessor(ABC):
         if not data:
             return TrendDirection.NEUTRAL
         
-        period = max(1, int(len(data) * seconds / (self._window._max_age if self._window else 120)))
+        period = self._period_for_seconds(seconds)
         return self._market_calc.trend(data, period, threshold)
     
     def direction(self, seconds: float) -> Optional[str]:
@@ -203,7 +252,7 @@ class BaseAccessor(ABC):
         if not data:
             return None
         
-        period = max(1, int(len(data) * seconds / (self._window._max_age if self._window else 120)))
+        period = self._period_for_seconds(seconds)
         return self._market_calc.direction(data, period)
     
     def volatility(self, seconds: float) -> Optional[float]:
@@ -224,7 +273,7 @@ class BaseAccessor(ABC):
         if not data:
             return None
         
-        period = max(2, int(len(data) * seconds / (self._window._max_age if self._window else 120)))
+        period = max(2, self._period_for_seconds(seconds))
         return self._market_calc.volatility(data, period)
     
     def high(self, seconds: float) -> Optional[float]:
@@ -233,7 +282,7 @@ class BaseAccessor(ABC):
         if not data:
             return None
         
-        period = max(1, int(len(data) * seconds / (self._window._max_age if self._window else 120)))
+        period = self._period_for_seconds(seconds)
         return self._market_calc.high(data, period)
     
     def low(self, seconds: float) -> Optional[float]:
@@ -242,7 +291,7 @@ class BaseAccessor(ABC):
         if not data:
             return None
         
-        period = max(1, int(len(data) * seconds / (self._window._max_age if self._window else 120)))
+        period = self._period_for_seconds(seconds)
         return self._market_calc.low(data, period)
     
     def range(self, seconds: float) -> Optional[float]:
@@ -251,7 +300,7 @@ class BaseAccessor(ABC):
         if not data:
             return None
         
-        period = max(1, int(len(data) * seconds / (self._window._max_age if self._window else 120)))
+        period = self._period_for_seconds(seconds)
         return self._market_calc.range(data, period)
     
     # ── Volume Calculations (if available) ───────────────────────────────────

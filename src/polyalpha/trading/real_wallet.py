@@ -18,13 +18,17 @@ log = logging.getLogger(__name__)
 class WalletManager:
     """Manages wallet operations for real trading."""
 
-    def __init__(self, private_key: str, rpc_url: str, log_balance_updates: bool = False):
+    # Alias for clarity — this is the single-chain wallet (Polygon). Multi-wallet is RealTradingWalletManager.
+    BlockchainWallet = None  # for type aliasing
+
+    def __init__(self, private_key: str, rpc_url: str, log_balance_updates: bool = False, matic_price_usd: float = 0.5):
         self._private_key = private_key
         self._rpc_url = rpc_url
         self._address: Optional[str] = None
         self._balance: float = 0.0
         self._allowance: float = 0.0
         self._log_balance_updates = log_balance_updates
+        self._matic_price_usd = float(matic_price_usd)
 
         self._web3 = None
         self._usdc_contract = None
@@ -53,7 +57,7 @@ class WalletManager:
         self._address = account.address
 
         from ..trading.alchemy_client import AlchemyClient
-        self._ctf_address = AlchemyClient.CTF_ADDRESS
+        self._ctf_address = Web3.to_checksum_address(AlchemyClient.CTF_ADDRESS)
 
         usdc_abi = [
             {
@@ -340,7 +344,7 @@ class WalletManager:
 
                     gas_cost_wei = gas_used * receipt.get('effectiveGasPrice', 0)
                     gas_cost_matic = float(self._web3.from_wei(gas_cost_wei, 'ether'))
-                    gas_cost_usd = gas_cost_matic * 0.5
+                    gas_cost_usd = gas_cost_matic * self._matic_price_usd
 
                     self._total_gas_spent += float(gas_used)
                     self._gas_cost_usd += gas_cost_usd

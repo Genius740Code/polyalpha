@@ -96,7 +96,7 @@ class Stream:
     ``price_anomaly`` (type: str, ...)          — emitted when price anomaly detected
     """
 
-    STALE_DATA_SECONDS = 30.0
+    STALE_DATA_SECONDS = 10.0
 
     def __init__(
         self,
@@ -229,6 +229,17 @@ class Stream:
         if event not in EVENTS:
             raise ValueError(f"Unknown event '{event}'. Valid: {sorted(EVENTS)}")
         self._handlers[event].append(fn)
+
+    def price_age_seconds(self) -> float:
+        """
+        Seconds since the last validated price update was received.
+
+        Large values indicate the WS has gone quiet (dropped / stale).
+        Callers can use this to refuse trading on price data older than a
+        configured threshold instead of reading ``self.up`` / ``self.down``
+        blindly.
+        """
+        return time.time() - self._last_price_time
 
     def start(self, background: bool = False) -> None:
         """
@@ -439,38 +450,44 @@ class Stream:
         if not token_ids:
             raise StreamDisconnected("Market has no token IDs to subscribe to")
 
-        async with websockets.connect(CLOB_WS) as ws:
-            self._consecutive_failures = 0
-            # Clear stale price state on reconnect
-            self._token_prices.clear()
-            self._last_trade_prices.clear()
-            # Reset last price time to avoid immediate stale data detection after reconnect
-            self._last_price_time = time.time()
-            self._emit("price_reset")
-            self._emit("connect")
+        try:
+            async with websockets.connect(CLOB_WS) as ws:
+                self._consecutive_failures = 0
+                # Clear stale price state on reconnect
+                self._token_prices.clear()
+                self._last_trade_prices.clear()
+                # Reset last price time to avoid immediate stale data detection after reconnect
+                self._last_price_time = time.time()
+                self._emit("price_reset")
+                self._emit("connect")
 
-            await ws.send(json.dumps({
-                "type": "market",
-                "assets_ids": token_ids,
-                "custom_feature_enabled": True,
-            }))
+                await ws.send(json.dumps({
+                    "type": "market",
+                    "assets_ids": token_ids,
+                    "custom_feature_enabled": True,
+                }))
 
-            ping_task = asyncio.create_task(self._ping_loop_async(ws))
+                ping_task = asyncio.create_task(self._ping_loop_async(ws))
 
-            try:
-                async for raw in ws:
-                    if self._is_stopped():
-                        break
-                    await self._message_rate_limiter.acquire_async()
-                    self._on_message_async(ws, raw)
-            except websockets.ConnectionClosed:
-                pass
-            finally:
-                ping_task.cancel()
                 try:
-                    await ping_task
-                except asyncio.CancelledError:
-                    pass
+                    async for raw in ws:
+                        if self._is_stopped():
+                            break
+                        await self._message_rate_limiter.acquire_async()
+                        self._on_message_async(ws, raw)
+                finally:
+                    ping_task.cancel()
+                    try:
+                        await ping_task
+                    except asyncio.CancelledError:
+                        pass
+        except websockets.exceptions.ConnectionClosed as exc:
+            # Don't retry after an intentional stop — only on real drops.
+            if not self._is_stopped():
+                raise StreamDisconnected(f"WebSocket closed unexpectedly: {exc}") from exc
+        except (OSError, asyncio.TimeoutError) as exc:
+            if not self._is_stopped():
+                raise StreamDisconnected(f"WebSocket connection error: {exc}") from exc
 
     async def _send_pong(self, ws) -> None:
         """Send a PONG response to the server."""
@@ -478,6 +495,15 @@ class Stream:
             await ws.send("PONG")
         except Exception:
             log.debug("Failed to send PONG", exc_info=True)
+
+    def _log_pong_result(self, task: asyncio.Future) -> None:
+        """Retrieve the PONG task result so failures don't surface as unhandled task exceptions."""
+        try:
+            exc = task.exception()
+            if exc is not None:
+                log.debug("PONG send failed: %s", exc)
+        except asyncio.CancelledError:
+            pass
 
     async def _ping_loop_async(self, ws) -> None:
         """Send text 'PING' at intervals and check for stale data."""
@@ -497,12 +523,12 @@ class Stream:
 
     def _on_message_async(self, ws, raw: str) -> None:
         """Handle a raw WebSocket message in the async path (no rate limiting for WS)."""
+        # Any frame proves the connection is alive — refresh staleness clock
+        self._last_price_time = time.time()
         if raw == "PING":
-            try:
-                asyncio.ensure_future(self._send_pong(ws))
-                log.debug("Stream: ← PING → PONG")
-            except Exception:
-                pass
+            pong_task = asyncio.ensure_future(self._send_pong(ws))
+            pong_task.add_done_callback(self._log_pong_result)
+            log.debug("Stream: ← PING → PONG")
             return
 
         if raw == "PONG":
@@ -581,6 +607,8 @@ class Stream:
                 break   # socket gone; _on_ws_close / force_reconnect will trigger reconnect
 
     def _on_message(self, ws, raw: str) -> None:
+        # Any frame proves the connection is alive — refresh staleness clock
+        self._last_price_time = time.time()
         # Server-sent PING — reply immediately (no rate limit for control messages)
         if raw == "PING":
             try:
@@ -779,7 +807,7 @@ class Stream:
         return False
 
     def _check_stale_data(self) -> bool:
-        """Force reconnect if no price update for 3x STALE_DATA_SECONDS."""
+        """Force reconnect if no price update for 2x STALE_DATA_SECONDS."""
         elapsed = time.time() - self._last_price_time
         if elapsed > self.STALE_DATA_SECONDS and not self._stale_warned:
             log.warning(
@@ -790,7 +818,7 @@ class Stream:
         elif elapsed <= self.STALE_DATA_SECONDS:
             self._stale_warned = False
 
-        if elapsed > self.STALE_DATA_SECONDS * 3:
+        if elapsed > self.STALE_DATA_SECONDS * 2:
             log.warning(
                 "Stream: no price update for %.0fs (market %s) — forcing reconnect",
                 elapsed, self.market.slug,

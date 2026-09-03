@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -21,7 +21,7 @@ class RiskManager:
         self.daily_pnl: float = 0.0
         self.daily_trades: int = 0
         self.daily_start_balance: float = initial_balance
-        self.daily_start_date: datetime = datetime.now(timezone.utc).date()
+        self.daily_start_date: date = datetime.now(timezone.utc).date()
 
     def _check_day_reset(self) -> None:
         current_date = datetime.now(timezone.utc).date()
@@ -46,6 +46,13 @@ class RiskManager:
         if amount > self.config.max_order_size:
             raise ValueError(
                 f"Order amount ${amount:.2f} exceeds maximum ${self.config.max_order_size:.2f}"
+            )
+
+        max_risk_amount = balance * self.config.max_risk_per_trade
+        if amount > max_risk_amount:
+            raise ValueError(
+                f"Order amount ${amount:.2f} exceeds max risk per trade "
+                f"(${max_risk_amount:.2f}, {self.config.max_risk_per_trade:.0%} of balance ${balance:.2f})"
             )
 
         current_exposure = self._get_market_exposure(market_id, positions)

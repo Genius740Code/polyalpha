@@ -20,10 +20,14 @@ def rsi(series: pd.Series, length: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1.0 / length, min_periods=length).mean()
-    avg_loss = loss.ewm(alpha=1.0 / length, min_periods=length).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
+    avg_gain = gain.ewm(alpha=1.0 / length, min_periods=length, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1.0 / length, min_periods=length, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    rs = rs.replace([np.inf, -np.inf], np.nan)
     rsi_series = 100 - (100 / (1 + rs))
+    # avg_loss == 0: all-gain stretch -> RSI 100; flat stretch (no gain/loss) -> RSI 50
+    no_loss = avg_loss == 0
+    rsi_series = rsi_series.mask(no_loss, np.where(avg_gain > 0, 100.0, 50.0))
     return rsi_series
 
 
@@ -41,17 +45,22 @@ def macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> 
     return result
 
 
+def _wilders_rma(series: pd.Series, length: int) -> pd.Series:
+    """Wilder's RMA smoothing: rma_t = (x_t + (length-1)*rma_{t-1}) / length."""
+    return series.ewm(alpha=1.0 / length, adjust=False).mean()
+
+
 def adx(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> pd.DataFrame:
     plus_dm = high.diff().clip(lower=0)
     minus_dm = -low.diff().clip(upper=0)
     plus_dm[plus_dm <= minus_dm] = 0
     minus_dm[minus_dm <= plus_dm] = 0
     tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
-    atr_series = tr.rolling(window=length).mean()
-    plus_di = 100 * plus_dm.rolling(window=length).mean() / atr_series.replace(0, np.nan)
-    minus_di = 100 * minus_dm.rolling(window=length).mean() / atr_series.replace(0, np.nan)
+    atr_series = _wilders_rma(tr, length)
+    plus_di = 100 * _wilders_rma(plus_dm, length) / atr_series.replace(0, np.nan)
+    minus_di = 100 * _wilders_rma(minus_dm, length) / atr_series.replace(0, np.nan)
     dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
-    adx_series = dx.rolling(window=length).mean()
+    adx_series = _wilders_rma(dx, length)
     result = pd.DataFrame({
         f"ADX_{length}": adx_series,
         f"DMP_{length}": plus_di,

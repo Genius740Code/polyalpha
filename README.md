@@ -248,6 +248,11 @@ ctx.pnl                         # realised P&L
 ctx.rsi / ctx.sma_20 / ctx.ema_12   # indicators (requires pandas)
 ctx.tick_count / ctx.trade_count
 ctx.chainlink.last_price        # BTC spot from Chainlink oracle
+ctx.chainlink.change_pct(30)    # % change over 30 seconds
+ctx.chainlink.pct(30)           # alias for change_pct
+ctx.chainlink.trend(60)         # trend direction (UP/DOWN/NEUTRAL)
+ctx.chainlink.volatility(120)   # price volatility
+ctx.chainlink.window            # full ChainlinkAccessor rolling window
 ctx.cl.value                    # latest Chainlink price
 ctx.cl.change_pct(30)           # % change over 30 seconds
 ctx.cl.change_pct(60)           # % change over 60 seconds
@@ -291,7 +296,7 @@ bot.when(
 bot.run()
 ```
 
-Chainlink BTC spot is also available at `ctx.chainlink.last_price` in `on_tick` strategies or via `ctx.chainlink` in `BotHub` strategies.
+Chainlink BTC spot is also available at `ctx.chainlink.last_price` in `on_tick` strategies or via `ctx.chainlink` in `BotHub` strategies. The streamer keeps a rolling window (default 120s) so `ctx.chainlink.change_pct(N)` / `ctx.chainlink.pct(N)` / trend / volatility work without extra wiring.
 
 See [`examples/bot_simple.py`](./examples/bot_simple.py).
 
@@ -525,33 +530,43 @@ See `docs/database.md` for the full database API.
 Time-window execution bot with configurable thresholds and auto-rollover. Supports advanced time windows: multiple disjoint periods, burst patterns, absolute time windows, conditional windows (indicator-based), and day/hour filtering.
 
 ```python
-from polyalpha import Sniper, SniperConfig, TimeWindow, ConditionalWindow, TimeFilter
+import polyalpha
+from polyalpha.bots import Sniper
+from polyalpha.bots.sniper import SniperConfig, TimeWindow, ConditionalWindow, TimeFilter
+
+client = polyalpha.Client(balance=100)
 
 # Simple time window (backward compatible)
-Sniper(SniperConfig(
-    asset="BTC", timeframe="5m",
-    balance=500.0, window_seconds=30,
-    side="UP", order_size=25.0,
-    auto_rollover=True,
-)).run()
+Sniper(
+    client=client,
+    config=SniperConfig(
+        asset="BTC", timeframe="5m",
+        side="UP", window_seconds=30,
+        entry_price=0.92, exit_price=0.88,
+        amount=25.0,
+    ),
+).run()
 
 # Advanced: Multiple time windows with conditions
-Sniper(SniperConfig(
-    asset="BTC", timeframe="5m",
-    side="UP", entry_price=0.92, exit_price=0.88,
-    time_windows=[
-        TimeWindow(start_time="01:00", end_time="02:00"),
-        TimeWindow(start_time="02:30", end_time="03:00"),
-    ],
-    conditional_windows=[
-        ConditionalWindow(indicator="btc_change", operator="lt", threshold=2.0, periods=5),
-    ],
-    time_filter=TimeFilter(days=[0, 1, 2, 3, 4], hours=[9, 10, 11, 12, 13, 14, 15, 16, 17]),
-    amount=20.0,
-)).run()
+Sniper(
+    client=client,
+    config=SniperConfig(
+        asset="BTC", timeframe="5m",
+        side="UP", entry_price=0.92, exit_price=0.88,
+        time_windows=[
+            TimeWindow(start_time="01:00", end_time="02:00"),
+            TimeWindow(start_time="02:30", end_time="03:00"),
+        ],
+        conditional_windows=[
+            ConditionalWindow(indicator="btc_change", operator="lt", threshold=2.0, periods=5),
+        ],
+        time_filter=TimeFilter(days=[0, 1, 2, 3, 4], hours=[9, 10, 11, 12, 13, 14, 15, 16, 17]),
+        amount=20.0,
+    ),
+).run()
 ```
 
-`timeframe` is **required** (one of `5m`, `15m`, `1h`, `4h`, `24h` — no silent 5m default). By default each bot buys only **once per market** (`buy_once_per_market=True`); set it to `False` on the config to allow multiple entries within the same market.
+`Sniper` takes `client` as its **first required argument** — `Sniper(client, config=SniperConfig(...))`. You can alternately pass config fields directly as keyword args, e.g. `Sniper(client=client, asset="BTC", timeframe="5m", side="UP", window_seconds=30, amount=25.0)`. `timeframe` is **required** (one of `5m`, `15m`, `1h`, `4h`, `24h` — no silent 5m default). By default each bot buys only **once per market** (`buy_once_per_market=True`); set it to `False` on the config to allow multiple entries within the same market.
 
 See [`examples/sniper.py`](./examples/sniper.py), [`examples/sniper_minimal.py`](./examples/sniper_minimal.py), [`examples/sniper_ta.py`](./examples/sniper_ta.py), and [`docs/bots.md`](./docs/bots.md#advanced-time-windows).
 
@@ -679,7 +694,14 @@ src/polyalpha/
 ├── markets.py           MarketClient — discovery
 ├── stream.py            Stream — WebSocket price feed
 ├── bot.py               Bot — lifecycle runner
-├── bot_hub.py           BotHub — multi-strategy hub
+├── bot_hub/             BotHub — multi-strategy hub (7 modules, ex-2662-line monolith)
+│   ├── hub.py           #   BotHub core
+│   ├── context.py       #   StrategyContext
+│   ├── binance.py       #   BinanceAccessor
+│   ├── indicators.py    #   IndicatorAccessor
+│   ├── orderbook.py     #   OrderBookAccessor
+│   ├── models.py        #   PriceSnapshot + _RegisteredStrategy
+│   └── history.py       #   chainlink history helper
 ├── conditions.py        Composable strategy conditions
 │
 ├── core/                Constants, errors, market models, env

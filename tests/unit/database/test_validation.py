@@ -400,9 +400,9 @@ def test_schema_version():
         db_path = Path(tmpdir) / "test.db"
         db = TradeDatabase(db_path)
         
-        # New database should have version 1
+        # New database should have latest version (1,2,3 inserted on creation)
         version = db.get_schema_version()
-        assert version == 1
+        assert version == 3
         
         db.close()
     finally:
@@ -420,9 +420,9 @@ def test_run_migrations_no_pending():
         # Should not raise any errors
         db.run_migrations()
         
-        # Version should still be 1
+        # Version should still be latest (3)
         version = db.get_schema_version()
-        assert version == 1
+        assert version == 3
         
         db.close()
     finally:
@@ -464,6 +464,61 @@ def test_is_duplicate_trade_method():
         # Different market_id should not be duplicate
         assert not db.is_duplicate_trade("def456", "UP", timestamp)
         
+        db.close()
+    finally:
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_mark_outcome_backfills_null_rows():
+    """mark_outcome() resolves every NULL-outcome row for a market."""
+    tmpdir = tempfile.mkdtemp()
+    try:
+        db_path = Path(tmpdir) / "test.db"
+        db = TradeDatabase(db_path)
+        ts = datetime.now(timezone.utc)
+
+        db.save_trade(
+            market_slug="btc-updown-5m-1751234700", market_id="m1",
+            side="UP", entry_price=0.90, exit_price=None, amount=10.0,
+            shares=11.0, fee=0.1, outcome=None, pnl=0.0, timestamp=ts,
+            status="open", check_duplicates=False,
+        )
+        db.save_trade(
+            market_slug="btc-updown-5m-1751234700", market_id="m2",
+            side="DOWN", entry_price=0.10, exit_price=None, amount=10.0,
+            shares=90.0, fee=0.1, outcome=None, pnl=0.0, timestamp=ts,
+            status="open", check_duplicates=False,
+        )
+        db.save_trade(
+            market_slug="other-market", market_id="m3",
+            side="UP", entry_price=0.90, exit_price=None, amount=10.0,
+            shares=11.0, fee=0.2, outcome=None, pnl=0.0, timestamp=ts,
+            status="open", check_duplicates=False,
+        )
+
+        updated = db.mark_outcome("btc-updown-5m-1751234700", "UP")
+
+        assert updated == 2
+        rows = db.load_trades_by_market("btc-updown-5m-1751234700")
+        by_side = {r.side: r.outcome for r in rows}
+        assert by_side == {"UP": "WON", "DOWN": "LOST"}
+        # Unrelated market untouched
+        other = db.load_trades_by_market("other-market")
+        assert other[0].outcome is None
+        db.close()
+    finally:
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_mark_outcome_validates():
+    """mark_outcome() rejects invalid market outcomes."""
+    tmpdir = tempfile.mkdtemp()
+    try:
+        db = TradeDatabase(Path(tmpdir) / "test.db")
+        with pytest.raises(ValueError, match="must be 'UP' or 'DOWN'"):
+            db.mark_outcome("btc-updown-5m-1751234700", "MAYBE")
         db.close()
     finally:
         import shutil

@@ -118,7 +118,8 @@ class PaperPosition:
 
     @property
     def cost_basis(self) -> float:
-        return round(self.total_cost, PRICE_ROUNDING)
+        cost = self.total_cost if self.total_cost > 0 else self.shares * self.avg_price
+        return round(cost, PRICE_ROUNDING)
 
     @property
     def current_value(self) -> float:

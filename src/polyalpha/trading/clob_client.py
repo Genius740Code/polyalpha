@@ -187,11 +187,15 @@ class ClobClient:
         simulate : bool, optional
             Enable simulation mode (default: False)
         """
-        self.api_key = api_key
+        # Secrets — stored as private attrs, never exposed in logs/repr.
+        # Passing as constructor args is standard DI practice; plaintext in memory
+        # is required for EIP-712/HMAC signing. Mitigated by safe __repr__,
+        # SensitiveDataFilter redaction, and .gitignore + env-var hygiene.
+        self._api_key = api_key
         self._private_key = private_key
         self.rpc_url = rpc_url
-        self.api_secret = api_secret
-        self.api_passphrase = api_passphrase
+        self._api_secret = api_secret
+        self._api_passphrase = api_passphrase
         self.base_url = base_url
         self.timeout = timeout
         self.retry_attempts = retry_attempts
@@ -234,19 +238,49 @@ class ClobClient:
     
     @property
     def private_key(self) -> str:
-        """Get the private key."""
+        """Get the private key (raw — handle with care, never log)."""
         return self._private_key
-    
+
     @private_key.setter
     def private_key(self, value: str) -> None:
         self._private_key = value
-    
+
+    @property
+    def api_key(self) -> str:
+        """Get the Polymarket API key (raw — do not log)."""
+        return self._api_key
+
+    @api_key.setter
+    def api_key(self, value: str) -> None:
+        self._api_key = value
+
+    @property
+    def api_secret(self) -> Optional[str]:
+        """Get the L2 API secret (raw HMAC key — do not log)."""
+        return self._api_secret
+
+    @api_secret.setter
+    def api_secret(self, value: Optional[str]) -> None:
+        self._api_secret = value
+
+    @property
+    def api_passphrase(self) -> Optional[str]:
+        """Get the L2 API passphrase (do not log)."""
+        return self._api_passphrase
+
+    @api_passphrase.setter
+    def api_passphrase(self, value: Optional[str]) -> None:
+        self._api_passphrase = value
+
     def __repr__(self) -> str:
+        # Never include secrets — only non-sensitive identifiers
         return (
             f"ClobClient(base_url={self.base_url!r}, "
             f"address={self.address!r}, "
             f"simulate={self.simulate})"
         )
+
+    __str__ = __repr__
 
     # ── Session & Request Helpers ──────────────────────────────────────────────
 

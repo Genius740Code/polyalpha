@@ -68,8 +68,12 @@ def _query_server(host: str, port: int = NTP_PORT, timeout: float = NTP_TIMEOUT)
     finally:
         sock.close()
 
-    # Unpack 12 big-endian unsigned ints from the 48-byte response
-    unpacked = struct.unpack("!12I", response)
+    # NTP responses are exactly 48 bytes, but some servers pad them
+    # (extension fields / auth). Reject undersized packets and unpack only
+    # the first 48 bytes so oversized ones don't crash the whole failover.
+    if len(response) < 48:
+        raise ValueError(f"Short NTP response from {host} ({len(response)} bytes)")
+    unpacked = struct.unpack("!12I", response[:48])
 
     # Receive Timestamp (srv rx) = bytes 32-39 → unpacked[6], unpacked[7]
     # Transmit Timestamp (srv tx) = bytes 40-47 → unpacked[10], unpacked[11]
@@ -210,7 +214,7 @@ class TimeSync:
             for attempt in range(1, self._retries + 1):
                 try:
                     result = _query_server(host, timeout=self._timeout)
-                except (socket.timeout, OSError) as exc:
+                except (socket.timeout, OSError, struct.error, ValueError) as exc:
                     last_error = f"{host}: {exc}"
                     log.debug("NTP sync failed (%s, attempt %d/%d)", host, attempt, self._retries)
                     continue

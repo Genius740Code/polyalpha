@@ -95,31 +95,37 @@ class MarketCalculations:
         return data[-1] - data[-period - 1]
     
     @staticmethod
-    def rate_of_change(data: List[float], period: int = 1, time_interval: float = 1.0) -> Optional[float]:
+    def rate_of_change(data: List[float], period: int = 1, time_interval: Optional[float] = None) -> Optional[float]:
         """
-        Calculate rate of change per time unit (derivative).
+        Calculate rate of change per second (derivative).
         
         Parameters
         ----------
         data : list[float]
             Time series data points (oldest to newest).
         period : int
-            Number of periods back to compare (default: 1).
-        time_interval : float
-            Time between data points in seconds (default: 1.0).
+            Number of periods back to sample (default: 1).
+        time_interval : float | None
+            Time between data points in seconds. Required to produce a
+            per-second rate; if None the true interval is unknown and the
+            function returns None rather than silently assuming 1 second
+            per data point (default: None).
         
         Returns
         -------
         float | None
             Rate of change per second.
-            Returns None if insufficient data or time_interval is 0.
+            Returns None if insufficient data, time_interval is None, or
+            time_interval is 0.
         
         Example
         -------
         >>> MarketCalculations.rate_of_change([100, 105, 103], period=2, time_interval=5.0)
-        0.6  # 3.0 change over 10 seconds (2 periods * 5s) = 0.3 per second
+        0.3  # 3.0 change over 10 seconds (2 periods * 5s) = 0.3 per second
         """
-        if len(data) < period + 1 or time_interval == 0:
+        if time_interval is None or time_interval <= 0:
+            return None
+        if len(data) < period + 1:
             return None
         
         abs_change = MarketCalculations.change_abs(data, period)

@@ -421,40 +421,9 @@ class PaperEngine:
     # ── Price helpers ──────────────────────────────────────────────────────────
 
     def _get_price_for_side(self, market, side: str) -> tuple[float, str]:
-        """Get the best available price for a side, preferring live stream prices."""
-        stream = self._attached_streams.get(market.id)
-        if stream and stream.running:
-            price = stream.up if side == "UP" else stream.down
-            if price > 0:
-                log.debug("Paper: using live stream price %.4f for %s %s", price, market.slug, side)
-                return price, "stream"
-            else:
-                log.warning("Paper: stream attached but price is 0, falling back to market price")
-
-        price = market.up_price if side == "UP" else market.down_price
-
-        if hasattr(market, 'end_time') and market.end_time:
-            try:
-                end_time = datetime.fromisoformat(market.end_time.replace('Z', '+00:00'))
-                now_dt = datetime.now(timezone.utc)
-                time_until_close = (end_time - now_dt).total_seconds()
-
-                if time_until_close <= 0:
-                    log.warning("Paper: market %s is closed, price may be stale", market.slug)
-                elif time_until_close < PRICE_STALENESS_THRESHOLD:
-                    log.warning(
-                        "Paper: market %s closes in %.1fs, using potentially stale price %.4f",
-                        market.slug, time_until_close, price,
-                    )
-            except (ValueError, TypeError):
-                pass
-
-        if price <= 0:
-            log.warning("Paper: market price is invalid (%.4f), using fallback", price)
-            return FALLBACK_PRICE, "fallback"
-
-        log.debug("Paper: using market price %.4f for %s %s", price, market.slug, side)
-        return price, "market"
+        """Get best available price — delegates to shared staleness helper."""
+        from .staleness import get_price_for_side as _helper
+        return _helper(market, side, self._attached_streams, log_prefix="Paper")
 
     # ── Orders ─────────────────────────────────────────────────────────────────
 

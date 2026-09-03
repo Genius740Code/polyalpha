@@ -12,10 +12,12 @@ a market even if the clock is mid-window.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json as _json
 import logging
 import re
 import time
+import zoneinfo
 from threading import Lock
 from typing import Any
 
@@ -42,6 +44,7 @@ from .core import (
     Market,
     MarketClosed,
     MarketNotFound,
+    TimeSync,
     build_slug,
     build_tweet_slug,
 )
@@ -61,22 +64,41 @@ def _jloads(value: Any, default: Any) -> Any:
     return value if value is not None else default
 
 
-def _current_window_start(timeframe: str) -> int:
-    """Return the Unix timestamp of the START of the window that contains now."""
+def _current_window_start(timeframe: str, now: int | None = None) -> int:
+    """Return the Unix timestamp of the START of the window that contains *now*."""
     interval    = TIMEFRAME_SECONDS[timeframe]
-    now         = int(time.time())
+    now         = int(time.time()) if now is None else now
     return (now // interval) * interval
 
 
-def _candidate_starts(timeframe: str, count: int = MARKET_CANDIDATE_COUNT) -> list[int]:
+def _candidate_starts(timeframe: str, count: int = MARKET_CANDIDATE_COUNT, now: int | None = None) -> list[int]:
     """Return [current, next, next+1] window-start timestamps to probe.
 
     Polymarket Up/Down slugs use the START timestamp of the window,
     NOT the end timestamp.
     """
     interval = TIMEFRAME_SECONDS[timeframe]
-    current  = _current_window_start(timeframe)
+    current  = _current_window_start(timeframe, now=now)
     return [current + i * interval for i in range(count)]
+
+
+def _tweet_month_starts(now_ts: int, count: int = 3) -> list[int]:
+    """Return Unix timestamps for the start of the current and prior months (ET).
+
+    Tweet-market slugs name the month in Eastern time, so candidates are
+    built from ET month boundaries rather than fixed day offsets.
+    """
+    tz_et = zoneinfo.ZoneInfo("America/New_York")
+    now_et = datetime.datetime.fromtimestamp(now_ts, tz=tz_et)
+    y, m = now_et.year, now_et.month
+    starts = []
+    for _ in range(count):
+        starts.append(int(datetime.datetime(y, m, 1, tzinfo=tz_et).timestamp()))
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+    return starts
 
 
 class RateLimiter:
@@ -143,6 +165,8 @@ class MarketClient:
     retries    : Number of HTTP retries on 5xx errors (default 3).
     rate_limit : Max API requests per second (default None = unlimited).
                  Uses token-bucket algorithm with 1-second window.
+    time_sync  : NTP clock sync used to correct slug-generation timestamps.
+                 If None, a fresh TimeSync (offset 0) is used.
     """
 
     def __init__(
@@ -150,9 +174,11 @@ class MarketClient:
         timeout: int = 10,
         retries: int = 3,
         rate_limit: int | None = None,
+        time_sync: TimeSync | None = None,
     ):
         self._timeout = timeout
         self._retries = retries
+        self._time_sync = time_sync or TimeSync()
         self._rate_limiter = RateLimiter(rate_limit) if rate_limit else None
         
         # Configure HTTP client with connection pooling
@@ -168,6 +194,10 @@ class MarketClient:
         )
 
     # ── Public API ─────────────────────────────────────────────────────────────
+
+    def _now(self) -> int:
+        """Return the NTP-corrected Unix timestamp used for slug generation."""
+        return self._time_sync.now_int()
 
     def latest(self, asset: str, timeframe: str = "5m") -> Market:
         """
@@ -200,7 +230,7 @@ class MarketClient:
                 f"Supported: {list(TIMEFRAME_SECONDS)}"
             )
 
-        candidates = _candidate_starts(timeframe)
+        candidates = _candidate_starts(timeframe, now=self._now())
         for start_ts in candidates:
             slug = build_slug(asset, timeframe, start_ts)
             log.debug("Trying slug: %s", slug)
@@ -232,16 +262,21 @@ class MarketClient:
         if subject not in TWEET_SUBJECTS:
             raise ValueError(f"Unknown subject '{subject}'. Supported: {TWEET_SUBJECTS}")
             
-        now_ts = int(time.time())
+        now_ts = self._now()
         tried = []
         
         if window == "1mo":
-            slug = build_tweet_slug(subject, now_ts, monthly=True)
-            tried.append(slug)
-            try:
-                return self._fetch_by_slug(slug)
-            except (MarketNotFound, MarketClosed):
-                pass
+            # Probe the current and prior months (ET) so the market is found
+            # even when the current-month market hasn't opened yet or already closed.
+            for start_ts in _tweet_month_starts(now_ts):
+                slug = build_tweet_slug(subject, start_ts, monthly=True)
+                if slug in tried:
+                    continue
+                tried.append(slug)
+                try:
+                    return self._fetch_by_slug(slug)
+                except (MarketNotFound, MarketClosed):
+                    pass
         else:
             days = 7 if window == "7d" else 3
             # Probe combinations of start offsets
@@ -272,6 +307,73 @@ class MarketClient:
         >>> market = client.markets.get("btc-updown-5m-1751234700")
         """
         return self._fetch_by_slug(slug)
+
+    def resolve_outcome(self, slug: str) -> str | None:
+        """
+        Resolve the final UP/DOWN outcome of *slug* from Gamma.
+
+        Used as a fallback when the websocket drops before a clean
+        ``market_resolved``: Gamma prices the winning token at $1.00
+        (loser at $0.00) once the market is resolved.
+
+        Returns ``"UP"``/``"DOWN"`` when the winner is known, else ``None``.
+        """
+        try:
+            data = self._get("/events", params={"slug": slug})
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return None
+            raise
+
+        events = data if isinstance(data, list) else [data]
+        events = [e for e in events if e]
+
+        if not events:
+            return None
+
+        event  = events[0]
+        market = (event.get("markets") or [{}])[0]
+
+        outcomes   = _jloads(market.get("outcomes",      "[]"), [])
+        prices_raw = _jloads(market.get("outcomePrices", "[]"), [])
+
+        def _find_index(variants: list[str]) -> int | None:
+            pattern = r'\b(?:' + '|'.join(re.escape(v) for v in variants) + r')\b'
+            for i, label in enumerate(outcomes):
+                if re.search(pattern, str(label), re.IGNORECASE):
+                    return i
+            return None
+
+        up_idx   = _find_index(["up", "higher", "greater", "above", "over", "yes"])
+        down_idx = _find_index(["down", "lower", "below", "under", "no"])
+
+        if up_idx is None:
+            up_idx = (1 if down_idx == 0 else 0) if down_idx is not None and len(outcomes) >= 2 else 0
+        if down_idx is None:
+            down_idx = 0 if up_idx != 0 else 1
+
+        def _price(idx: int) -> float:
+            try:
+                if idx < len(prices_raw):
+                    return float(prices_raw[idx])
+            except (TypeError, ValueError):
+                pass
+            return 0.0
+
+        up_price   = _price(up_idx)
+        down_price = _price(down_idx)
+
+        log.debug("gamma resolve_outcome slug=%s up=%.4f down=%.4f", slug, up_price, down_price)
+
+        resolved = bool(event.get("closed") or event.get("archived"))
+        if not resolved:
+            status = (market.get("umaResolutionStatus") or "").upper()
+            if status != "RESOLVED":
+                return None
+
+        if up_price == down_price:
+            return None
+        return "UP" if up_price > down_price else "DOWN"
 
     def search(self, query: str, limit: int = DEFAULT_SEARCH_LIMIT) -> list[Market]:
         """

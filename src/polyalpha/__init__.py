@@ -157,6 +157,17 @@ from .report.comparison import ComparisonReport, VariantResult
 from .bots import Sniper, Tracker
 from .analysis import DataFeed, DataFeedConfig, IndicatorCalculator, SignalGenerator, ChainlinkStreamer, ChainlinkStreamerConfig, CVDTracker, CVDTrackerConfig, LiquidationTracker, LiquidationTrackerConfig
 from .globals import Globals, MarketCtx, default_globals, watch_market
+try:
+    from .history import (
+        Candle,
+        ChainlinkHistoryConfig,
+        ChainlinkRecorder,
+        ChainlinkHistoryView,
+        Store as ChainlinkStore,
+        HISTORY_TIMEFRAME_SECONDS,
+    )
+except ImportError:
+    Candle = ChainlinkHistoryConfig = ChainlinkRecorder = ChainlinkHistoryView = ChainlinkStore = HISTORY_TIMEFRAME_SECONDS = None  # type: ignore
 from .database import TradeDatabase
 from .orderbook import (
     BacktestEngine,
@@ -291,6 +302,13 @@ __all__ = [
     "CVDTrackerConfig",
     "LiquidationTracker",
     "LiquidationTrackerConfig",
+    # Chainlink history (user-chosen {"1m":10, "1h":50, "1s":20} — SQLite WAL, pruned)
+    "Candle",
+    "ChainlinkHistoryConfig",
+    "ChainlinkRecorder",
+    "ChainlinkHistoryView",
+    "ChainlinkStore",
+    "HISTORY_TIMEFRAME_SECONDS",
     # Shared globals (one connection, many strategies)
     "Globals",
     "MarketCtx",

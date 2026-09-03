@@ -29,12 +29,14 @@ def _parse_timestamp(value: Any) -> datetime:
         if ts > 1e12:
             ts /= 1000.0
         return datetime.fromtimestamp(ts, tz=timezone.utc)
-    if isinstance(value, str) and value:
+    if isinstance(value, str):
+        if not value:
+            return datetime.now(timezone.utc)
         text = value.replace("Z", "+00:00")
         try:
             return datetime.fromisoformat(text)
         except ValueError:
-            pass
+            raise ValueError(f"invalid ISO timestamp: {value!r}") from None
     return datetime.now(timezone.utc)
 
 

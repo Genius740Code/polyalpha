@@ -52,6 +52,7 @@ TIMEFRAME_MAP = {
     "1h": "1h",
     "4h": "4h",
     "1d": "1D",
+    "24h": "1D",
 }
 
 BINANCE_INTERVAL_MAP = {
@@ -61,6 +62,7 @@ BINANCE_INTERVAL_MAP = {
     "1h": "1h",
     "4h": "4h",
     "1d": "1d",
+    "24h": "1d",
 }
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -123,6 +125,8 @@ class DataFeedConfig:
         "SOL": "SOLUSDT",
         "XRP": "XRPUSDT",
         "DOGE": "DOGEUSDT",
+        "HYPE": "HYPEUSDT",
+        "BNB": "BNBUSDT",
     })
     timeframe: str = "5m"
     lookback_periods: int = 500
@@ -153,6 +157,8 @@ class DataFeedConfig:
         "SOL": "sol/usd",
         "XRP": "xrp/usd",
         "DOGE": "doge/usd",
+        "HYPE": "hype/usd",
+        "BNB": "bnb/usd",
     })
     scraping_timeout: int = 90  # WebSocket session duration in seconds
     scraping_recv_timeout: int = SCRAPE_RECV_TIMEOUT  # Per-message recv timeout
@@ -166,11 +172,23 @@ class DataFeedConfig:
                 f"Invalid source '{self.source}'. Must be one of: {valid_sources}"
             )
 
-        valid_timeframes = ["1m", "5m", "15m", "1h", "4h", "1d"]
+        # Normalize timeframe aliases (e.g. "24h" → "1d")
+        if self.timeframe == "24h":
+            self.timeframe = "1d"
+        self.timeframe = self.timeframe.strip().lower()
+
+        valid_timeframes = ["1m", "5m", "15m", "1h", "4h", "1d", "24h"]
+        # Allow "24h" as alias for "1d" — normalize to "1d" internally
+        normalized = "1d" if self.timeframe == "24h" else self.timeframe
         if self.timeframe not in valid_timeframes:
             raise ValueError(
-                f"Invalid timeframe '{self.timeframe}'. Must be one of: {valid_timeframes}"
+                f"Invalid timeframe '{self.timeframe}'. Must be one of: {valid_timeframes} (use '1d' or '24h' for daily)"
             )
+        # Keep canonical form "1d" internally; Binance expects "1d"
+        if self.timeframe == "24h":
+            self.timeframe = "1d"
+        else:
+            self.timeframe = normalized
 
         if self.lookback_periods <= 0:
             raise ValueError("lookback_periods must be positive")
@@ -460,9 +478,14 @@ class DataFeed:
         # Convert timestamp from milliseconds
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
 
-        # Select and normalize columns
-        df = df[["timestamp", "open", "high", "low", "close", "volume"]]
+        # Keep full Binance OHLCV + taker volume fields for accessor
+        df = df[["timestamp", "open", "high", "low", "close", "volume",
+                 "quote_volume", "trades", "taker_buy_base", "taker_buy_quote"]]
         df = self._normalize_ohlcv(df)
+        df["quote_volume"] = df["quote_volume"].astype(float)
+        df["trades"] = df["trades"].astype(int)
+        df["taker_buy_base"] = df["taker_buy_base"].astype(float)
+        df["taker_buy_quote"] = df["taker_buy_quote"].astype(float)
 
         return df
 
@@ -583,6 +606,8 @@ class DataFeed:
             "SOL": "solana",
             "XRP": "ripple",
             "DOGE": "dogecoin",
+            "HYPE": "hyperliquid",
+            "BNB": "binancecoin",
         }
 
         if asset not in coingecko_ids:
@@ -751,9 +776,16 @@ class DataFeed:
         ticks = []
         start_time = time.time()
         target_duration = self.config.scraping_timeout
+        timeframe_seconds = self._get_timeframe_seconds()
+        candle_buckets: set[int] = set()
+
+        def _bucket_key(ts) -> int:
+            """Candle bucket for a timestamp (counts candles, not raw ticks)."""
+            return int(ts.timestamp()) // timeframe_seconds
 
         # 2.4: inner retry loop — reconnect on WS drop within session
-        while time.time() - start_time < target_duration and len(ticks) < self.config.lookback_periods:
+        while (time.time() - start_time < target_duration
+               and len(candle_buckets) < self.config.lookback_periods):
             try:
                 async with websockets.connect(
                     self.config.scraping_ws_url,
@@ -773,7 +805,8 @@ class DataFeed:
                     }))
 
                     # 2.2: use recv_timeout for per-message, session_duration for overall
-                    while time.time() - start_time < target_duration and len(ticks) < self.config.lookback_periods:
+                    while (time.time() - start_time < target_duration
+                           and len(candle_buckets) < self.config.lookback_periods):
                         try:
                             raw = await asyncio.wait_for(
                                 ws.recv(),
@@ -803,13 +836,14 @@ class DataFeed:
                             )
                             price = float(payload["value"])
                             ticks.append({"timestamp": timestamp, "price": price})
+                            candle_buckets.add(_bucket_key(timestamp))
 
                             # 2.3: adaptive delay per timeframe instead of fixed 2s
                             await asyncio.sleep(self._get_scraping_delay())
 
             except Exception as exc:
                 remaining = target_duration - (time.time() - start_time)
-                if remaining <= 0 or len(ticks) >= self.config.lookback_periods:
+                if remaining <= 0 or len(candle_buckets) >= self.config.lookback_periods:
                     break
                 self._log.warning(
                     "Scraping: WS disconnected — retrying (%.0fs remaining): %s", remaining, exc,
@@ -849,8 +883,12 @@ class DataFeed:
             "1h": 0.5,
             "4h": 0.5,
             "1d": 0.5,
+            "24h": 0.5,
         }
-        return delays.get(self.config.timeframe, 0.3)
+        tf = self.config.timeframe.lower()
+        if tf == "24h":
+            tf = "1d"
+        return delays.get(tf, 0.3)
 
     def _get_timeframe_seconds(self) -> int:
         """Get timeframe duration in seconds."""
@@ -861,8 +899,10 @@ class DataFeed:
             "1h": 3600,
             "4h": 14400,
             "1d": 86400,
+            "24h": 86400,
         }
-        return timeframe_seconds.get(self.config.timeframe, 300)
+        tf = self.config.timeframe.lower()
+        return timeframe_seconds.get(tf, 300)
 
     def _fetch_websocket_cache(self, asset: str) -> pd.DataFrame:
         """
@@ -1076,3 +1116,69 @@ class DataFeed:
             return int(self._data.iloc[-1]['trades'])
 
         return None
+
+    def get_taker_buy_base_volume(self, asset: str) -> Optional[float]:
+        """Get taker buy base asset volume for asset from Binance."""
+        if self._data is None or self._current_asset != asset:
+            try:
+                self.fetch(asset)
+            except Exception:
+                return None
+        if self._data is None or len(self._data) == 0:
+            return None
+        if 'taker_buy_base' in self._data.columns:
+            return float(self._data.iloc[-1]['taker_buy_base'])
+        return None
+
+    def get_taker_buy_quote_volume(self, asset: str) -> Optional[float]:
+        """Get taker buy quote asset volume for asset from Binance."""
+        if self._data is None or self._current_asset != asset:
+            try:
+                self.fetch(asset)
+            except Exception:
+                return None
+        if self._data is None or len(self._data) == 0:
+            return None
+        if 'taker_buy_quote' in self._data.columns:
+            return float(self._data.iloc[-1]['taker_buy_quote'])
+        return None
+
+    def get_taker_ratio(self, asset: str) -> Optional[float]:
+        """Get taker buy ratio (taker_buy_base / volume) for asset."""
+        vol = self.get_volume(asset)
+        taker = self.get_taker_buy_base_volume(asset)
+        if vol is None or taker is None or vol == 0:
+            return None
+        return taker / vol
+
+    def get_avg_quote_volume(self, asset: str, period: int = 20) -> Optional[float]:
+        """Get average quote volume over N periods for asset."""
+        if self._data is None or self._current_asset != asset:
+            try:
+                self.fetch(asset)
+            except Exception:
+                return None
+        if self._data is None or len(self._data) < period:
+            return None
+        if 'quote_volume' not in self._data.columns:
+            return None
+        return float(self._data.tail(period)['quote_volume'].mean())
+
+    def get_quote_volume_ratio(self, asset: str, period: int = 20) -> Optional[float]:
+        """Get current quote_volume / average quote_volume over N periods."""
+        cur = self.get_quote_volume(asset)
+        avg = self.get_avg_quote_volume(asset, period)
+        if cur is None or avg is None or avg == 0:
+            return None
+        return cur / avg
+
+    def get_open(self, asset: str) -> Optional[float]:
+        """Get current open price for asset from latest candle."""
+        if self._data is None or self._current_asset != asset:
+            try:
+                self.fetch(asset)
+            except Exception:
+                return None
+        if self._data is None or len(self._data) == 0:
+            return None
+        return float(self._data.iloc[-1]['open'])

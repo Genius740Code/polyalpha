@@ -163,7 +163,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Optional, List
+from typing import Any, Callable, Optional, List, Protocol
 
 from ..core import ASSETS, TIMEFRAME_SECONDS, Market
 from ..core.market_sessions import validate_session_list, get_session
@@ -402,6 +402,10 @@ class SniperConfig:
     amount: float = 20.0
     buy_once_per_market: bool = True
 
+    # Staleness guard: skip entry when the stream's last price update is older
+    # than this many seconds (the stream may have dropped / gone quiet).
+    stale_data_max_age: float = 5.0
+
     # Advanced time windows (optional - overrides window_seconds if provided)
     time_windows: Optional[List[TimeWindow]] = None  # Multiple time windows
     conditional_windows: Optional[List[ConditionalWindow]] = None  # Indicator-based windows
@@ -518,6 +522,12 @@ class SniperConfig:
         # Validate amount
         if self.amount <= 0:
             raise ValueError(f"amount must be positive, got {self.amount}")
+
+        # Validate staleness guard
+        if self.stale_data_max_age <= 0:
+            raise ValueError(
+                f"stale_data_max_age must be positive, got {self.stale_data_max_age}"
+            )
 
         # Validate max_position_size
         if self.max_position_size is not None and self.max_position_size <= 0:
@@ -658,6 +668,61 @@ class SniperStats:
 
 # ── Sniper Bot ─────────────────────────────────────────────────────────────────
 
+class StreamLike(Protocol):
+    """Minimal surface an external price feed must expose to drive a Sniper.
+
+    Matches what the native stream provides so an injected feed
+    (e.g. :class:`polyalpha.bots.hub_feed.HubFeed`) is a drop-in
+    replacement for ``client.stream(market)``.
+    """
+
+    @property
+    def up(self) -> float:
+        ...
+
+    @property
+    def down(self) -> float:
+        ...
+
+    @property
+    def running(self) -> bool:
+        ...
+
+    def on(self, event: str) -> Callable:
+        ...
+
+    def start(self, background: bool = False) -> None:
+        ...
+
+    def stop(self) -> None:
+        ...
+
+    def price_age_seconds(self) -> float:
+        ...
+
+
+class MarketProvider(Protocol):
+    """Provider for hub-aligned market discovery.
+
+    The Sniper normally calls ``client.markets.latest(asset, timeframe)``.
+    When a ``MarketProvider`` is supplied, discovery is routed through it so
+    the Sniper evaluates the *same* slug as the hub's ``on_market → slug``
+    event:
+
+    * a callable ``() -> Market | str | None`` (or ``(asset, timeframe) -> Market``)
+    * an object with ``get_market() -> Market | str | None``
+    * an object with ``market`` attribute (e.g. :class:`HubFeed`)
+    * an object with ``latest(asset, timeframe) -> Market`` (e.g. ``MarketClient``)
+
+    String results are resolved via ``client.markets.get(slug)``. ``None``
+    means "provider has no market yet" — discovery falls back to
+    ``client.markets.latest``.
+    """
+
+    def get_market(self) -> Any | None:
+        ...
+
+
 class Sniper:
     """
     Automated trading bot with advanced time-window entry and threshold execution.
@@ -738,7 +803,7 @@ class Sniper:
     STATE_ROLLOVER = "ROLLOVER"
     STATE_STOP = "STOP"
 
-    def __init__(self, client, config: Optional[SniperConfig] = None, **kwargs):
+    def __init__(self, client, config: Optional[SniperConfig] = None, *, stream: Optional[StreamLike] = None, market_provider: Any | None = None, **kwargs):
         """
         Initialize the Sniper bot.
 
@@ -748,13 +813,34 @@ class Sniper:
             The polyalpha client instance.
         config : SniperConfig, optional
             Bot configuration. If not provided, uses defaults.
+        stream : StreamLike, optional
+            Pre-built price feed. When provided, the Sniper is driven off this
+            external source (e.g. the shared hub feed) instead of opening its
+            own WebSocket via ``client.stream(market)``. It must expose the
+            same surface the Sniper expects from a stream: ``up``/``down``,
+            ``on(event)``, ``price_age_seconds()``, ``running``, ``start()``
+            and ``stop()`` — see :class:`polyalpha.bots.hub_feed.HubFeed`.
+        market_provider : optional
+            External market source for hub-aligned discovery. When provided,
+            ``_discover_market()`` consults this provider before calling
+            ``client.markets.latest()`` so ``sniper_poly`` and ``sniper_plain``
+            evaluate the same slug each 5-min cycle (see ``#5 Align market
+            discovery``). Accepts a callable ``() -> Market|str``, an object
+            with ``get_market()``, ``market`` attribute (e.g. ``HubFeed``), or
+            ``latest(asset,timeframe)``. String slugs are resolved via
+            ``client.markets.get``. ``None`` falls back to native discovery.
         **kwargs
             Additional keyword arguments passed to SniperConfig when config is not provided.
         """
+        # ``market_provider`` may be passed as a plain kwarg when config is built via **kwargs
+        if market_provider is None and "market_provider" in kwargs:
+            market_provider = kwargs.pop("market_provider")
         self.client = client
         if config is None:
             config = SniperConfig(**kwargs)
         self.config = config
+        self._injected_stream: Optional[StreamLike] = stream
+        self._market_provider: Any | None = market_provider
 
         # Set up logging
         self._log = logging.getLogger(f"{__name__}.Sniper")
@@ -767,7 +853,7 @@ class Sniper:
 
         # Current market data
         self._market: Optional[Market] = None
-        self._stream = None
+        self._stream: Optional[StreamLike] = None
         self._pending_order = None
         self._filled_order = None
         self._final_up: Optional[float] = None
@@ -783,6 +869,8 @@ class Sniper:
         self._ta_data = None
         self._ta_indicators = None
         self._ta_signals = None
+        # Cached IndicatorCalculator per data source (for conditional windows)
+        self._cond_ta: dict[str, "IndicatorCalculator"] = {}
         if self.config.use_ta:
             self._setup_ta()
 
@@ -1050,12 +1138,79 @@ class Sniper:
 
         return False
 
+    def _resolve_external_market(self) -> Any | None:
+        """Try to obtain a :class:`Market` from ``self._market_provider``.
+
+        Supports callables, ``get_market()``, ``market`` attribute, and
+        ``latest(asset,timeframe)``. String slugs are resolved via
+        ``client.markets.get``. ``None`` means the provider has no market
+        and native discovery should be used.
+        """
+        provider = self._market_provider
+        if provider is None:
+            return None
+        result: Any | None = None
+        try:
+            if callable(provider):
+                try:
+                    result = provider()
+                except TypeError:
+                    # provider(asset, timeframe) style
+                    result = provider(self.config.asset, self.config.timeframe)  # type: ignore[misc]
+            elif hasattr(provider, "get_market"):
+                result = provider.get_market()  # type: ignore[union-attr]
+            elif hasattr(provider, "market"):
+                result = getattr(provider, "market")
+                # HubFeed.market is None until hub pushes; treat as no market
+                if result is None and hasattr(provider, "get_market"):
+                    try:
+                        result = provider.get_market()  # type: ignore[union-attr]
+                    except Exception:
+                        result = None
+            elif hasattr(provider, "latest"):
+                result = provider.latest(self.config.asset, self.config.timeframe)  # type: ignore[union-attr]
+            else:
+                return None
+        except Exception as exc:
+            self._log.debug("Market provider call failed: %s", exc)
+            return None
+
+        if result is None:
+            return None
+        if isinstance(result, str):
+            slug = result.strip()
+            if not slug:
+                return None
+            try:
+                return self.client.markets.get(slug)
+            except Exception as exc:
+                self._log.debug("Market provider slug resolution failed for %s: %s", slug, exc)
+                return None
+        # Assume Market-like
+        if hasattr(result, "slug"):
+            return result
+        return None
+
     def _discover_market(self) -> bool:
         """Discover a market. Returns True if successful."""
         self._set_state(self.STATE_DISCOVERING)
         # Reset order tracking for new market cycle
         self._pending_order = None
         self._filled_order = None
+        # ── Hub-aligned discovery (parity #5) ──────────────────────────────
+        if self._market_provider is not None:
+            try:
+                ext_market = self._resolve_external_market()
+                if ext_market is not None:
+                    self._fix_market_orientation(ext_market)
+                    self._market = ext_market
+                    self._log.info("Market found (via provider): %s", self._market.slug)
+                    self._emit("market_found", self._market)
+                    return True
+                self._log.debug("Market provider returned None, falling back to native discovery")
+            except Exception as exc:
+                self._log.error("Market provider discovery failed: %s, falling back", exc)
+                # fall through to native discovery
         try:
             self._market = self.client.markets.latest(
                 self.config.asset,
@@ -1180,8 +1335,18 @@ class Sniper:
     # ── Stream Setup ───────────────────────────────────────────────────────────
 
     def _setup_stream(self) -> None:
-        """Set up WebSocket stream for the current market."""
-        self._stream = self.client.stream(self._market)
+        """Set up the price feed for the current market.
+
+        Prefers an externally-provided ``stream`` (hub-driven feed) so the
+        Sniper is routed off its own WebSocket. Falls back to opening a
+        native ``client.stream(market)`` otherwise.
+        """
+        assert self._market is not None, "_setup_stream called before market discovery"
+        if self._injected_stream is not None:
+            self._stream = self._injected_stream
+            self._log.info("Using external price feed for %s", self._market.slug)
+        else:
+            self._stream = self.client.stream(self._market)
 
         # Register price handler
         @self._stream.on("price")
@@ -1201,23 +1366,43 @@ class Sniper:
         # Attach stream to paper engine for limit order fills
         self.client.paper.attach_stream(self._stream, self._market)
 
-        # Start stream in background
-        self._stream.start(background=True)
+        # Start stream in background (skip when the external feed already runs)
+        if not getattr(self._stream, "running", False):
+            self._stream.start(background=True)
 
         # Wait for connection
         time.sleep(STREAM_SETUP_DELAY)
         self._log.info("Stream attached for %s", self._market.slug)
 
     def _cleanup_stream(self) -> None:
-        """Clean up WebSocket stream."""
+        """Clean up the price feed.
+
+        Only stops streams the Sniper opened itself — an externally-provided
+        feed is owned by the caller (e.g. the hub) and must stay alive across
+        market cycles.
+        """
         if self._stream:
-            try:
-                self._stream.stop()
-            except Exception:
-                pass
+            if self._stream is not self._injected_stream:
+                try:
+                    self._stream.stop()
+                except Exception:
+                    pass
             self._stream = None
 
     # ── Price Monitoring ───────────────────────────────────────────────────────
+
+    def _price_age_seconds(self) -> float:
+        """Age of the stream's last price update, or ``inf`` if unavailable."""
+        if not self._stream:
+            return float("inf")
+        fn = getattr(self._stream, "price_age_seconds", None)
+        if callable(fn):
+            return float(fn())
+        return float("inf")
+
+    def _price_is_stale(self) -> bool:
+        """True when the last stream price update predates ``stale_data_max_age``."""
+        return self._price_age_seconds() > self.config.stale_data_max_age
 
     def _on_price_update(self, up: float, down: float) -> None:
         """Handle price updates from the stream."""
@@ -1272,6 +1457,14 @@ class Sniper:
                 if not self._check_btc_change():
                     return
 
+                # Staleness guard: reject entry when the stream's last price
+                # update is older than the configured threshold.
+                if self._price_is_stale():
+                    age = self._price_age_seconds()
+                    self._log.info("entry skipped: stale price (age=%.1fs) ul=%.4f",
+                                  age, current_price)
+                    return
+
                 self._place_order()
 
     # ── Window Management ─────────────────────────────────────────────────────
@@ -1298,6 +1491,13 @@ class Sniper:
             now = datetime.now(timezone.utc)
 
             if now >= window_start:
+                # Check conditional windows (indicator-based) — same gating as
+                # the advanced window path, so window_seconds alone works too.
+                if self.config.conditional_windows and not self._check_conditional_windows():
+                    self._log.debug("Conditional windows not satisfied, waiting...")
+                    time.sleep(PRICE_CHECK_INTERVAL)
+                    continue
+
                 self._log.info("Entering trading window")
                 self._set_state(self.STATE_ARMED)
                 self._emit("window_enter", self._market)
@@ -1442,26 +1642,63 @@ class Sniper:
     def _get_btc_change(self, periods: int) -> Optional[float]:
         """Get BTC price change percentage over specified periods."""
         try:
-            # Use existing max_btc_change_pct logic if available
-            if hasattr(self, '_ta_data') and self._ta_data is not None:
-                # This would integrate with existing TA infrastructure
-                # For now, return a placeholder
-                self._log.debug("BTC change check not fully implemented, using placeholder")
-                return 0.0
-            else:
-                self._log.warning("TA data not available for BTC change check")
+            from ..analysis import DataFeed, DataFeedConfig
+
+            # Use Binance as the default source for BTC spot price data
+            feed_config = DataFeedConfig(
+                source="binance",
+                timeframe=self.config.timeframe,
+                lookback_periods=periods + 5,
+            )
+            feed = DataFeed(feed_config)
+            data = feed.fetch("BTC")
+
+            if data is None or len(data) < 2:
+                self._log.warning("Not enough BTC data for change calculation")
                 return None
+
+            # Get the close prices for the lookback period
+            latest = data["close"].iloc[-1]
+            if len(data) > periods:
+                prev = data["close"].iloc[-periods]
+            else:
+                prev = data["close"].iloc[0]
+
+            return abs((latest - prev) / prev) * 100
         except Exception as exc:
             self._log.error("Error getting BTC change: %s", exc)
+            return None
+
+    def _get_ta_indicators(self, source: Optional[str]) -> Optional[Any]:
+        """Fetch and cache an IndicatorCalculator for the given data source."""
+        source = source or "binance"
+        if source in self._cond_ta:
+            return self._cond_ta[source]
+        try:
+            from ..analysis import DataFeed, DataFeedConfig, IndicatorCalculator
+
+            feed_config = DataFeedConfig(
+                source=source,
+                timeframe=self.config.timeframe,
+                lookback_periods=DEFAULT_TA_LOOKBACK_PERIODS,
+            )
+            feed = DataFeed(feed_config)
+            data = feed.fetch(self.config.asset)
+            indicators = IndicatorCalculator(data)
+            self._cond_ta[source] = indicators
+            return indicators
+        except Exception as exc:
+            self._log.error("Error building TA indicators from %s: %s", source, exc)
             return None
 
     def _get_rsi_value(self, source: Optional[str]) -> Optional[float]:
         """Get RSI value from specified source."""
         try:
-            # This would integrate with existing TA infrastructure
-            # For now, return a placeholder
-            self._log.debug("RSI check not fully implemented, using placeholder")
-            return 50.0
+            indicators = self._get_ta_indicators(source)
+            if indicators is None:
+                return None
+            rsi = indicators.rsi(14)
+            return indicators.get_latest_value(rsi)
         except Exception as exc:
             self._log.error("Error getting RSI value: %s", exc)
             return None
@@ -1469,10 +1706,11 @@ class Sniper:
     def _get_sma_value(self, source: Optional[str], periods: Optional[int]) -> Optional[float]:
         """Get SMA value from specified source."""
         try:
-            # This would integrate with existing TA infrastructure
-            # For now, return a placeholder
-            self._log.debug("SMA check not fully implemented, using placeholder")
-            return 0.0
+            indicators = self._get_ta_indicators(source)
+            if indicators is None:
+                return None
+            sma = indicators.sma(periods or 20)
+            return indicators.get_latest_value(sma)
         except Exception as exc:
             self._log.error("Error getting SMA value: %s", exc)
             return None
@@ -1508,6 +1746,15 @@ class Sniper:
     def _place_order(self) -> None:
         """Place a limit order at the current price (not entry_price)."""
         try:
+            # Staleness guard: never read self._stream.{up,down} blindly when
+            # the price feed has gone quiet.
+            if self._price_is_stale():
+                age = self._price_age_seconds()
+                ul = getattr(self._stream, self.config.side.lower(), None)
+                self._log.info("entry skipped: stale price (age=%.1fs) ul=%s",
+                              age, "%.4f" % ul if ul is not None else "n/a")
+                return
+
             # Get current price from stream
             current_price = getattr(self._stream, self.config.side.lower(), None)
             if current_price is None:
@@ -1630,12 +1877,25 @@ class Sniper:
             outcome = "UP" if final_up > final_down else "DOWN"
             self._log.info("Paper resolution: %s (final prices: UP=%.4f, DOWN=%.4f)",
                           outcome, final_up, final_down)
+        else:
+            # Stream dropped before a clean market_resolved — fall back to
+            # resolving via Gamma so the outcome is not silently lost.
+            outcome = self._gamma_resolve(self._market.slug)
+            if outcome:
+                self._log.info("Paper resolution via Gamma fallback: %s", outcome)
+            else:
+                self._log.warning("No resolved position found via stream or Gamma for %s",
+                                  self._market.slug)
 
+        if outcome:
             # Resolve the position (this saves to database)
             try:
                 self.client.paper.resolve(self._market, outcome)
             except Exception as exc:
                 self._log.error("Failed to resolve position: %s", exc)
+
+            # Backfill any rows left with outcome=NULL for this market.
+            self._mark_outcome(self._market.slug, outcome)
 
             # Now record the trade
             positions = self.client.paper.positions()
@@ -1645,6 +1905,26 @@ class Sniper:
                     return
 
         self._log.warning("No resolved position found for %s", self._market.slug)
+
+    def _gamma_resolve(self, slug: str) -> Optional[str]:
+        """Resolve an outcome from Gamma when the live stream dropped."""
+        try:
+            return self.client.markets.resolve_outcome(slug)
+        except Exception as exc:
+            self._log.error("Gamma resolution failed for %s: %s", slug, exc)
+            return None
+
+    def _mark_outcome(self, slug: str, outcome: str) -> None:
+        """Persist a resolved outcome to the database so no NULL rows remain."""
+        db = getattr(self.client.paper, 'database', None)
+        if db is None:
+            return
+        try:
+            updated = db.mark_outcome(slug, outcome)
+            if updated:
+                self._log.info("Backfilled %d NULL-outcome rows for %s", updated, slug)
+        except Exception as exc:
+            self._log.error("mark_outcome failed for %s: %s", slug, exc)
 
     def _on_market_close(self) -> None:
         """Handle market close event."""

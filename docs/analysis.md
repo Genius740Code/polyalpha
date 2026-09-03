@@ -651,6 +651,7 @@ config = ChainlinkStreamerConfig(
     },
     timeout=30,
     reconnect_delay=5.0,
+    window_seconds=120,   # rolling window size (s) for pct(N) / trend / volatility
 )
 ```
 
@@ -660,6 +661,7 @@ config = ChainlinkStreamerConfig(
 | `symbol_map` | `dict` | BTC, ETH, SOL, XRP, DOGE | Asset to WebSocket symbol mapping |
 | `timeout` | `int` | `30` | WebSocket timeout in seconds |
 | `reconnect_delay` | `float` | `5.0` | Reconnection delay in seconds |
+| `window_seconds` | `float` | `120` | Rolling price window kept for %-change / trend / volatility calcs |
 
 ### ChainlinkStreamer
 
@@ -714,6 +716,32 @@ Stop streaming.
 ```python
 streamer.stop()
 ```
+
+#### Rolling window + calculations
+
+The streamer keeps a rolling window (size `window_seconds`, default 120s) of
+prices per symbol, so percentage changes and derived metrics are available
+without wiring your own callback.
+
+```python
+streamer.value                     # latest price (== last_price)
+streamer.age_s                     # seconds since last update
+streamer.change_pct(30)            # % change over last 30s (decimal)
+streamer.pct(30)                   # alias for change_pct
+streamer.price_change_pct_since(60)
+streamer.trend(60)                 # UP / DOWN / NEUTRAL over 60s
+streamer.direction(30)             # "up" / "down" / "flat"
+streamer.volatility(120)           # std dev of prices over 120s
+streamer.high(120)                 # highest price over 120s
+streamer.low(120)                  # lowest price over 120s
+streamer.price_range(120)          # high - low over 120s
+streamer.is_fresh(60)              # True if last price is < 60s old
+streamer.is_rising(30) / streamer.is_falling(30)
+streamer.window                    # full ChainlinkAccessor for the active symbol
+```
+
+> `ctx.chainlink` (from `Bot` / `BotHub`) exposes all of these directly, and
+> `ctx.cl` points at the same rolling window.
 
 ### Example
 

@@ -16,9 +16,10 @@ from .rsi import RSISignalsMixin
 from .stochastic import StochasticSignalsMixin
 from .supertrend import SupertrendSignalsMixin
 from .volume import VolumeSignalsMixin
+from .vwap import VWAPSignalsMixin
 
 
-class SignalGenerator(RSISignalsMixin, MovingAverageSignalsMixin, BollingerSignalsMixin, DonchianSignalsMixin, MACDSignalsMixin, StochasticSignalsMixin, VolumeSignalsMixin, SupertrendSignalsMixin, PSARSignalsMixin, IchimokuSignalsMixin, PriceChangeSignalsMixin, SignalGeneratorBase):
+class SignalGenerator(RSISignalsMixin, MovingAverageSignalsMixin, BollingerSignalsMixin, DonchianSignalsMixin, MACDSignalsMixin, StochasticSignalsMixin, VolumeSignalsMixin, VWAPSignalsMixin, SupertrendSignalsMixin, PSARSignalsMixin, IchimokuSignalsMixin, PriceChangeSignalsMixin, SignalGeneratorBase):
     """
     Generate trading signals from technical indicators.
 
@@ -140,6 +141,8 @@ class SignalGenerator(RSISignalsMixin, MovingAverageSignalsMixin, BollingerSigna
             "macd_status": "bullish" if self.macd_above_zero() else "bearish",
             "bb_position": self._get_bb_position(),
             "volume_vs_sma": self.volume_above_sma(20),
+            "price_vs_vwap": self.price_above_vwap(),
+            "vwap_distance_pct": self.vwap_distance_pct(),
         }
 
         return summary

@@ -1,4 +1,8 @@
-"""Risk management for real trading."""
+"""Risk management for real trading.
+
+Refactored to inherit BaseRiskManager for shared daily/limits logic; retains
+real-specific stop-loss/take-profit and position-sizing helpers.
+"""
 
 from __future__ import annotations
 
@@ -11,17 +15,16 @@ if TYPE_CHECKING:
     from .real_orders import RealPosition
 
 from ..core import RiskLimitExceeded
+from .base_risk import BaseRiskManager
 
 log = logging.getLogger(__name__)
 
 
-class RiskManager:
-    """Risk management for real trading."""
+class RiskManager(BaseRiskManager):
+    """Risk management for real trading — unified with BaseRiskManager."""
 
     def __init__(self, config: RealTradingConfig):
-        self.config = config
-        self.daily_pnl: float = 0.0
-        self.daily_trades: int = 0
+        super().__init__(config)
         self.daily_start_balance: float = 0.0
         self._last_reset_date: Optional[str] = None
 
@@ -32,36 +35,11 @@ class RiskManager:
         market,
         positions: dict[str, RealPosition],
     ) -> None:
-        """Validate order against risk limits."""
-
-        if amount > self.config.max_order_size:
-            raise RiskLimitExceeded(
-                f"Order amount ${amount:.2f} exceeds maximum ${self.config.max_order_size:.2f}"
-            )
-
-        current_exposure = self._get_market_exposure(market.id, positions)
-        if current_exposure + amount > self.config.max_position_size:
-            raise RiskLimitExceeded(
-                f"Position would exceed maximum size ${self.config.max_position_size:.2f}"
-            )
-
-        open_positions = [p for p in positions.values() if not p.resolved]
-        if len(open_positions) >= self.config.max_open_positions:
-            raise RiskLimitExceeded(
-                f"Maximum open positions ({self.config.max_open_positions}) reached"
-            )
-
-        if self.config.max_positions_per_market > 0:
-            market_positions = [p for p in positions.values() if not p.resolved and p.market_id == market.id]
-            if len(market_positions) >= self.config.max_positions_per_market:
-                raise RiskLimitExceeded(
-                    f"Maximum positions per market ({self.config.max_positions_per_market}) reached for market {market.id}"
-                )
-
-        if self.daily_pnl < -self.config.max_daily_loss:
-            raise RiskLimitExceeded(
-                f"Daily loss ${abs(self.daily_pnl):.2f} exceeds limit ${self.config.max_daily_loss:.2f}"
-            )
+        """Validate order against risk limits (delegates to BaseRiskManager)."""
+        super()._check_limits(amount, market, positions)
+        # keep daily loss check message compatibility (Base already checks)
+        # extra: ensure daily reset
+        self._check_and_reset_daily()
 
     def check_stop_loss(self, position: RealPosition, current_price: float) -> bool:
         """Check if stop loss should be triggered."""
@@ -99,27 +77,10 @@ class RiskManager:
         position_size = risk_amount / (price_diff / entry_price)
         return min(position_size, balance)
 
-    def _get_market_exposure(self, market_id: str, positions: dict[str, RealPosition]) -> float:
-        exposure = 0.0
-        for position in positions.values():
-            if position.market_id == market_id and not position.resolved:
-                exposure += position.cost_basis
-        return exposure
-
-    def _check_and_reset_daily(self) -> None:
-        today = datetime.now(timezone.utc).date().isoformat()
-        if self._last_reset_date != today:
-            self.daily_pnl = 0.0
-            self.daily_trades = 0
-            self._last_reset_date = today
-            log.info("RiskManager: Daily tracking reset for new day")
-
-    def record_trade(self, pnl: float) -> None:
-        self._check_and_reset_daily()
-        self.daily_pnl += pnl
-        self.daily_trades += 1
-        log.debug("RiskManager: Recorded trade P&L: $%.2f (Daily: $%.2f, Trades: %d)",
-                  pnl, self.daily_pnl, self.daily_trades)
+    # _get_market_exposure, _check_and_reset_daily, record_trade inherited from BaseRiskManager
+    # keep record_trade override for log prefix compat if needed
+    def record_trade(self, pnl: float) -> None:  # type: ignore[override]
+        super().record_trade(pnl)
 
     def initialize_daily_balance(self, balance: float) -> None:
         self._check_and_reset_daily()

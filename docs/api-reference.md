@@ -152,8 +152,12 @@ See [Logging](./logging.md) for full usage.
 | `Sniper` | `bots/sniper.py` | Automated time-window trading bot with state machine |
 | `Tracker` | `bots/tracker.py` | P&L tracking bot |
 | `Bot` | `bot.py` | Declarative bot framework: `@on_tick`, `.when()` + `.buy()` |
-| `BotHub` | `bot_hub.py` | Multi-strategy hub: one WebSocket, N isolated paper engines |
-| `BinanceAccessor` | `bot_hub.py` | Binance BTC market data for bot strategies — `.close`, `.macd()`, `.price_change()`, etc. |
+| `BotHub` | `bot_hub/hub.py` | Multi-strategy hub: one WebSocket, N isolated paper engines |
+| `StrategyContext` | `bot_hub/context.py` | Per-strategy ctx — price, balance, indicators, cl/bn/orderbook |
+| `IndicatorAccessor` | `bot_hub/indicators.py` | First-class indicators `.rsi()/.macd()/.bollinger_bands()` with per-tick cache |
+| `BinanceAccessor` | `bot_hub/binance.py` | Binance BTC market data for bot strategies — `.close`, `.macd()`, `.price_change()`, etc. |
+| `OrderBookAccessor` | `bot_hub/orderbook.py` | Live order-book view for current market |
+| `PriceSnapshot` | `bot_hub/models.py` | UP/DOWN price snapshot dataclass |
 
 ---
 

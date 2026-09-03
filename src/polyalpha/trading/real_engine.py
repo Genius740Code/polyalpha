@@ -1,4 +1,9 @@
-"""Real trading engine — actual fund execution via Polymarket CLOB."""
+"""Real trading engine — actual fund execution via Polymarket CLOB.
+
+Refactored: large blocks extracted to real_fills.py, real_position_sync.py,
+real_risk_controls.py, real_advanced.py, real_helpers.py and staleness.py.
+This file remains the facade and preserves backward-compatible imports.
+"""
 
 from __future__ import annotations
 
@@ -59,11 +64,15 @@ from .real_position_sizing import (
 from .real_risk import RiskManager
 from .real_wallet import WalletManager
 from ..report.engine import ReportEngine
+from .real_fills import RealFillsMixin
+from .real_position_sync import RealPositionSyncMixin
+from .real_risk_controls import RealRiskControlsMixin
+from .real_advanced import RealAdvancedMixin
 
 
 log = logging.getLogger(__name__)
 
-class RealTradingEngine:
+class RealTradingEngine(RealFillsMixin, RealPositionSyncMixin, RealRiskControlsMixin, RealAdvancedMixin):
     """
     Real trading engine with actual fund execution via Polymarket CLOB.
 
@@ -120,8 +129,14 @@ class RealTradingEngine:
             log.warning("⚠️  SIMULATION MODE ENABLED - No real trades will be executed")
             log.warning("Set simulate=False for production trading")
 
-        # Wallet setup
-        self._wallet = WalletManager(private_key, rpc_url, log_balance_updates=self._config.log_balance_updates)
+        self._simulate = simulate
+        # Wallet setup (matic price configurable via RealTradingConfig.matic_price_usd)
+        self._wallet = WalletManager(
+            private_key,
+            rpc_url,
+            log_balance_updates=self._config.log_balance_updates,
+            matic_price_usd=getattr(self._config, "matic_price_usd", 0.5),
+        )
         self._balance: float = 0.0
         self._allowance: float = 0.0
 
@@ -528,12 +543,27 @@ class RealTradingEngine:
     # ── Balance Management ───────────────────────────────────────────────────────
 
     def refresh_balance(self) -> None:
-        """Refresh balance from blockchain."""
+        """Refresh balance from blockchain (no-op in simulate)."""
+        if getattr(self, "_simulate", False):
+            # In simulate mode keep existing balance; do not hit RPC
+            return
         if self._use_multi_wallet and self._real_wallet_manager:
             self._real_wallet_manager.refresh_all_balances()
         else:
-            self._balance = self._wallet.get_balance()
-            self._allowance = self._wallet.get_allowance()
+            try:
+                self._balance = self._wallet.get_balance()
+                # get_allowance requires CTF spender address
+                from .alchemy_client import AlchemyClient
+                spender = getattr(self._wallet, "_ctf_address", AlchemyClient.CTF_ADDRESS)
+                try:
+                    self._allowance = self._wallet.get_allowance(spender)
+                except TypeError:
+                    # fallback for mock wallets without param
+                    self._allowance = self._wallet.get_allowance()
+            except Exception:
+                # Defer failure to caller; keep last known balance
+                log.debug("refresh_balance failed, keeping cached", exc_info=True)
+                return
             if self._config.log_balance_updates:
                 log.debug("Balance: $%.2f, Allowance: $%.2f", self._balance, self._allowance)
 
@@ -773,25 +803,25 @@ class RealTradingEngine:
             # Allowance warning doesn't block trade (can be auto-approved), but warn user
 
         # Check if market is open for trading
-        if hasattr(market, 'start_time') and market.start_time:
+        if hasattr(market, 'start_time') and isinstance(getattr(market, 'start_time', None), str) and market.start_time:
             try:
                 start_time = datetime.fromisoformat(market.start_time.replace('Z', '+00:00'))
                 if start_time > datetime.now(timezone.utc):
                     checks["market_open"] = False
                     checks["can_proceed"] = False
                     checks["warnings"].append("Market has not yet opened")
-            except (ValueError, AttributeError) as e:
+            except (ValueError, AttributeError, TypeError) as e:
                 log.debug("Real: could not parse market start_time: %s", e)
 
         # Check if market is still open
-        if hasattr(market, 'end_time') and market.end_time:
+        if hasattr(market, 'end_time') and isinstance(getattr(market, 'end_time', None), str) and market.end_time:
             try:
                 end_time = datetime.fromisoformat(market.end_time.replace('Z', '+00:00'))
                 if end_time < datetime.now(timezone.utc):
                     checks["market_open"] = False
                     checks["can_proceed"] = False
                     checks["warnings"].append("Market has closed")
-            except (ValueError, AttributeError) as e:
+            except (ValueError, AttributeError, TypeError) as e:
                 log.debug("Real: could not parse market end_time: %s", e)
 
         # Check if price is reasonable
@@ -1102,442 +1132,364 @@ class RealTradingEngine:
         orders = self._get_all_orders_across_wallets()
         return [o for o in orders.values() if o.status in ("open", "pending")]
 
-    def poll_order_status(self, order_id: str) -> dict:
+    def _create_position_sizer(self) -> PositionSizer:
+        """Create position sizer based on configuration."""
+        strategy = self._config.position_sizing
+
+        if strategy == "fixed":
+            return FixedPositionSizer(amount=self._config.fixed_amount)
+        elif strategy == "percentage":
+            return PercentagePositionSizer(percentage=self._config.percentage_of_balance)
+        elif strategy == "kelly":
+            return KellyPositionSizer(
+                kelly_fraction=self._config.kelly_fraction,
+                min_confidence=0.55,
+            )
+        else:
+            # Default to fixed
+            return FixedPositionSizer(amount=self._config.fixed_amount)
+
+    def _calculate_position_size(
+        self,
+        market,
+        side: str,
+        confidence: float,
+        price: float,
+    ) -> float:
+        """Calculate position size using the configured position sizer."""
+        return self._position_sizer.calculate_size(
+            balance=self._balance,
+            market=market,
+            side=side,
+            confidence=confidence,
+            price=price,
+        )
+
+    def _validate_order(self, amount: float, market) -> None:
+        """Validate order against risk limits using RiskManager."""
+        self._risk_manager.validate_order(
+            amount=amount,
+            balance=self._balance,
+            market=market,
+            positions=self._positions,
+        )
+
+    def _apply_buy_slippage(self, price: float, config) -> float:
         """
-        Poll order status from CLOB API with retry logic.
+        Buffer a market-buy price by the configured slippage tolerance.
+
+        A market buy has to cross the spread; submitting at the exact quoted price
+        leaves the signed order non-marketable, so it may never fill. We raise the
+        price by ``slippage_tolerance`` (a buy is always adverse in the up direction)
+        and cap it just below 1.0, since Polymarket prices live in (0, 1). The
+        buffered price is used for both submission and accounting, so recorded cost
+        is the worst case and never underestimated.
 
         Parameters
         ----------
-        order_id : str
-            Order ID to poll
+        price : float
+            Quoted price per share.
+        config : RealTradingConfig
+            Resolved config providing ``slippage_tolerance``.
 
         Returns
         -------
-        dict
-            Order status response from CLOB API
-
-        Raises
-        ------
-        OrderNotFound
-            If order not found in local records
-        NetworkError
-            If polling fails after retries
+        float
+            Slippage-adjusted price, capped at ``MAX_ORDER_PRICE``.
         """
-        order, _ = self._find_order_across_wallets(order_id)
-        if order is None:
-            raise OrderNotFound(f"Order {order_id} not found")
+        tolerance = getattr(config, "slippage_tolerance", 0.0)
+        if tolerance <= 0 or price <= 0:
+            return price
+        adjusted = min(price * (1 + tolerance), MAX_ORDER_PRICE)
+        if adjusted != price:
+            log.debug(
+                "Real: applied %.2f%% buy slippage: %.4f -> %.4f",
+                tolerance * 100, price, adjusted,
+            )
+        return adjusted
 
-        order.last_status_check = datetime.now(timezone.utc)
-        order.status_check_attempts += 1
-
-        clob = self._resolve_clob()
-        config = self._resolve_config()
-
-        try:
-            status_response = clob.get_order_status(order_id)
-            log.debug("Order %s status: %s", order_id, status_response.get("status"))
-            return status_response
-        except Exception as e:
-            log.exception("Failed to poll order %s status (attempt %d)",
-                         order_id, order.status_check_attempts)
-            if order.status_check_attempts >= config.retry_attempts:
-                raise NetworkError(f"Order status polling failed after {config.retry_attempts} attempts: {e}")
-            raise
-
-    def update_order_fill_status(self, order_id: str) -> None:
+    def _calculate_shares_and_fee(self, amount: float, price: float, is_maker: bool = False) -> tuple[float, float]:
         """
-        Update order fill status based on CLOB API response.
+        Calculate shares and fee for an order using the configured fee mode.
 
-        Handles partial fills, full fills, and status transitions.
+        The fee is deducted from the trade amount (like Polymarket does on-chain),
+        so the user receives fewer shares.
 
         Parameters
         ----------
-        order_id : str
-            Order ID to update
+        amount : float
+            Total USDC being spent
+        price : float
+            Price per share
+        is_maker : bool
+            Whether this is a maker order (limit order providing liquidity)
+
+        Returns
+        -------
+        tuple[float, float]
+            (shares, fee) where shares = (amount - fee) / price
         """
-        order, _ = self._find_order_across_wallets(order_id)
-        if order is None:
-            raise OrderNotFound(f"Order {order_id} not found")
+        if price <= 0:
+            return 0.0, 0.0
 
-        # Skip if order is already in final state
-        if order.status in ("filled", "cancelled", "expired"):
-            return
+        # First pass: estimate fee from initial share estimate
+        shares_est = amount / price
+        fee = self._calculate_fee(amount, price, shares_est, is_maker)
 
-        # Poll current status from CLOB
-        status_response = self.poll_order_status(order_id)
+        # Fee comes out of the trade amount
+        net_trade = amount - fee
+        if net_trade <= 0:
+            return 0.0, fee
 
-        api_status = status_response.get("status", "unknown")
-        filled_size = float(status_response.get("filled_size", 0.0))
-        avg_price = float(status_response.get("avg_price", order.price))
+        shares = net_trade / price
 
-        # Handle partial fills
-        if filled_size > 0 and filled_size < order.shares:
-            if order.status != "partially_filled":
-                log.debug("Order %s partially filled: %.2f/%.2f shares",
-                         order_id, filled_size, order.shares)
-                order.status = "partially_filled"
+        # Second pass: recalculate fee with actual shares (significant for polymarket formula)
+        if self._config.fee_mode == "polymarket":
+            fee = self._calculate_fee(amount, price, shares, is_maker)
+            net_trade = amount - fee
+            if net_trade <= 0:
+                return 0.0, fee
+            shares = net_trade / price
 
-            prev_filled = order.filled_shares
-            incremental = filled_size - prev_filled
-            if incremental <= 0:
-                return
+        return shares, fee
 
-            order.filled_shares = filled_size
-            order.filled_amount = filled_size * avg_price
-            order.avg_fill_price = avg_price
-
-            # Update position with partial fill (pass incremental, not cumulative)
-            self._handle_partial_fill(order, incremental, avg_price)
-
-        # Handle full fills
-        elif filled_size >= order.shares or api_status == "filled":
-            if order.status != "filled":
-                log.info("Order %s fully filled: %.2f shares @ %.4f",
-                        order_id, filled_size, avg_price)
-                order.status = "filled"
-                order.filled_at = datetime.now(timezone.utc)
-                order.filled_shares = filled_size
-                order.filled_amount = filled_size * avg_price
-                order.avg_fill_price = avg_price
-
-                # Trigger fill callback
-                self._on_order_filled(order)
-
-        # Handle cancelled orders
-        elif api_status == "cancelled":
-            if order.status != "cancelled":
-                log.info("Order %s cancelled", order_id)
-                order.status = "cancelled"
-
-        # Handle expired orders
-        elif api_status == "expired":
-            if order.status != "expired":
-                log.warning("Order %s expired", order_id)
-                order.status = "expired"
-
-        # Update database if enabled
-        if self._db_enabled:
-            self._update_order_in_db(order)
-
-    def _handle_partial_fill(self, order: RealOrder, incremental_shares: float, avg_price: float) -> None:
+    def _calculate_fee(self, amount: float, price: float, shares: float, is_maker: bool = False) -> float:
         """
-        Handle partial fill by updating position incrementally.
-
-        ``buy()`` optimistically adds ``order.shares`` to the position before
-        the CLOB confirms the fill. This method first reverts that optimistic
-        addition (if still present), then applies only the actual incremental
-        fill at the real fill price.
+        Calculate the fee for an order based on the configured fee mode.
 
         Parameters
         ----------
-        order : RealOrder
-            Order that was partially filled
-        incremental_shares : float
-            Number of *new* shares filled since the last update (not cumulative)
-        avg_price : float
-            Average fill price for this increment
+        amount : float
+            Total USDC being spent
+        price : float
+            Price per share
+        shares : float
+            Number of shares being traded
+        is_maker : bool
+            Whether this is a maker order (limit order providing liquidity)
+
+        Returns
+        -------
+        float
+            The fee amount in USDC
         """
-        positions = self._resolve_positions()
-        position_key = f"{order.market_id}:{order.side}"
+        if self._config.fee_mode == "zero":
+            return 0.0
+        elif self._config.fee_mode == "custom":
+            fee_rate = self._config.maker_fee_rate if is_maker else self._config.custom_fee_rate
+            return round(amount * fee_rate, FEE_ROUNDING)
+        elif self._config.fee_mode == "polymarket":
+            return self._polymarket_fee(amount, price, shares, is_maker)
+        return 0.0
+
+    def _polymarket_fee(self, amount: float, price: float, shares: float, is_maker: bool = False) -> float:
+        if self._config.market_category.lower() == "geopolitical":
+            return 0.0
+        fee_rate = fee_rate_for_category(self._config.market_category)
+        return calculate_polymarket_fee(shares, price, fee_rate)
+
+    def _require_confirmation(
+        self,
+        market,
+        side: str,
+        amount: float,
+        price: float,
+        shares: float,
+        fee: float,
+    ) -> None:
+        """Require user confirmation before executing order."""
+        print("\n" + "=" * 60)
+        print("ORDER CONFIRMATION REQUIRED")
+        print("=" * 60)
+        print(f"Market:    {market.question}")
+        print(f"Side:      {side}")
+        print(f"Amount:    ${amount:.2f}")
+        print(f"Price:     ${price:.4f}")
+        print(f"Shares:    {shares:.4f}")
+        print(f"Fee:       ${fee:.4f}")
+        print(f"Net Trade: ${amount - fee:.2f}")
+        print(f"Total:     ${amount:.2f}")
+        balance = self._resolve_balance()
+        print(f"Balance:   ${balance:.2f}")
+        print("=" * 60)
+
+        response = input("\nConfirm this order? (yes/no): ").strip().lower()
+
+        if response not in ("yes", "y"):
+            raise OrderCancelled("Order cancelled by user")
+
+        print("Order confirmed.\n")
+
+    def _place_clob_order(
+        self,
+        token_id: str,
+        side: str,
+        price: float,
+        size: float,
+        order_type: str,
+        wallet=None,
+    ) -> dict:
+        """Place order on CLOB."""
+        clob = self._resolve_clob() if wallet is None else wallet.clob_client
+        return clob.place_order(
+            token_id=token_id,
+            side=side,
+            price=price,
+            size=size,
+            order_type=order_type,
+        )
+
+    def _cancel_clob_order(self, order_id: str, wallet=None) -> None:
+        """Cancel order on CLOB."""
+        clob = self._resolve_clob() if wallet is None else wallet.clob_client
+        clob.cancel_order(order_id)
+
+    def _update_position(self, market, side: str, order: RealOrder, wallet=None) -> None:
+        """Update position after order fill."""
+        key = f"{market.id}:{side}"
+        if wallet is not None and self._use_multi_wallet:
+            positions = wallet.positions
+        else:
+            positions = self._resolve_positions()
 
         with self._position_lock:
-            if position_key not in positions:
-                from .real_orders import RealPosition
+            if key in positions:
+                position = positions[key]
+                position.order_ids.append(order.id)
+
+                total_shares = position.shares + order.shares
+                position.avg_price = (
+                    (position.avg_price * position.shares + order.price * order.shares)
+                    / total_shares
+                )
+                position.shares = total_shares
+                position.cost_basis = position.shares * position.avg_price
+                position.current_value = position.shares * order.price
+            else:
                 position = RealPosition(
-                    market_id=order.market_id,
-                    slug=order.slug,
-                    question=order.slug,
-                    side=order.side,
-                    shares=0,
-                    avg_price=0,
-                    current_price=0,
-                    cost_basis=0,
-                    current_value=0,
+                    market_id=market.id,
+                    slug=market.slug,
+                    question=market.question,
+                    side=side,
+                    shares=order.shares,
+                    avg_price=order.price,
+                    current_price=order.price,
+                    cost_basis=order.shares * order.price,
+                    current_value=order.shares * order.price,
                     order_ids=[order.id],
                 )
-                positions[position_key] = position
-            else:
-                position = positions[position_key]
+                positions[key] = position
 
-            # Revert optimistic addition from buy() if still present.
-            # buy() adds order.shares at order.price — this must be undone
-            # before applying the actual fill data.
-            if position.shares >= order.shares:
-                position.shares -= order.shares
-                position.cost_basis = max(0.0, position.cost_basis - order.shares * order.price)
+    def _get_market_exposure(self, market_id: str) -> float:
+        """Get total exposure for a market."""
+        exposure = 0.0
+        positions = self._get_all_positions_across_wallets()
+        for position in positions.values():
+            if position.market_id == market_id and not position.resolved:
+                exposure += position.cost_basis
+        return exposure
 
-            # Apply actual incremental fill
-            position.shares += incremental_shares
-            position.cost_basis += incremental_shares * avg_price
-            if position.shares > 0:
-                position.avg_price = position.cost_basis / position.shares
-            position.current_value = position.shares * order.price
-
-            log.debug("Position updated with partial fill: %s %s, shares=%.2f, avg_price=$.4f",
-                     position.slug, position.side, position.shares, position.avg_price)
-
-    def _on_order_filled(self, order: RealOrder) -> None:
-        """
-        Callback when order is fully filled.
-
-        Corrects the position to use the actual fill price from the CLOB
-        instead of the submission price (which may differ for market orders).
-
-        Parameters
-        ----------
-        order : RealOrder
-            Filled order
-        """
-        log.debug("Order fill callback: %s %s $%.2f @ $%.4f (avg_fill: $%.4f)",
-                 order.slug, order.side, order.amount, order.price, order.avg_fill_price)
-
-        if order.avg_fill_price > 0:
-            self._correct_position_from_fill(order)
-
-        risk_manager = self._resolve_risk_manager()
-        risk_manager.record_trade(0.0)
-
-    def _correct_position_from_fill(self, order: RealOrder) -> None:
-        """
-        Correct position after actual fill price is known.
-
-        The position was created optimistically in buy() with ``order.shares``
-        at ``order.price``. This method removes that optimistic contribution
-        and applies the actual fill (``order.filled_shares`` at ``order.avg_fill_price``).
-
-        Parameters
-        ----------
-        order : RealOrder
-            Filled order with ``avg_fill_price`` and ``filled_shares`` populated.
-        """
-        positions = self._resolve_positions()
-        key = f"{order.market_id}:{order.side}"
-        with self._position_lock:
-            position = positions.get(key)
-            if position is None:
-                return
-
-            actual_shares = max(order.filled_shares, 0.0)
-            if actual_shares <= 0:
-                actual_shares = order.shares
-
-            fill_price = order.avg_fill_price
-
-            if position.shares >= order.shares:
-                # Remove optimistic contribution
-                position.shares -= order.shares
-                position.cost_basis = max(0.0, position.cost_basis - order.shares * order.price)
-
-            # Apply actual fill
-            position.shares += actual_shares
-            position.cost_basis += actual_shares * fill_price
-            if position.shares > 0:
-                position.avg_price = position.cost_basis / position.shares
-            position.current_value = position.shares * order.price
-
-    def check_order_timeout(self, order_id: str) -> bool:
-        """
-        Check if order has exceeded timeout threshold.
-
-        Parameters
-        ----------
-        order_id : str
-            Order ID to check
-
-        Returns
-        -------
-        bool
-            True if order has timed out
-        """
-        order, _ = self._find_order_across_wallets(order_id)
-        if order is None:
-            raise OrderNotFound(f"Order {order_id} not found")
-
-        config = self._resolve_config()
-
-        if order.status not in ("pending", "open", "partially_filled"):
-            return False
-
-        if order.created_at:
-            elapsed = (datetime.now(timezone.utc) - order.created_at).total_seconds()
-            if elapsed > config.order_timeout:
-                log.warning("Order %s timed out after %.1f seconds (status: %s)",
-                           order_id, elapsed, order.status)
-                return True
-
-        return False
-
-    def poll_all_orders(self) -> dict[str, str]:
-        """
-        Poll status for all open orders.
-
-        Returns
-        -------
-        dict[str, str]
-            Dictionary mapping order_id to new status
-        """
-        status_updates = {}
-        orders = self._get_all_orders_across_wallets()
-
-        for order_id, order in list(orders.items()):
-            if order.status in ("pending", "open", "partially_filled"):
-                try:
-                    old_status = order.status
-                    self.update_order_fill_status(order_id)
-                    if order.status != old_status:
-                        status_updates[order_id] = order.status
-                except Exception:
-                    log.exception("Failed to update order %s status", order_id)
-
-                    if self.check_order_timeout(order_id):
-                        status_updates[order_id] = "timeout"
-
-        return status_updates
-
-    # ── Position Management ───────────────────────────────────────────────────────
-
-    def _sync_single_wallet_positions(self, address: str, clob_client, positions_dict: dict) -> None:
-        """Sync positions for a single wallet address into the given positions dict."""
-        balances = self._alchemy_client.get_token_balances(address)
-        transfers = self._alchemy_client.get_asset_transfers(address)
-
-        token_ids = list(balances.keys())
-        if not token_ids:
+    def _save_order_to_db(self, order: RealOrder, wallet=None) -> None:
+        """Save real order to database."""
+        if not self._db_enabled or self._db is None:
             return
 
-        metadata = self._alchemy_client.fetch_polymarket_metadata(token_ids)
+        try:
+            wallet_obj = wallet if (wallet is not None and self._use_multi_wallet) else self._resolve_wallet()
+            addr = wallet_obj.get_address() if hasattr(wallet_obj, 'get_address') else str(wallet_obj)
 
-        transfers_by_token: dict[str, list[dict]] = {}
-        for t in transfers:
-            for m in t.get("erc1155Metadata", []):
-                tid = m.get("tokenId", "")
-                if tid:
-                    transfers_by_token.setdefault(tid, []).append(t)
-
-        orders = self._get_all_orders_across_wallets()
-
-        for token_id, amount in balances.items():
-            if amount <= 0:
-                continue
-
-            meta = metadata.get(token_id, {})
-            market_id = meta.get("market_id", token_id)
-            slug = meta.get("slug", token_id)
-            question = meta.get("question", "Unknown Market")
-            gamma_price = float(meta.get("price", 0.0))
-
-            side = meta.get("side", "UP")
-            clob_token_ids = meta.get("clobTokenIds", "")
-            if isinstance(clob_token_ids, str) and clob_token_ids:
-                tokens = [t.strip() for t in clob_token_ids.split(",")]
-                if len(tokens) > 1:
-                    token_dec = str(int(token_id, 16)) if token_id.startswith("0x") else token_id
-                    side = "UP" if tokens[0] == token_dec else "DOWN"
-
-            fill_price = None
-
-            for order in orders.values():
-                if order.market_id == market_id and order.side == side and order.avg_fill_price > 0:
-                    fill_price = order.avg_fill_price
-                    break
-
-            if fill_price is None and gamma_price > 0:
-                fill_price = gamma_price
-
-            if fill_price is None:
-                try:
-                    ob = clob_client.get_orderbook(token_id)
-                    bids = ob.get("bids", [])
-                    asks = ob.get("asks", [])
-                    best_bid = float(bids[0][0]) if bids else 0.0
-                    best_ask = float(asks[0][0]) if asks else 0.0
-                    if best_bid > 0 and best_ask > 0:
-                        fill_price = (best_bid + best_ask) / 2.0
-                    elif best_bid > 0:
-                        fill_price = best_bid
-                    elif best_ask > 0:
-                        fill_price = best_ask
-                except Exception:
-                    log.warning("Failed to fetch orderbook for fill price", exc_info=True)
-
-            position_key = f"{market_id}:{side}"
-            if fill_price is None and position_key in positions_dict:
-                fill_price = positions_dict[position_key].avg_price
-
-            if fill_price is None or fill_price <= 0:
-                fill_price = FALLBACK_PRICE
-
-            cost_basis = amount * fill_price
-            current_price = gamma_price if gamma_price > 0 else fill_price
-
-            entry_time = None
-            incoming = [t for t in transfers_by_token.get(token_id, [])
-                        if t.get("to", "").lower() == address.lower()]
-            if incoming:
-                timestamps = []
-                for t in incoming:
-                    ts = t.get("metadata", {}).get("blockTimestamp", "")
-                    if ts:
-                        try:
-                            timestamps.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
-                        except (ValueError, TypeError):
-                            pass
-                if timestamps:
-                    entry_time = min(timestamps)
-
-            position = RealPosition(
-                market_id=market_id,
-                slug=slug,
-                question=question,
-                side=side,
-                shares=amount,
-                avg_price=fill_price,
-                current_price=current_price,
-                cost_basis=cost_basis,
-                current_value=amount * current_price,
-                entry_time=entry_time,
+            self._db.save_trade(
+                market_slug=order.slug,
+                market_id=order.market_id,
+                side=order.side,
+                entry_price=order.price,
+                exit_price=None,
+                amount=order.amount,
+                shares=order.shares,
+                fee=order.fee,
+                outcome=None,
+                pnl=0.0,
+                timestamp=order.created_at,
+                sizing_strategy=order.sizing_strategy,
+                confidence=order.confidence,
+                kelly_fraction=order.kelly_fraction,
+                stop_loss=order.stop_loss,
+                take_profit=order.take_profit,
+                tx_hash=order.tx_hash,
+                is_real_trade=True,
+                wallet_address=addr,
+                order_id=order.id,
+                status=order.status,
             )
+            log.debug("Real: order saved to database for %s", order.slug)
+        except Exception as exc:
+            log.exception("Real: failed to save order to database")
 
-            positions_dict[position_key] = position
+    def _update_order_in_db(self, order: RealOrder) -> None:
+        """Update order status in database after fill status changes."""
+        if not self._db_enabled or self._db is None:
+            return
 
-    def sync_positions_from_chain(self) -> None:
-        """Fetch real positions from the blockchain using Alchemy."""
-        log.debug("Syncing positions from blockchain...")
-
-        if self._use_multi_wallet and self._real_wallet_manager:
-            for wallet in self._real_wallet_manager.get_all_wallets():
-                try:
-                    self._sync_single_wallet_positions(
-                        wallet.address,
-                        wallet.clob_client,
-                        wallet.positions,
-                    )
-                except Exception as e:
-                    log.exception("Failed to sync positions for wallet %s", wallet.wallet_id)
-        else:
-            self._sync_single_wallet_positions(
-                self._wallet.address,
-                self._clob_client,
-                self._positions,
+        try:
+            # Update the trade record with fill information
+            self._db.update_trade_status(
+                order_id=order.id,
+                status=order.status,
+                filled_shares=order.filled_shares,
+                filled_amount=order.filled_amount,
+                avg_fill_price=order.avg_fill_price,
+                filled_at=order.filled_at,
             )
+            log.debug("Real: order status updated in database for %s: %s", order.slug, order.status)
+        except Exception as exc:
+            log.exception("Real: failed to update order in database")
 
-    def positions(self) -> list[RealPosition]:
-        """Get all open positions."""
-        now = time.time()
-        if now - self._last_position_sync > self._position_sync_ttl:
-            self.sync_positions_from_chain()
-            self._last_position_sync = now
-        positions = self._get_all_positions_across_wallets()
-        return [p for p in positions.values() if not p.resolved]
+    # ── Advanced Order Types ─────────────────────────────────────────────────────────
 
-    def all_positions(self) -> list[RealPosition]:
-        """Get all positions including resolved ones."""
-        now = time.time()
-        if now - self._last_position_sync > self._position_sync_ttl:
-            self.sync_positions_from_chain()
-            self._last_position_sync = now
-        positions = self._get_all_positions_across_wallets()
-        return list(positions.values())
+    def _get_price_for_side(self, market, side: str) -> tuple[float, str]:
+        """Get best available price — delegates to staleness helper (single threshold)."""
+        from .staleness import get_price_for_side as _helper
+        return _helper(market, side, self._attached_streams, log_prefix="Real")
+
+    # ── Real-Time Price Monitoring ───────────────────────────────────────────────
+
+    def attach_stream(self, stream, market) -> None:
+        """
+        Wire *stream* so positions auto-update and stop loss/take profit triggers execute.
+
+        This method integrates price streams with the RealTradingEngine for automatic
+        price updates, stop loss/take profit execution, and trailing stop management.
+
+        Also enables price-aware trading: buy() will automatically use live
+        streamed prices when a stream is attached and running.
+
+        Example
+        -------
+        >>> stream = client.stream(market)
+        >>> client.real.attach_stream(stream, market)
+        >>> stream.start(background=True)
+        """
+        # Validate market
+        if not hasattr(market, 'id') or not hasattr(market, 'slug'):
+            raise ValueError("Invalid market object")
+
+        # Store stream reference for price-aware trading
+        self._attached_streams[market.id] = stream
+
+        @stream.on("price")
+        def _on_price(up: float, down: float) -> None:
+            self._on_price_update(market.id, up, down)
+
+        @stream.on("close")
+        def _on_close() -> None:
+            log.info(
+                "Real: stream closed for %s — market resolved",
+                market.slug,
+            )
+            # Remove stream reference when closed
+            self._attached_streams.pop(market.id, None)
+
+        log.info("Real: stream attached for %s", market.slug)
 
     def show_positions(self, show_all: bool = False, verbose: bool = True) -> None:
         """
@@ -1644,435 +1596,6 @@ class RealTradingEngine:
         if position is None:
             raise PositionNotFound(f"No position for {market_id} {side}")
         return position
-
-    def set_stop_loss(
-        self,
-        market,
-        side: str,
-        stop_price: float,
-    ) -> None:
-        """
-        Set stop loss for a position.
-
-        Parameters
-        ----------
-        market : Market
-            Market object
-        side : str
-            "UP" or "DOWN"
-        stop_price : float
-            Stop loss price trigger
-
-        Example
-        -------
-        >>> client.real.set_stop_loss(market, side="UP", stop_price=0.45)
-        """
-        side = _validate_side(side)
-        position, _ = self._find_position_across_wallets(market.id, side)
-        if position is None:
-            raise PositionNotFound(f"No position found for {market.slug} {side}")
-        
-        position.stop_loss = stop_price
-        
-        log.info("Stop loss set at $%.4f for %s %s", stop_price, market.slug, side)
-
-    def set_take_profit(
-        self,
-        market,
-        side: str,
-        profit_price: float,
-    ) -> None:
-        """
-        Set take profit for a position.
-
-        Parameters
-        ----------
-        market : Market
-            Market object
-        side : str
-            "UP" or "DOWN"
-        profit_price : float
-            Take profit price trigger
-
-        Example
-        -------
-        >>> client.real.set_take_profit(market, side="UP", profit_price=0.55)
-        """
-        side = _validate_side(side)
-        position, _ = self._find_position_across_wallets(market.id, side)
-        if position is None:
-            raise PositionNotFound(f"No position found for {market.slug} {side}")
-        
-        position.take_profit = profit_price
-        
-        log.info("Take profit set at $%.4f for %s %s", profit_price, market.slug, side)
-
-    def set_trailing_stop(
-        self,
-        market,
-        side: str,
-        trail_distance: float,
-    ) -> None:
-        """
-        Set trailing stop loss for a position.
-
-        Parameters
-        ----------
-        market : Market
-            Market object
-        side : str
-            "UP" or "DOWN"
-        trail_distance : float
-            Trailing distance as percentage (e.g., 0.05 for 5%)
-
-        Example
-        -------
-        >>> client.real.set_trailing_stop(market, side="UP", trail_distance=0.05)
-        """
-        side = _validate_side(side)
-        position, _ = self._find_position_across_wallets(market.id, side)
-        if position is None:
-            raise PositionNotFound(f"No position found for {market.slug} {side}")
-        
-        if not hasattr(position, 'trail_sl'):
-            position.trail_sl = None
-        if not hasattr(position, 'trail_sl_price'):
-            position.trail_sl_price = None
-        
-        position.trail_sl = trail_distance
-        position.trail_sl_price = position.current_price - trail_distance if side == "UP" else position.current_price + trail_distance
-        
-        log.info("Trailing stop set at %.4f distance for %s %s", trail_distance, market.slug, side)
-
-    def check_and_execute_trailing_stops(self, market_updates: dict[str, float]) -> list[str]:
-        """
-        Check and execute trailing stops based on current market prices.
-
-        Parameters
-        ----------
-        market_updates : dict[str, float]
-            Dictionary mapping token_id to current price
-
-        Returns
-        -------
-        list[str]
-            List of position keys that had trailing stops triggered
-        """
-        triggered = []
-        positions = self._get_all_positions_across_wallets()
-        
-        for key, position in positions.items():
-            if position.resolved:
-                continue
-            
-            if not hasattr(position, 'trail_sl') or position.trail_sl is None:
-                continue
-            
-            token_id = None
-            if hasattr(position, 'token_id'):
-                token_id = position.token_id
-            else:
-                token_id = position.market_id
-            
-            if token_id not in market_updates:
-                continue
-            
-            current_price = market_updates[token_id]
-            old_trail_price = position.trail_sl_price
-            
-            if position.side == "UP":
-                new_trail_price = current_price - position.trail_sl
-                if new_trail_price > old_trail_price:
-                    position.trail_sl_price = new_trail_price
-                    log.debug("Trailing stop updated for %s %s: $%.4f -> $%.4f", 
-                              position.slug, position.side, old_trail_price, new_trail_price)
-                
-                if current_price <= position.trail_sl_price:
-                    triggered.append(key)
-                    log.warning("Trailing stop triggered for %s %s at $%.4f", 
-                              position.slug, position.side, current_price)
-                    
-            else:
-                new_trail_price = current_price + position.trail_sl
-                if new_trail_price < old_trail_price:
-                    position.trail_sl_price = new_trail_price
-                    log.debug("Trailing stop updated for %s %s: $%.4f -> $%.4f", 
-                             position.slug, position.side, old_trail_price, new_trail_price)
-                
-                if current_price >= position.trail_sl_price:
-                    triggered.append(key)
-                    log.warning("Trailing stop triggered for %s %s at $%.4f", 
-                              position.slug, position.side, current_price)
-        
-        return triggered
-
-    def _find_position_by_key_across_wallets(self, position_key: str):
-        """Find a position by composite key across all wallets."""
-        if not self._use_multi_wallet or not self._real_wallet_manager:
-            if position_key in self._positions:
-                return self._positions[position_key], None
-            return None, None
-        for wallet in self._real_wallet_manager.get_all_wallets():
-            if position_key in wallet.positions:
-                return wallet.positions[position_key], wallet
-        return None, None
-
-    def execute_trailing_stop_exit(self, position_key: str) -> None:
-        """
-        Execute an exit order for a position whose trailing stop was triggered.
-
-        Parameters
-        ----------
-        position_key : str
-            Position key in format "{market_id}:{side}"
-        """
-        position, wallet = self._find_position_by_key_across_wallets(position_key)
-        if position is None:
-            log.warning("Position %s not found for trailing stop exit", position_key)
-            return
-        
-        log.info("Executing trailing stop exit for %s %s at $%.4f",
-                 position.slug, position.side, position.current_price)
-        
-        try:
-            clob = self._resolve_clob() if wallet is None else wallet.clob_client
-            orders = self._resolve_orders() if wallet is None else wallet.orders
-            
-            token_id = position.market_id
-            current_price = position.current_price
-            
-            order_response = clob.place_order(
-                token_id=token_id,
-                side="sell",
-                price=current_price,
-                size=position.shares,
-                order_type="market",
-            )
-            
-            order = RealOrder(
-                id=order_response["order_id"],
-                market_id=position.market_id,
-                slug=position.slug,
-                side=position.side,
-                price=current_price,
-                amount=position.shares * current_price,
-                shares=position.shares,
-                fee=0.0,
-                status="pending",
-                is_limit=False,
-                created_at=datetime.now(timezone.utc),
-            )
-            orders[order.id] = order
-            
-            position.resolved = True
-            position.outcome = "STOPPED"
-            
-            log.info("Trailing stop exit executed for %s %s: order=%s",
-                     position.slug, position.side, order.id)
-                    
-        except Exception as e:
-            log.exception("Failed to execute trailing stop exit for %s %s",
-                          position.slug, position.side)
-
-    # ── Position Management ───────────────────────────────────────────────────────
-
-    def scale_position(
-        self,
-        market,
-        side: str,
-        add_amount: float,
-        confidence: float = 0.5,
-    ) -> RealOrder:
-        """
-        Scale (pyramid) a position by adding more shares to a winning position.
-
-        This implements the pyramiding strategy where you add to a position
-        as it moves in your favor, increasing exposure while maintaining risk control.
-
-        Parameters
-        ----------
-        market : Market
-            Market object
-        side : str
-            "UP" or "DOWN"
-        add_amount : float
-            USDC amount to add to the position
-        confidence : float, optional
-            Confidence level for the additional trade (default: 0.5)
-
-        Returns
-        -------
-        RealOrder
-            The order that was placed to scale the position
-
-        Raises
-        ------
-        PositionNotFound
-            If no existing position exists for this market/side
-        RiskLimitExceeded
-            If scaling would exceed risk limits or position is not profitable enough
-
-        Example
-        -------
-        >>> # Add $50 more to a winning UP position
-        >>> order = client.real.scale_position(market, side="UP", add_amount=50.0, confidence=0.7)
-        """
-        side = _validate_side(side)
-        position, _ = self._find_position_across_wallets(market.id, side)
-        if position is None:
-            raise PositionNotFound(f"No position found for {market.slug} {side}")
-
-        config, _ = self._resolve_config_and_risk()
-
-        if not config.enable_position_scaling:
-            raise RiskLimitExceeded("Position scaling is disabled in configuration")
-
-        if position.scale_count >= config.max_scale_additions:
-            raise RiskLimitExceeded(
-                f"Position has been scaled {position.scale_count} times, "
-                f"maximum is {config.max_scale_additions}"
-            )
-
-        min_profit_pct = config.min_profit_for_scaling
-        if position.pnl_pct < min_profit_pct * 100:
-            raise RiskLimitExceeded(
-                f"Position profit {position.pnl_pct:.1f}% is below minimum {min_profit_pct*100:.1f}% for scaling"
-            )
-
-        current_exposure = self._get_market_exposure(market.id)
-        max_add_amount = config.max_position_size - current_exposure
-        if add_amount > max_add_amount:
-            log.warning("Requested scale amount $%.2f exceeds limit, capping at $%.2f", add_amount, max_add_amount)
-            add_amount = max_add_amount
-
-        # Place additional order
-        log.info("Scaling position %s %s by $%.2f at confidence %.2f (scale #%d)",
-                 market.slug, side, add_amount, confidence, position.scale_count + 1)
-
-        order = self.buy(market, side=side, amount=add_amount, confidence=confidence, confirm=False)
-
-        # Update scale count
-        position.scale_count += 1
-
-        return order
-
-    def reduce_position(
-        self,
-        market,
-        side: str,
-        reduce_pct: float,
-        reason: str = "manual",
-    ) -> RealOrder:
-        """
-        Reduce a position by selling a percentage of shares.
-
-        This implements position reduction strategies for risk management
-        or profit taking. In Polymarket, selling is done by buying the opposite side.
-
-        Parameters
-        ----------
-        market : Market
-            Market object
-        side : str
-            "UP" or "DOWN"
-        reduce_pct : float
-            Percentage of position to reduce (0.0 to 1.0)
-        reason : str, optional
-            Reason for reduction (default: "manual")
-
-        Returns
-        -------
-        RealOrder
-            The order that was placed to reduce the position
-
-        Raises
-        ------
-        PositionNotFound
-            If no existing position exists for this market/side
-        ValueError
-            If reduce_pct is not between 0 and 1
-        RiskLimitExceeded
-            If position reduction is disabled in configuration
-
-        Example
-        -------
-        >>> # Reduce position by 50%
-        >>> order = client.real.reduce_position(market, side="UP", reduce_pct=0.5, reason="profit_taking")
-        """
-        side = _validate_side(side)
-        position, wallet = self._find_position_across_wallets(market.id, side)
-        if position is None:
-            raise PositionNotFound(f"No position found for {market.slug} {side}")
-
-        config = self._resolve_config_and_risk(wallet)
-
-        if not config.enable_position_reduction:
-            raise RiskLimitExceeded("Position reduction is disabled in configuration")
-
-        if not 0 < reduce_pct <= 1:
-            raise ValueError("reduce_pct must be between 0 and 1")
-
-
-        shares_to_reduce = position.shares * reduce_pct
-
-        # Calculate amount to spend on opposite side to reduce position
-        current_price = position.current_price
-        reduce_amount = shares_to_reduce * current_price
-
-        log.info("Reducing position %s %s by %.1f%% ($%.2f) - reason: %s",
-                 market.slug, side, reduce_pct * 100, reduce_amount, reason)
-
-        # To reduce a position, buy the opposite side
-        opposite_side = "DOWN" if side == "UP" else "UP"
-        order = self.buy(market, side=opposite_side, amount=reduce_amount, confidence=0.5, confirm=False)
-
-        return order
-
-    def hedge_position(
-        self,
-        market,
-        side: str,
-        hedge_pct: float = 0.5,
-    ) -> RealOrder:
-        """
-        Hedge a position by taking an opposite position in the same market.
-        """
-        side = _validate_side(side)
-        position, wallet = self._find_position_across_wallets(market.id, side)
-        if position is None:
-            raise PositionNotFound(f"No position found for {market.slug} {side}")
-
-        config = self._resolve_config_and_risk(wallet)
-
-        if not config.enable_hedging:
-            raise RiskLimitExceeded("Position hedging is disabled in configuration")
-
-        if not 0 < hedge_pct <= 1:
-            raise ValueError("hedge_pct must be between 0 and 1")
-
-        if hedge_pct > config.max_hedge_ratio:
-            raise RiskLimitExceeded(
-                f"Hedge ratio {hedge_pct:.1%} exceeds maximum {config.max_hedge_ratio:.1%}"
-            )
-
-
-
-        # Calculate hedge amount based on position value
-        hedge_amount = position.cost_basis * hedge_pct
-
-        # Determine opposite side
-        hedge_side = "DOWN" if side == "UP" else "UP"
-
-        log.info("Hedging position %s %s with %.1f%% ($%.2f) on opposite side %s",
-                 market.slug, side, hedge_pct * 100, hedge_amount, hedge_side)
-
-        # Place order on opposite side
-        order = self.buy(market, side=hedge_side, amount=hedge_amount, confidence=0.5, confirm=False)
-
-        # Track hedge amount on position
-        position.hedge_amount += hedge_amount
-
-        return order
 
     def redeem_position(
         self,
@@ -2409,1500 +1932,17 @@ class RealTradingEngine:
             exposure[position.market_id] += position.cost_basis
         return exposure
 
-    def _get_price_for_side(self, market, side: str) -> tuple[float, str]:
-        """
-        Get the best available price for a side, preferring live stream prices.
-        
-        Returns a tuple of (price, source) where source indicates where the price came from:
-        - "stream": Live price from attached stream
-        - "market": Price from market object (may be stale)
-        - "fallback": Fallback price when no valid price available
-        
-        Parameters
-        ----------
-        market : Market object
-        side   : "UP" or "DOWN"
-        
-        Returns
-        -------
-        tuple[float, str] - (price, source)
-        """
-        # Check if there's an attached running stream for this market
-        stream = self._attached_streams.get(market.id)
-        if stream and stream.running:
-            # Use live stream price
-            price = stream.up if side == "UP" else stream.down
-            if price > 0:
-                log.debug("Real: using live stream price %.4f for %s %s", price, market.slug, side)
-                return price, "stream"
-            else:
-                log.warning("Real: stream attached but price is 0, falling back to market price")
-        
-        # Fall back to market price
-        price = market.up_price if side == "UP" else market.down_price
-        
-        # Check if market price is stale
-        if hasattr(market, 'end_time') and market.end_time:
-            try:
-                from datetime import datetime, timezone
-                end_time = datetime.fromisoformat(market.end_time.replace('Z', '+00:00'))
-                now = datetime.now(timezone.utc)
-                time_until_close = (end_time - now).total_seconds()
-                
-                # If market is closed or very close to closing, price is likely stale
-                if time_until_close <= 0:
-                    log.warning("Real: market %s is closed, price may be stale", market.slug)
-                elif time_until_close < PRICE_STALENESS_THRESHOLD:
-                    log.warning(
-                        "Real: market %s closes in %.1fs, using potentially stale price %.4f",
-                        market.slug, time_until_close, price
-                    )
-            except (ValueError, TypeError):
-                pass  # If we can't parse end_time, skip staleness check
-        
-        if price <= 0:
-            log.warning("Real: market price is invalid (%.4f), using fallback", price)
-            return FALLBACK_PRICE, "fallback"
-        
-        log.debug("Real: using market price %.4f for %s %s", price, market.slug, side)
-        return price, "market"
-
-    # ── Real-Time Price Monitoring ───────────────────────────────────────────────
-
-    def attach_stream(self, stream, market) -> None:
-        """
-        Wire *stream* so positions auto-update and stop loss/take profit triggers execute.
-
-        This method integrates price streams with the RealTradingEngine for automatic
-        price updates, stop loss/take profit execution, and trailing stop management.
-
-        Also enables price-aware trading: buy() will automatically use live
-        streamed prices when a stream is attached and running.
-
-        Example
-        -------
-        >>> stream = client.stream(market)
-        >>> client.real.attach_stream(stream, market)
-        >>> stream.start(background=True)
-        """
-        # Validate market
-        if not hasattr(market, 'id') or not hasattr(market, 'slug'):
-            raise ValueError("Invalid market object")
-
-        # Store stream reference for price-aware trading
-        self._attached_streams[market.id] = stream
-
-        @stream.on("price")
-        def _on_price(up: float, down: float) -> None:
-            self._on_price_update(market.id, up, down)
-
-        @stream.on("close")
-        def _on_close() -> None:
-            log.info(
-                "Real: stream closed for %s — market resolved",
-                market.slug,
-            )
-            # Remove stream reference when closed
-            self._attached_streams.pop(market.id, None)
-
-        log.info("Real: stream attached for %s", market.slug)
-
-    def _on_price_update(self, market_id: str, up_price: float, down_price: float) -> None:
-        """
-        Handle price updates from attached stream.
-
-        Updates live position prices and executes stop loss, take profit,
-        and trailing stop triggers based on current prices.
-
-        Parameters
-        ----------
-        market_id : str
-            Market ID for the price update
-        up_price : float
-            Current UP token price
-        down_price : float
-            Current DOWN token price
-        """
-        # Validate prices
-        up_price = _validate_positive(up_price, "up_price")
-        down_price = _validate_positive(down_price, "down_price")
-
-        # Update live prices for all open positions in this market
-        for pos in self._positions.values():
-            if pos.market_id == market_id and not pos.resolved:
-                pos.current_price = up_price if pos.side == "UP" else down_price
-
-        # Build market updates dictionary for trailing stops
-        market_updates = {}
-        for pos in self._positions.values():
-            if pos.market_id == market_id and not pos.resolved:
-                token_id = pos.market_id  # Use market_id as token_id for now
-                current_price = up_price if pos.side == "UP" else down_price
-                market_updates[token_id] = current_price
-
-        # Check and execute stop losses
-        self._check_and_execute_stop_losses(market_id, up_price, down_price)
-
-        # Check and execute take profits
-        self._check_and_execute_take_profits(market_id, up_price, down_price)
-
-        # Check and execute trailing stops
-        triggered_trailing_stops = self.check_and_execute_trailing_stops(market_updates)
-        for position_key in triggered_trailing_stops:
-            self.execute_trailing_stop_exit(position_key)
-
-    def _check_stop_losses_for_wallet(self, positions, risk_manager, market_id: str, up_price: float, down_price: float, wallet=None) -> list[tuple]:
-        """Check stop losses for positions in a single wallet. Returns list of (position, wallet) pairs to exit."""
-        triggered = []
-        for position in positions.values():
-            if position.market_id != market_id or position.resolved:
-                continue
-            if position.stop_loss is None:
-                continue
-            current_price = up_price if position.side == "UP" else down_price
-            if risk_manager.check_stop_loss(position, current_price):
-                triggered.append((position, wallet))
-        return triggered
-
-    def _check_take_profits_for_wallet(self, positions, risk_manager, market_id: str, up_price: float, down_price: float, wallet=None) -> list[tuple]:
-        """Check take profits for positions in a single wallet. Returns list of (position, wallet) pairs to exit."""
-        triggered = []
-        for position in positions.values():
-            if position.market_id != market_id or position.resolved:
-                continue
-            if position.take_profit is None:
-                continue
-            current_price = up_price if position.side == "UP" else down_price
-            if risk_manager.check_take_profit(position, current_price):
-                triggered.append((position, wallet))
-        return triggered
-
-    def _check_and_execute_stop_losses(self, market_id: str, up_price: float, down_price: float) -> None:
-        """
-        Check and execute stop loss orders based on current prices.
-        """
-        all_triggered = []
-        if self._use_multi_wallet and self._real_wallet_manager:
-            for w in self._real_wallet_manager.get_all_wallets():
-                rm = w.risk_manager if w.risk_manager is not None else self._risk_manager
-                all_triggered.extend(
-                    self._check_stop_losses_for_wallet(w.positions, rm, market_id, up_price, down_price, w)
-                )
-        else:
-            all_triggered.extend(
-                self._check_stop_losses_for_wallet(self._positions, self._risk_manager, market_id, up_price, down_price)
-            )
-
-        for position, wallet in all_triggered:
-            log.warning(
-                "Stop loss triggered for %s %s", position.slug, position.side
-            )
-            self._execute_exit_order(position, "STOP_LOSS", wallet=wallet)
-
-    def _check_and_execute_take_profits(self, market_id: str, up_price: float, down_price: float) -> None:
-        """
-        Check and execute take profit orders based on current prices.
-        """
-        all_triggered = []
-        if self._use_multi_wallet and self._real_wallet_manager:
-            for w in self._real_wallet_manager.get_all_wallets():
-                rm = w.risk_manager if w.risk_manager is not None else self._risk_manager
-                all_triggered.extend(
-                    self._check_take_profits_for_wallet(w.positions, rm, market_id, up_price, down_price, w)
-                )
-        else:
-            all_triggered.extend(
-                self._check_take_profits_for_wallet(self._positions, self._risk_manager, market_id, up_price, down_price)
-            )
-
-        for position, wallet in all_triggered:
-            log.info(
-                "Take profit triggered for %s %s", position.slug, position.side
-            )
-            self._execute_exit_order(position, "TAKE_PROFIT", wallet=wallet)
-
-    def _execute_exit_order(self, position: RealPosition, reason: str, wallet=None) -> None:
-        """
-        Execute an exit order for a position (stop loss, take profit, or trailing stop).
-        """
-        try:
-            token_id = position.market_id
-            current_price = position.current_price
-
-            order_response = self._place_clob_order(
-                token_id,
-                "sell",
-                current_price,
-                position.shares,
-                "market",
-                wallet=wallet,
-            )
-
-            position.resolved = True
-            position.outcome = reason
-
-            if position.side == "UP":
-                exit_value = position.shares * current_price
-            else:
-                exit_value = position.shares * (1 - current_price)
-
-            pnl = exit_value - position.cost_basis
-            position.current_value = exit_value
-
-            log.info(
-                "Exit order executed for %s %s: reason=%s, pnl=$%.2f",
-                position.slug, position.side, reason, pnl
-            )
-
-            if self._db_enabled:
-                self._save_exit_to_db(position, reason, current_price)
-
-        except Exception as e:
-            log.exception("Failed to execute exit order for %s %s", position.slug, position.side)
-
-    def _save_exit_to_db(self, position: RealPosition, reason: str, exit_price: float) -> None:
-        """
-        Save exit trade to database.
-
-        Parameters
-        ----------
-        position : RealPosition
-            Position that was exited
-        reason : str
-            Exit reason
-        exit_price : float
-            Exit price
-        """
-        try:
-            # Look up order-level metadata from the position's first order
-            sizing_strategy = "unknown"
-            confidence = 0.5
-            kelly_fraction = 0.0
-            fee = 0.0
-            if position.order_ids:
-                first_order = self._orders.get(position.order_ids[0])
-                if first_order:
-                    sizing_strategy = first_order.sizing_strategy
-                    confidence = first_order.confidence
-                    kelly_fraction = first_order.kelly_fraction
-                    fee = first_order.fee
-
-            self._db.save_trade(
-                market_slug=position.slug,
-                market_id=position.market_id,
-                side=position.side,
-                entry_price=position.avg_price,
-                exit_price=exit_price,
-                amount=position.cost_basis,
-                shares=position.shares,
-                fee=fee,
-                outcome=reason,
-                pnl=position.pnl,
-                timestamp=datetime.now(timezone.utc),
-                sizing_strategy=sizing_strategy,
-                confidence=confidence,
-                kelly_fraction=kelly_fraction,
-                stop_loss=position.stop_loss,
-                take_profit=position.take_profit,
-                tx_hash=None,
-                is_real_trade=True,
-                wallet_address=self._wallet.get_address(),
-            )
-            log.debug("Real: exit saved to database for %s", position.slug)
-        except Exception as exc:
-            log.exception("Real: failed to save exit to database")
-
-    # ── Safety Features ───────────────────────────────────────────────────────────
-
-    def emergency_stop(self, reason: str = "Manual") -> None:
-        """
-        Emergency stop - cancel all open orders and prevent new trades.
-
-        Parameters
-        ----------
-        reason : str
-            Reason for emergency stop
-        """
-        log.warning("EMERGENCY STOP: %s", reason)
-
-        # Cancel all open orders
-        for order_id in list(self._orders.keys()):
-            try:
-                self.cancel(order_id)
-            except Exception as e:
-                log.exception("Failed to cancel order %s", order_id)
-
-        # Set emergency flag
-        self._emergency_mode = True
-
-        log.warning("All trading halted. Call resume_trading() to re-enable.")
-
-    def resume_trading(self, confirm: bool = True) -> None:
-        """Resume trading after emergency stop."""
-        if confirm:
-            response = input("Resume trading? (yes/no): ").strip().lower()
-            if response not in ("yes", "y"):
-                log.info("Trading remains halted.")
-                return
-
-        self._emergency_mode = False
-        log.info("Trading resumed.")
-
-    # ── Private Methods ───────────────────────────────────────────────────────────
-
-    def _create_position_sizer(self) -> PositionSizer:
-        """Create position sizer based on configuration."""
-        strategy = self._config.position_sizing
-
-        if strategy == "fixed":
-            return FixedPositionSizer(amount=self._config.fixed_amount)
-        elif strategy == "percentage":
-            return PercentagePositionSizer(percentage=self._config.percentage_of_balance)
-        elif strategy == "kelly":
-            return KellyPositionSizer(
-                kelly_fraction=self._config.kelly_fraction,
-                min_confidence=0.55,
-            )
-        else:
-            # Default to fixed
-            return FixedPositionSizer(amount=self._config.fixed_amount)
-
-    def _calculate_position_size(
-        self,
-        market,
-        side: str,
-        confidence: float,
-        price: float,
-    ) -> float:
-        """Calculate position size using the configured position sizer."""
-        return self._position_sizer.calculate_size(
-            balance=self._balance,
-            market=market,
-            side=side,
-            confidence=confidence,
-            price=price,
-        )
-
-    def _validate_order(self, amount: float, market) -> None:
-        """Validate order against risk limits using RiskManager."""
-        self._risk_manager.validate_order(
-            amount=amount,
-            balance=self._balance,
-            market=market,
-            positions=self._positions,
-        )
-
-    def _apply_buy_slippage(self, price: float, config) -> float:
-        """
-        Buffer a market-buy price by the configured slippage tolerance.
-
-        A market buy has to cross the spread; submitting at the exact quoted price
-        leaves the signed order non-marketable, so it may never fill. We raise the
-        price by ``slippage_tolerance`` (a buy is always adverse in the up direction)
-        and cap it just below 1.0, since Polymarket prices live in (0, 1). The
-        buffered price is used for both submission and accounting, so recorded cost
-        is the worst case and never underestimated.
-
-        Parameters
-        ----------
-        price : float
-            Quoted price per share.
-        config : RealTradingConfig
-            Resolved config providing ``slippage_tolerance``.
-
-        Returns
-        -------
-        float
-            Slippage-adjusted price, capped at ``MAX_ORDER_PRICE``.
-        """
-        tolerance = getattr(config, "slippage_tolerance", 0.0)
-        if tolerance <= 0 or price <= 0:
-            return price
-        adjusted = min(price * (1 + tolerance), MAX_ORDER_PRICE)
-        if adjusted != price:
-            log.debug(
-                "Real: applied %.2f%% buy slippage: %.4f -> %.4f",
-                tolerance * 100, price, adjusted,
-            )
-        return adjusted
-
-    def _calculate_shares_and_fee(self, amount: float, price: float, is_maker: bool = False) -> tuple[float, float]:
-        """
-        Calculate shares and fee for an order using the configured fee mode.
-
-        The fee is deducted from the trade amount (like Polymarket does on-chain),
-        so the user receives fewer shares.
-
-        Parameters
-        ----------
-        amount : float
-            Total USDC being spent
-        price : float
-            Price per share
-        is_maker : bool
-            Whether this is a maker order (limit order providing liquidity)
-
-        Returns
-        -------
-        tuple[float, float]
-            (shares, fee) where shares = (amount - fee) / price
-        """
-        if price <= 0:
-            return 0.0, 0.0
-
-        # First pass: estimate fee from initial share estimate
-        shares_est = amount / price
-        fee = self._calculate_fee(amount, price, shares_est, is_maker)
-
-        # Fee comes out of the trade amount
-        net_trade = amount - fee
-        if net_trade <= 0:
-            return 0.0, fee
-
-        shares = net_trade / price
-
-        # Second pass: recalculate fee with actual shares (significant for polymarket formula)
-        if self._config.fee_mode == "polymarket":
-            fee = self._calculate_fee(amount, price, shares, is_maker)
-            net_trade = amount - fee
-            if net_trade <= 0:
-                return 0.0, fee
-            shares = net_trade / price
-
-        return shares, fee
-
-    def _calculate_fee(self, amount: float, price: float, shares: float, is_maker: bool = False) -> float:
-        """
-        Calculate the fee for an order based on the configured fee mode.
-
-        Parameters
-        ----------
-        amount : float
-            Total USDC being spent
-        price : float
-            Price per share
-        shares : float
-            Number of shares being traded
-        is_maker : bool
-            Whether this is a maker order (limit order providing liquidity)
-
-        Returns
-        -------
-        float
-            The fee amount in USDC
-        """
-        if self._config.fee_mode == "zero":
-            return 0.0
-        elif self._config.fee_mode == "custom":
-            fee_rate = self._config.maker_fee_rate if is_maker else self._config.custom_fee_rate
-            return round(amount * fee_rate, FEE_ROUNDING)
-        elif self._config.fee_mode == "polymarket":
-            return self._polymarket_fee(amount, price, shares, is_maker)
-        return 0.0
-
-    def _polymarket_fee(self, amount: float, price: float, shares: float, is_maker: bool = False) -> float:
-        if self._config.market_category.lower() == "geopolitical":
-            return 0.0
-        fee_rate = fee_rate_for_category(self._config.market_category)
-        return calculate_polymarket_fee(shares, price, fee_rate)
-
-    def _require_confirmation(
-        self,
-        market,
-        side: str,
-        amount: float,
-        price: float,
-        shares: float,
-        fee: float,
-    ) -> None:
-        """Require user confirmation before executing order."""
-        print("\n" + "=" * 60)
-        print("ORDER CONFIRMATION REQUIRED")
-        print("=" * 60)
-        print(f"Market:    {market.question}")
-        print(f"Side:      {side}")
-        print(f"Amount:    ${amount:.2f}")
-        print(f"Price:     ${price:.4f}")
-        print(f"Shares:    {shares:.4f}")
-        print(f"Fee:       ${fee:.4f}")
-        print(f"Net Trade: ${amount - fee:.2f}")
-        print(f"Total:     ${amount:.2f}")
-        balance = self._resolve_balance()
-        print(f"Balance:   ${balance:.2f}")
-        print("=" * 60)
-
-        response = input("\nConfirm this order? (yes/no): ").strip().lower()
-
-        if response not in ("yes", "y"):
-            raise OrderCancelled("Order cancelled by user")
-
-        print("Order confirmed.\n")
-
-    def _place_clob_order(
-        self,
-        token_id: str,
-        side: str,
-        price: float,
-        size: float,
-        order_type: str,
-        wallet=None,
-    ) -> dict:
-        """Place order on CLOB."""
-        clob = self._resolve_clob() if wallet is None else wallet.clob_client
-        return clob.place_order(
-            token_id=token_id,
-            side=side,
-            price=price,
-            size=size,
-            order_type=order_type,
-        )
-
-    def _cancel_clob_order(self, order_id: str, wallet=None) -> None:
-        """Cancel order on CLOB."""
-        clob = self._resolve_clob() if wallet is None else wallet.clob_client
-        clob.cancel_order(order_id)
-
-    def _update_position(self, market, side: str, order: RealOrder, wallet=None) -> None:
-        """Update position after order fill."""
-        key = f"{market.id}:{side}"
-        if wallet is not None and self._use_multi_wallet:
-            positions = wallet.positions
-        else:
-            positions = self._resolve_positions()
-
-        with self._position_lock:
-            if key in positions:
-                position = positions[key]
-                position.order_ids.append(order.id)
-
-                total_shares = position.shares + order.shares
-                position.avg_price = (
-                    (position.avg_price * position.shares + order.price * order.shares)
-                    / total_shares
-                )
-                position.shares = total_shares
-                position.cost_basis = position.shares * position.avg_price
-                position.current_value = position.shares * order.price
-            else:
-                position = RealPosition(
-                    market_id=market.id,
-                    slug=market.slug,
-                    question=market.question,
-                    side=side,
-                    shares=order.shares,
-                    avg_price=order.price,
-                    current_price=order.price,
-                    cost_basis=order.shares * order.price,
-                    current_value=order.shares * order.price,
-                    order_ids=[order.id],
-                )
-                positions[key] = position
-
-    def _get_market_exposure(self, market_id: str) -> float:
-        """Get total exposure for a market."""
-        exposure = 0.0
-        positions = self._get_all_positions_across_wallets()
-        for position in positions.values():
-            if position.market_id == market_id and not position.resolved:
-                exposure += position.cost_basis
-        return exposure
-
-    def _save_order_to_db(self, order: RealOrder, wallet=None) -> None:
-        """Save real order to database."""
-        if not self._db_enabled or self._db is None:
-            return
-
-        try:
-            wallet_obj = wallet if (wallet is not None and self._use_multi_wallet) else self._resolve_wallet()
-            addr = wallet_obj.get_address() if hasattr(wallet_obj, 'get_address') else str(wallet_obj)
-
-            self._db.save_trade(
-                market_slug=order.slug,
-                market_id=order.market_id,
-                side=order.side,
-                entry_price=order.price,
-                exit_price=None,
-                amount=order.amount,
-                shares=order.shares,
-                fee=order.fee,
-                outcome=None,
-                pnl=0.0,
-                timestamp=order.created_at,
-                sizing_strategy=order.sizing_strategy,
-                confidence=order.confidence,
-                kelly_fraction=order.kelly_fraction,
-                stop_loss=order.stop_loss,
-                take_profit=order.take_profit,
-                tx_hash=order.tx_hash,
-                is_real_trade=True,
-                wallet_address=addr,
-                order_id=order.id,
-                status=order.status,
-            )
-            log.debug("Real: order saved to database for %s", order.slug)
-        except Exception as exc:
-            log.exception("Real: failed to save order to database")
-
-    def _update_order_in_db(self, order: RealOrder) -> None:
-        """Update order status in database after fill status changes."""
-        if not self._db_enabled or self._db is None:
-            return
-
-        try:
-            # Update the trade record with fill information
-            self._db.update_trade_status(
-                order_id=order.id,
-                status=order.status,
-                filled_shares=order.filled_shares,
-                filled_amount=order.filled_amount,
-                avg_fill_price=order.avg_fill_price,
-                filled_at=order.filled_at,
-            )
-            log.debug("Real: order status updated in database for %s: %s", order.slug, order.status)
-        except Exception as exc:
-            log.exception("Real: failed to update order in database")
-
-    # ── Advanced Order Types ─────────────────────────────────────────────────────────
-
-    def place_oco_order(
-        self,
-        market,
-        side: str,
-        amount: float,
-        price1: float,
-        price2: float,
-        confirm: bool = True,
-    ) -> OCOOrder:
-        """
-        Place a One-Cancels-Other (OCO) order pair.
-
-        An OCO order places two orders where if one is filled, the other is automatically cancelled.
-        Commonly used for stop loss + take profit combinations.
-
-        Parameters
-        ----------
-        market : Market
-            Market to trade
-        side : str
-            "UP" or "DOWN"
-        amount : float
-            USDC amount for each order
-        price1 : float
-            Price for first order (e.g., take profit)
-        price2 : float
-            Price for second order (e.g., stop loss)
-        confirm : bool
-            Require manual confirmation
-
-        Returns
-        -------
-        OCOOrder
-            The OCO order object
-
-        Example
-        -------
-        >>> oco = client.real.place_oco_order(
-        ...     market, side="UP", amount=10.0, price1=0.60, price2=0.40
-        ... )
-        """
-        import uuid
-
-        if self._emergency_mode:
-            raise OrderCancelled("Trading halted - emergency mode active")
-
-        side = _validate_side(side)
-
-        # Place first order
-        order1 = self.limit(market, side, price1, amount, confirm=confirm)
-
-        # Place second order
-        order2 = self.limit(market, side, price2, amount, confirm=False)
-
-        # Create OCO order
-        oco_id = str(uuid.uuid4())
-        oco_order = OCOOrder(
-            id=oco_id,
-            market_id=market.id,
-            slug=market.slug,
-            side=side,
-            order1_id=order1.id,
-            order2_id=order2.id,
-            order1_price=price1,
-            order2_price=price2,
-            amount=amount,
-            status="active",
-            created_at=datetime.now(timezone.utc),
-        )
-
-        self._oco_orders[oco_id] = oco_order
-
-        log.info(
-            "OCO order placed: %s %s, order1=%s @ %.4f, order2=%s @ %.4f",
-            market.slug, side, order1.id, price1, order2.id, price2
-        )
-
-        return oco_order
-
-    def check_oco_triggers(self) -> list[str]:
-        """
-        Check OCO orders for trigger conditions and cancel the other order if one fills.
-
-        Returns
-        -------
-        list[str]
-            List of OCO order IDs that were triggered
-        """
-        triggered_ocos = []
-
-        for oco_id, oco in list(self._oco_orders.items()):
-            if oco.status != "active":
-                continue
-
-            # Check if either order is filled
-            order1 = self._orders.get(oco.order1_id)
-            order2 = self._orders.get(oco.order2_id)
-
-            if not order1 or not order2:
-                continue
-
-            # Update order statuses
-            self.update_order_fill_status(oco.order1_id)
-            self.update_order_fill_status(oco.order2_id)
-
-            # Check if order1 is filled
-            if order1.status == "filled":
-                # Cancel order2
-                try:
-                    self.cancel(oco.order2_id)
-                    oco.status = "triggered"
-                    oco.triggered_order_id = order1.id
-                    oco.cancelled_order_id = order2.id
-                    oco.triggered_at = datetime.now(timezone.utc)
-                    triggered_ocos.append(oco_id)
-                    log.info("OCO triggered: order1 %s filled, cancelled order2 %s", order1.id, order2.id)
-                except Exception as e:
-                    log.exception("Failed to cancel order2 in OCO %s", oco_id)
-
-            # Check if order2 is filled
-            elif order2.status == "filled":
-                # Cancel order1
-                try:
-                    self.cancel(oco.order1_id)
-                    oco.status = "triggered"
-                    oco.triggered_order_id = order2.id
-                    oco.cancelled_order_id = order1.id
-                    oco.triggered_at = datetime.now(timezone.utc)
-                    triggered_ocos.append(oco_id)
-                    log.info("OCO triggered: order2 %s filled, cancelled order1 %s", order2.id, order1.id)
-                except Exception as e:
-                    log.exception("Failed to cancel order1 in OCO %s", oco_id)
-
-        return triggered_ocos
-
-    def place_bracket_order(
-        self,
-        market,
-        side: str,
-        entry_price: float,
-        amount: float,
-        stop_loss_price: Optional[float] = None,
-        take_profit_price: Optional[float] = None,
-        stop_loss_pct: Optional[float] = None,
-        take_profit_pct: Optional[float] = None,
-        confirm: bool = True,
-    ) -> BracketOrder:
-        """
-        Place a bracket order (entry + stop loss + take profit).
-
-        A bracket order places an entry order along with associated stop loss and take profit orders.
-
-        Parameters
-        ----------
-        market : Market
-            Market to trade
-        side : str
-            "UP" or "DOWN"
-        entry_price : float
-            Entry order price
-        amount : float
-            USDC amount for entry order
-        stop_loss_price : float, optional
-            Stop loss price (overrides stop_loss_pct)
-        take_profit_price : float, optional
-            Take profit price (overrides take_profit_pct)
-        stop_loss_pct : float, optional
-            Stop loss as percentage of entry price (e.g., 0.20 for 20%)
-        take_profit_pct : float, optional
-            Take profit as percentage of entry price (e.g., 0.50 for 50%)
-        confirm : bool
-            Require manual confirmation
-
-        Returns
-        -------
-        BracketOrder
-            The bracket order object
-
-        Example
-        -------
-        >>> bracket = client.real.place_bracket_order(
-        ...     market, side="UP", entry_price=0.50, amount=10.0,
-        ...     stop_loss_pct=0.20, take_profit_pct=0.50
-        ... )
-        """
-        import uuid
-
-        if self._emergency_mode:
-            raise OrderCancelled("Trading halted - emergency mode active")
-
-        side = _validate_side(side)
-
-        # Calculate stop loss and take profit prices if not provided
-        if stop_loss_price is None and stop_loss_pct is not None:
-            if side == "UP":
-                stop_loss_price = entry_price * (1 - stop_loss_pct)
-            else:
-                stop_loss_price = entry_price * (1 + stop_loss_pct)
-
-        if take_profit_price is None and take_profit_pct is not None:
-            if side == "UP":
-                take_profit_price = entry_price * (1 + take_profit_pct)
-            else:
-                take_profit_price = entry_price * (1 - take_profit_pct)
-
-        # Place entry order
-        entry_order = self.limit(market, side, entry_price, amount, confirm=confirm)
-
-        # Create bracket order
-        bracket_id = str(uuid.uuid4())
-        bracket_order = BracketOrder(
-            id=bracket_id,
-            market_id=market.id,
-            slug=market.slug,
-            side=side,
-            entry_order_id=entry_order.id,
-            entry_price=entry_price,
-            stop_loss_price=stop_loss_price,
-            take_profit_price=take_profit_price,
-            amount=amount,
-            status="pending",
-            created_at=datetime.now(timezone.utc),
-        )
-
-        self._bracket_orders[bracket_id] = bracket_order
-
-        log.info(
-            "Bracket order placed: %s %s @ %.4f, stop=%.4f, take=%.4f",
-            market.slug, side, entry_price, stop_loss_price, take_profit_price
-        )
-
-        return bracket_order
-
-    def activate_bracket_orders(self) -> None:
-        """
-        Activate stop loss and take profit orders for filled bracket entry orders.
-
-        This method checks all pending bracket orders and if the entry order is filled,
-        it places the corresponding stop loss and take profit orders.
-        """
-        for bracket_id, bracket in list(self._bracket_orders.items()):
-            if bracket.status != "pending":
-                continue
-
-            entry_order = self._orders.get(bracket.entry_order_id)
-            if not entry_order:
-                continue
-
-            # Update entry order status
-            self.update_order_fill_status(bracket.entry_order_id)
-
-            # If entry order is filled, place stop loss and take profit
-            if entry_order.status == "filled":
-                bracket.status = "active"
-                bracket.filled_at = datetime.now(timezone.utc)
-
-                # Place stop loss order if specified
-                if bracket.stop_loss_price is not None:
-                    try:
-                        log.info("Placing stop loss order for bracket %s at %.4f", bracket_id, bracket.stop_loss_price)
-                        sl_order = self._clob_client.place_order(
-                            token_id=bracket.market_id,
-                            side="sell",
-                            price=bracket.stop_loss_price,
-                            size=bracket.amount / bracket.stop_loss_price,
-                            order_type="limit",
-                        )
-                        bracket.stop_loss_order_id = sl_order.get("order_id", "")
-                    except Exception as e:
-                        log.exception("Failed to place stop loss for bracket %s", bracket_id)
-
-                # Place take profit order if specified
-                if bracket.take_profit_price is not None:
-                    try:
-                        log.info("Placing take profit order for bracket %s at %.4f", bracket_id, bracket.take_profit_price)
-                        tp_order = self._clob_client.place_order(
-                            token_id=bracket.market_id,
-                            side="sell",
-                            price=bracket.take_profit_price,
-                            size=bracket.amount / bracket.take_profit_price,
-                            order_type="limit",
-                        )
-                        bracket.take_profit_order_id = tp_order.get("order_id", "")
-                    except Exception as e:
-                        log.exception("Failed to place take profit for bracket %s", bracket_id)
-
-                log.info("Bracket order %s activated", bracket_id)
-
-    def place_conditional_order(
-        self,
-        market,
-        side: str,
-        condition_type: str,
-        condition_value: float,
-        child_order_price: float,
-        child_order_amount: float,
-        expires_after_seconds: Optional[int] = None,
-    ) -> ConditionalOrder:
-        """
-        Place a conditional order with if-then logic.
-
-        A conditional order triggers a child order when specified conditions are met.
-
-        Parameters
-        ----------
-        market : Market
-            Market to trade
-        side : str
-            "UP" or "DOWN"
-        condition_type : str
-            Condition type: "price_above", "price_below", "time_after"
-        condition_value : float
-            Value for the condition (price threshold or timestamp)
-        child_order_price : float
-            Price for the child order when triggered
-        child_order_amount : float
-            Amount for the child order when triggered
-        expires_after_seconds : int, optional
-            Expiration time in seconds
-
-        Returns
-        -------
-        ConditionalOrder
-            The conditional order object
-
-        Example
-        -------
-        >>> cond = client.real.place_conditional_order(
-        ...     market, side="UP", condition_type="price_above",
-        ...     condition_value=0.60, child_order_price=0.61, child_order_amount=10.0
-        ... )
-        """
-        import uuid
-
-        if self._emergency_mode:
-            raise OrderCancelled("Trading halted - emergency mode active")
-
-        side = _validate_side(side)
-
-        if condition_type not in ("price_above", "price_below", "time_after"):
-            raise ValueError(f"Invalid condition_type: {condition_type}")
-
-        # Calculate expiration
-        expires_at = None
-        if expires_after_seconds is not None:
-            expires_at = datetime.now(timezone.utc).replace(
-                second=0, microsecond=0
-            ) + datetime.timedelta(seconds=expires_after_seconds)
-
-        # Create conditional order
-        cond_id = str(uuid.uuid4())
-        cond_order = ConditionalOrder(
-            id=cond_id,
-            market_id=market.id,
-            slug=market.slug,
-            side=side,
-            condition_type=condition_type,
-            condition_value=condition_value,
-            child_order_price=child_order_price,
-            child_order_amount=child_order_amount,
-            status="waiting",
-            created_at=datetime.now(timezone.utc),
-            expires_at=expires_at,
-        )
-
-        self._conditional_orders[cond_id] = cond_order
-
-        log.info(
-            "Conditional order placed: %s %s, condition=%s %.4f",
-            market.slug, side, condition_type, condition_value
-        )
-
-        return cond_order
-
-    def check_conditional_triggers(self, market_updates: dict[str, float]) -> list[str]:
-        """
-        Check conditional orders for trigger conditions.
-
-        Parameters
-        ----------
-        market_updates : dict[str, float]
-            Dictionary mapping market_id to current price
-
-        Returns
-        -------
-        list[str]
-            List of conditional order IDs that were triggered
-        """
-        triggered = []
-
-        for cond_id, cond in list(self._conditional_orders.items()):
-            if cond.status != "waiting":
-                continue
-
-            # Check expiration
-            if cond.expires_at and datetime.now(timezone.utc) > cond.expires_at:
-                cond.status = "expired"
-                log.info("Conditional order %s expired", cond_id)
-                continue
-
-            # Check price conditions
-            if cond.condition_type in ("price_above", "price_below"):
-                current_price = market_updates.get(cond.market_id)
-                if current_price is None:
-                    continue
-
-                should_trigger = False
-                if cond.condition_type == "price_above" and current_price > cond.condition_value:
-                    should_trigger = True
-                elif cond.condition_type == "price_below" and current_price < cond.condition_value:
-                    should_trigger = True
-
-                if should_trigger:
-                    try:
-                        log.info(
-                            "Conditional order %s triggered: price %.4f, placing child order",
-                            cond_id, current_price
-                        )
-                        child = self._clob_client.place_order(
-                            token_id=cond.market_id,
-                            side="buy",
-                            price=cond.child_order_price,
-                            size=cond.child_order_amount / cond.child_order_price,
-                            order_type="limit",
-                        )
-                        cond.child_order_id = child.get("order_id", "")
-                        cond.status = "triggered"
-                        cond.triggered_at = datetime.now(timezone.utc)
-                        triggered.append(cond_id)
-                    except Exception as e:
-                        log.exception("Failed to place child order for conditional %s", cond_id)
-
-        return triggered
-
-    def place_iceberg_order(
-        self,
-        market,
-        side: str,
-        total_amount: float,
-        visible_size: float,
-        price: float,
-        confirm: bool = True,
-    ) -> IcebergOrder:
-        """
-        Place an iceberg order for large order splitting.
-
-        An iceberg order splits a large order into smaller visible chunks to avoid market impact.
-
-        Parameters
-        ----------
-        market : Market
-            Market to trade
-        side : str
-            "UP" or "DOWN"
-        total_amount : float
-            Total USDC amount to execute
-        visible_size : float
-            Visible chunk size in USDC
-        price : float
-            Limit price for each chunk
-        confirm : bool
-            Require manual confirmation for first chunk
-
-        Returns
-        -------
-        IcebergOrder
-            The iceberg order object
-
-        Example
-        -------
-        >>> iceberg = client.real.place_iceberg_order(
-        ...     market, side="UP", total_amount=1000.0, visible_size=50.0, price=0.50
-        ... )
-        """
-        import uuid
-
-        if self._emergency_mode:
-            raise OrderCancelled("Trading halted - emergency mode active")
-
-        side = _validate_side(side)
-
-        if visible_size > total_amount:
-            raise ValueError("visible_size cannot exceed total_amount")
-
-        # Create iceberg order
-        token_id = market.up_token if side == "UP" else market.down_token
-        iceberg_id = str(uuid.uuid4())
-        iceberg_order = IcebergOrder(
-            id=iceberg_id,
-            market_id=market.id,
-            slug=market.slug,
-            side=side,
-            total_amount=total_amount,
-            visible_size=visible_size,
-            price=price,
-            status="active",
-            created_at=datetime.now(timezone.utc),
-            token_id=token_id,
-        )
-
-        self._iceberg_orders[iceberg_id] = iceberg_order
-
-        # Place first visible chunk
-        self._execute_iceberg_slice(iceberg_id, confirm=confirm)
-
-        log.info(
-            "Iceberg order placed: %s %s, total=$%.2f, visible=$%.2f @ %.4f",
-            market.slug, side, total_amount, visible_size, price
-        )
-
-        return iceberg_order
-
-    def _execute_iceberg_slice(self, iceberg_id: str, confirm: bool = True) -> Optional[RealOrder]:
-        """
-        Execute a single slice of an iceberg order.
-
-        Parameters
-        ----------
-        iceberg_id : str
-            Iceberg order ID
-        confirm : bool
-            Require manual confirmation
-
-        Returns
-        -------
-        RealOrder, optional
-            The placed order, or None if no more to execute
-        """
-        iceberg = self._iceberg_orders.get(iceberg_id)
-        if not iceberg or iceberg.status not in ("active", "partial"):
-            return None
-
-        remaining = iceberg.remaining_amount
-        if remaining <= 0:
-            iceberg.status = "completed"
-            return None
-
-        # Calculate slice size (visible size or remaining, whichever is smaller)
-        slice_amount = min(iceberg.visible_size, remaining)
-
-        try:
-            log.info(
-                "Executing iceberg slice: %s %s, amount=$%.2f @ %.4f",
-                iceberg.slug, iceberg.side, slice_amount, iceberg.price
-            )
-            # Use ClobClient directly with the stored token_id
-            order_response = self._clob_client.place_order(
-                token_id=iceberg.token_id,
-                side="buy",
-                price=iceberg.price,
-                size=slice_amount / iceberg.price if iceberg.price > 0 else 0,
-                order_type="limit",
-            )
-
-            # Create a RealOrder for tracking
-            order = RealOrder(
-                id=order_response["order_id"],
-                market_id=iceberg.market_id,
-                slug=iceberg.slug,
-                side=iceberg.side,
-                price=iceberg.price,
-                amount=slice_amount,
-                shares=slice_amount / iceberg.price if iceberg.price > 0 else 0,
-                fee=0.0,
-                status="pending",
-                is_limit=True,
-                created_at=datetime.now(timezone.utc),
-            )
-            self._orders[order.id] = order
-            iceberg.child_order_ids.append(order.id)
-            return order
-
-        except Exception as e:
-            log.exception("Failed to execute iceberg slice for %s", iceberg_id)
-            return None
-
-    def update_iceberg_orders(self) -> None:
-        """
-        Update iceberg orders and execute additional slices as previous ones fill.
-
-        This method should be called periodically to check if iceberg slices have filled
-        and execute additional slices if needed.
-        """
-        for iceberg_id, iceberg in list(self._iceberg_orders.items()):
-            if iceberg.status not in ("active", "partial"):
-                continue
-
-            # Check if child orders have filled
-            filled_amount = 0.0
-            for child_id in iceberg.child_order_ids:
-                child_order = self._orders.get(child_id)
-                if child_order:
-                    self.update_order_fill_status(child_id)
-                    if child_order.status == "filled":
-                        filled_amount += child_order.amount
-
-            iceberg.filled_amount = filled_amount
-
-            # Update status
-            if iceberg.filled_amount >= iceberg.total_amount:
-                iceberg.status = "completed"
-                log.info("Iceberg order %s completed", iceberg_id)
-            elif iceberg.filled_amount > 0:
-                iceberg.status = "partial"
-
-            # Execute next slice if there's remaining amount and previous slice filled
-            if iceberg.remaining_amount > 0 and len(iceberg.child_order_ids) > 0:
-                last_child_id = iceberg.child_order_ids[-1]
-                last_child = self._orders.get(last_child_id)
-                if last_child and last_child.status == "filled":
-                    self._execute_iceberg_slice(iceberg_id, confirm=False)
-
-    def place_twap_order(
-        self,
-        market,
-        side: str,
-        total_amount: float,
-        duration_seconds: int,
-        num_slices: int,
-        price: Optional[float] = None,
-        confirm: bool = True,
-    ) -> TWAPOrder:
-        """
-        Place a Time-Weighted Average Price (TWAP) execution order.
-
-        A TWAP order executes a large order over a specified time period to achieve an average execution price.
-
-        Parameters
-        ----------
-        market : Market
-            Market to trade
-        side : str
-            "UP" or "DOWN"
-        total_amount : float
-            Total USDC amount to execute
-        duration_seconds : int
-            Duration over which to execute (in seconds)
-        num_slices : int
-            Number of slices to split the order into
-        price : float, optional
-            Limit price for each slice (if None, uses market price)
-        confirm : bool
-            Require manual confirmation for first slice
-
-        Returns
-        -------
-        TWAPOrder
-            The TWAP order object
-
-        Example
-        -------
-        >>> twap = client.real.place_twap_order(
-        ...     market, side="UP", total_amount=1000.0, duration_seconds=300, num_slices=10
-        ... )
-        """
-        import uuid
-
-        if self._emergency_mode:
-            raise OrderCancelled("Trading halted - emergency mode active")
-
-        side = _validate_side(side)
-
-        if num_slices < 1:
-            raise ValueError("num_slices must be at least 1")
-
-        # Calculate slice interval
-        slice_interval = duration_seconds / num_slices
-
-        # Calculate end time
-        ends_at = datetime.now(timezone.utc) + datetime.timedelta(seconds=duration_seconds)
-
-        # Create TWAP order
-        token_id = market.up_token if side == "UP" else market.down_token
-        twap_id = str(uuid.uuid4())
-        twap_order = TWAPOrder(
-            id=twap_id,
-            market_id=market.id,
-            slug=market.slug,
-            side=side,
-            total_amount=total_amount,
-            duration_seconds=duration_seconds,
-            num_slices=num_slices,
-            price=price,
-            status="active",
-            created_at=datetime.now(timezone.utc),
-            ends_at=ends_at,
-            slice_interval=slice_interval,
-            token_id=token_id,
-        )
-
-        self._twap_orders[twap_id] = twap_order
-
-        # Place first slice
-        self._execute_twap_slice(twap_id, confirm=confirm)
-
-        log.info(
-            "TWAP order placed: %s %s, total=$%.2f over %ds in %d slices",
-            market.slug, side, total_amount, duration_seconds, num_slices
-        )
-
-        return twap_order
-
-    def _execute_twap_slice(self, twap_id: str, confirm: bool = True) -> Optional[RealOrder]:
-        """
-        Execute a single slice of a TWAP order.
-
-        Parameters
-        ----------
-        twap_id : str
-            TWAP order ID
-        confirm : bool
-            Require manual confirmation
-
-        Returns
-        -------
-        RealOrder, optional
-            The placed order, or None if no more to execute
-        """
-        twap = self._twap_orders.get(twap_id)
-        if not twap or twap.status not in ("active", "partial"):
-            return None
-
-        # Check if we've exceeded the end time
-        if twap.ends_at and datetime.now(timezone.utc) > twap.ends_at:
-            twap.status = "completed"
-            log.info("TWAP order %s completed (time expired)", twap_id)
-            return None
-
-        remaining = twap.remaining_amount
-        if remaining <= 0:
-            twap.status = "completed"
-            return None
-
-        # Calculate slice amount
-        slice_amount = twap.slice_amount
-
-        try:
-            log.info(
-                "Executing TWAP slice: %s %s, amount=$%.2f",
-                twap.slug, twap.side, slice_amount
-            )
-            if twap.price and twap.price > 0:
-                # Limit order at specified price
-                order_response = self._clob_client.place_order(
-                    token_id=twap.token_id,
-                    side="buy",
-                    price=twap.price,
-                    size=slice_amount / twap.price,
-                    order_type="limit",
-                )
-            else:
-                # Market order (use current price)
-                price = 0.5  # Will be overridden by actual fill
-                order_response = self._clob_client.place_order(
-                    token_id=twap.token_id,
-                    side="buy",
-                    price=price,
-                    size=slice_amount / price,
-                    order_type="market",
-                )
-
-            order = RealOrder(
-                id=order_response["order_id"],
-                market_id=twap.market_id,
-                slug=twap.slug,
-                side=twap.side,
-                price=twap.price or 0.5,
-                amount=slice_amount,
-                shares=slice_amount / (twap.price or 0.5),
-                fee=0.0,
-                status="pending",
-                is_limit=twap.price is not None and twap.price > 0,
-                created_at=datetime.now(timezone.utc),
-            )
-            self._orders[order.id] = order
-            twap.child_order_ids.append(order.id)
-            return order
-
-        except Exception as e:
-            log.exception("Failed to execute TWAP slice for %s", twap_id)
-            return None
-
-    def update_twap_orders(self) -> None:
-        """
-        Update TWAP orders and execute slices based on schedule.
-
-        This method should be called periodically to check if it's time to execute
-        the next slice of each TWAP order.
-        """
-        for twap_id, twap in list(self._twap_orders.items()):
-            if twap.status not in ("active", "partial"):
-                continue
-
-            # Check if child orders have filled
-            filled_amount = 0.0
-            for child_id in twap.child_order_ids:
-                child_order = self._orders.get(child_id)
-                if child_order:
-                    self.update_order_fill_status(child_id)
-                    if child_order.status == "filled":
-                        filled_amount += child_order.amount
-
-            twap.filled_amount = filled_amount
-
-            # Update status
-            if twap.filled_amount >= twap.total_amount:
-                twap.status = "completed"
-                log.info("TWAP order %s completed", twap_id)
-            elif twap.filled_amount > 0:
-                twap.status = "partial"
-
-            # Check if it's time for next slice
-            if twap.remaining_amount > 0:
-                # Calculate expected number of slices based on elapsed time
-                elapsed = (datetime.now(timezone.utc) - twap.created_at).total_seconds()
-                expected_slices = int(elapsed / twap.slice_interval) + 1
-
-                # Execute next slice if we haven't placed enough slices yet
-                if len(twap.child_order_ids) < expected_slices and len(twap.child_order_ids) < twap.num_slices:
-                    self._execute_twap_slice(twap_id, confirm=False)
-
-
-# ── Helpers ─────────────────────────────────────────────────────────────────────
-
+# ── Helpers (backcompat wrappers)
 def _validate_side(side: str) -> str:
-    """Validate and normalize side."""
-    side = side.upper()
-    if side not in ("UP", "DOWN"):
-        raise ValueError(f"side must be 'UP' or 'DOWN', got '{side}'")
-    return side
+    from .real_helpers import validate_side as _vs
+    return _vs(side)
 
 
 def _validate_positive(value: float, name: str) -> float:
-    """Validate that value is positive."""
-    if value <= 0:
-        raise ValueError(f"{name} must be positive, got {value}")
-    return value
+    from .real_helpers import validate_positive as _vp
+    return _vp(value, name)
 
 
-def _now() -> datetime:
-    """Get current UTC datetime."""
+def _now():
+    from datetime import datetime, timezone
     return datetime.now(timezone.utc)
