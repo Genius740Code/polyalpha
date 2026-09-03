@@ -233,7 +233,7 @@ try:
     from importlib.metadata import version as _mversion
     __version__ = _mversion("polyalpha")
 except Exception:
-    __version__ = "0.2.29"
+    __version__ = "2.4.0"
 
 __all__ = [
     # Main entry point
