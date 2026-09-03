@@ -694,7 +694,14 @@ src/polyalpha/
 ├── markets.py           MarketClient — discovery
 ├── stream.py            Stream — WebSocket price feed
 ├── bot.py               Bot — lifecycle runner
-├── bot_hub.py           BotHub — multi-strategy hub
+├── bot_hub/             BotHub — multi-strategy hub (7 modules, ex-2662-line monolith)
+│   ├── hub.py           #   BotHub core
+│   ├── context.py       #   StrategyContext
+│   ├── binance.py       #   BinanceAccessor
+│   ├── indicators.py    #   IndicatorAccessor
+│   ├── orderbook.py     #   OrderBookAccessor
+│   ├── models.py        #   PriceSnapshot + _RegisteredStrategy
+│   └── history.py       #   chainlink history helper
 ├── conditions.py        Composable strategy conditions
 │
 ├── core/                Constants, errors, market models, env

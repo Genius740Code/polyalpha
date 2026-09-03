@@ -11,7 +11,7 @@ Both share same core:
 
 * **Package:** `src/polyalpha/history/` — `candle.py` / `store.py` / `recorder.py` / `config.py` (01) + `registry.py` / `view.py` (02)
 * **Data:** `candles(asset,tf,start_ts, o/h/l/c, count)` in `~/.polyalpha/chainlink.db` (WAL), built by flooring `ts` to `TIMEFRAME_SECONDS` (`src/polyalpha/core/constants.py:22`) on each Chainlink tick from `wss://ws-live-data.polymarket.com` (`src/polyalpha/analysis/streaming.py:82`). Indicators via `IndicatorCalculator` (`src/polyalpha/analysis/indicators.py:43`) / `_native_ta` (`src/polyalpha/analysis/_native_ta.py`).
-* **Integration:** `Client` / `Bot` (`src/polyalpha/bot.py:503`) / `BotHub` (`src/polyalpha/bot_hub.py:1341`) accept `chainlink_history=ChainlinkHistoryConfig|ChainlinkRecorder`; expose `ctx.chainlink_history` alongside existing `ctx.chainlink` (`src/polyalpha/bot.py:336`) / `ctx.cl` (`src/polyalpha/bot.py:369`); persist across restarts.
+* **Integration:** `Client` / `Bot` (`src/polyalpha/bot.py:503`) / `BotHub` (`src/polyalpha/bot_hub/hub.py:1341`) accept `chainlink_history=ChainlinkHistoryConfig|ChainlinkRecorder`; expose `ctx.chainlink_history` alongside existing `ctx.chainlink` (`src/polyalpha/bot.py:336`) / `ctx.cl` (`src/polyalpha/bot.py:369`); persist across restarts.
 
 Start with `01` MVP (single strat warmup), then `02` (shared layer) is additive.
 

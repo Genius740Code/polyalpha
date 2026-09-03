@@ -1,6 +1,6 @@
 # Chainlink History — configurable candle store
 
-> **Status: ✅ IMPLEMENTED** — `src/polyalpha/history/` (`candle.py`, `store.py`, `recorder.py`, `config.py`, `registry.py`, `view.py`) wired to `Bot` (`src/polyalpha/bot.py:84`), `BotHub` (`src/polyalpha/bot_hub.py:12`), `Client` (`src/polyalpha/client.py:74`), `Globals` (`src/polyalpha/globals.py:51`).
+> **Status: ✅ IMPLEMENTED** — `src/polyalpha/history/` (`candle.py`, `store.py`, `recorder.py`, `config.py`, `registry.py`, `view.py`) wired to `Bot` (`src/polyalpha/bot.py:84`), `BotHub` (`src/polyalpha/bot_hub/hub.py:12`), `Client` (`src/polyalpha/client.py:74`), `Globals` (`src/polyalpha/globals.py:51`).
 > User chooses exactly how much to keep — e.g. `{"1m":10, "1h":50, "1s":20}` — unused timeframes are **deleted automatically**.  
 > Storage is **SQLite WAL, `WITHOUT ROWID`, one file at `~/.polyalpha/chainlink.db`** — best for incremental 1-s tick → candle with concurrent readers.
 

@@ -369,7 +369,7 @@ age = accessor.age_s                   # seconds since last update
 
 ### BinanceAccessor Integration
 
-The existing `BinanceAccessor` in `bot_hub.py` has been enhanced with calculation library integration:
+The existing `BinanceAccessor` in `bot_hub/binance.py` (re-exported from `polyalpha.bot_hub`) has been enhanced with calculation library integration:
 
 ```python
 # Enhanced BinanceAccessor methods

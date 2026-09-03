@@ -12,7 +12,15 @@ src/polyalpha/
 ├── client.py             # Client — top-level entry point, wires all modules
 ├── stream.py             # Stream — WebSocket price streaming
 ├── bot.py                # Bot — declarative trading bot framework
-├── bot_hub.py            # BotHub — multi-strategy hub: one WebSocket, N paper engines
+├── bot_hub/              # BotHub package — multi-strategy hub (split from 2662-line monolith)
+│   ├── __init__.py       #   Public re-exports (BotHub, StrategyContext, IndicatorAccessor, BinanceAccessor, …)
+│   ├── hub.py            #   BotHub — lifecycle, streaming, resolve/rollover, comparison (1120 lines)
+│   ├── context.py        #   StrategyContext — per-strategy ctx (580 lines)
+│   ├── binance.py        #   BinanceAccessor — Binance klines + TA (560 lines)
+│   ├── indicators.py     #   IndicatorAccessor — first-class rsi/macd/bb/… + per-tick cache
+│   ├── orderbook.py      #   OrderBookAccessor — live order-book snapshots
+│   ├── models.py         #   PriceSnapshot, MACDResult/BBResult/DonchianResult, _RegisteredStrategy
+│   └── history.py        #   _resolve_chainlink_history helper
 ├── markets.py            # MarketClient — market discovery REST API
 ├── conditions.py         # Condition protocol + 11 condition classes + combinators
 │
@@ -110,7 +118,7 @@ src/polyalpha/
     └── logging_utils.py  #   @log_call decorator, get_logger(), SensitiveDataFilter, correlation IDs, masking
 ```
 
-**Total: 12 directories, 63 `.py` files.**
+**Total: 12 directories, 69 `.py` files (bot_hub split into 7 modules).**
 
 ---
 
